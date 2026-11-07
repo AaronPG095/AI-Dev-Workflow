@@ -288,6 +288,11 @@ function resolveActivePlan() {
   if (!protectedList.includes(branch)) {
     const byBranch = plans.filter(p => p.meta.branch === branch);
     if (byBranch.length === 1) return byBranch[0];
+    const base = resolveDiffBase();
+    if (base) {
+      const branchPlans = changedPlans([`${base}..HEAD`]);
+      if (branchPlans.length === 1) return readPlan(join(repoRoot, branchPlans[0]));
+    }
   }
   const inProgress = plans.filter(p => p.meta.status === 'in-progress');
   if (inProgress.length === 1) return inProgress[0];
