@@ -1,0 +1,14 @@
+{
+  "prefix": "ADW",
+  "tracker": "local",
+  "timeZone": "Europe/Berlin",
+  "plansDir": "docs/plans",
+  "protectedBranches": ["main"],
+  "captureSources": ["Claude", "Codex", "Gemini", "ChatGPT", "Notion AI", "Other"],
+  "verifyCommand": "node --test scripts/ticket.test.mjs",
+  "requireReview": false,
+  "noPlan": {
+    "maxChangedLines": 40,
+    "noNewFilesUnder": ["scripts"]
+  }
+}

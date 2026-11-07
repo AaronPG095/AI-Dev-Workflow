@@ -1,0 +1,21 @@
+{
+  "prefix": "PROJ",
+  "tracker": "notion",
+  "dataSourceId": "<notion-tasks-data-source-uuid>",
+  "projectPageId": "<notion-project-page-uuid>",
+  "tag": "Work / Project",
+  "lifeAreaPageId": "<notion-life-area-page-uuid-optional>",
+  "timeZone": "Europe/Berlin",
+  "plansDir": "docs/plans",
+  "protectedBranches": ["main", "develop"],
+  "captureSources": ["Claude", "Codex", "Gemini", "ChatGPT", "Notion AI", "Other"],
+  "verifyCommand": "npm test",
+  "requireReview": false,
+  "packMaxFileLines": 120,
+  "packMaxLines": 400,
+  "packIgnore": [],
+  "noPlan": {
+    "maxChangedLines": 40,
+    "noNewFilesUnder": ["src"]
+  }
+}
