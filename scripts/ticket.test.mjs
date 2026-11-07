@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, copyFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, copyFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -299,3 +299,18 @@ test('worktree .env fallback reads NOTION_TOKEN from main checkout', t => {
   assert.equal(r.status, 0, r.stderr);
   assert.equal(r.calls.length, 1);
 });
+
+test('sync.mjs patches AGENTS.md Development process section while preserving surrounding blocks', async (t) => {
+  if (!existsSync(join(scripts, 'sync.mjs'))) return t.skip('sync.mjs only present in upstream AI-Dev-Workflow repo');
+  const { patchAgentsMd, patchClaudeMd } = await import('./sync.mjs');
+  const original = `# Fluent Studio Website\n\nIntro line.\n\n## Development process (every AI: Claude, Codex, Gemini/Antigravity, Cursor)\n\nOld 5-step text.\n\n<!-- BEGIN:nextjs-agent-rules -->\n## Next.js rules\nKeep this block.\n<!-- END:nextjs-agent-rules -->\n`;
+  const updated = patchAgentsMd(original, 'Fluent-Studio-Website', { prefix: 'FS', noNewFilesUnder: ['src'], maxChangedLines: 40 });
+  assert.match(updated, /# Fluent Studio Website/);
+  assert.match(updated, /Non-trivial changes follow these six steps/);
+  assert.match(updated, /FS-Plan-<Topic>-<YYYY-MM>\.plan\.md/);
+  assert.match(updated, /node scripts\/ticket\.mjs pack/);
+  assert.match(updated, /<!-- BEGIN:nextjs-agent-rules -->\n## Next\.js rules\nKeep this block\.\n<!-- END:nextjs-agent-rules -->/);
+  assert.doesNotMatch(updated, /Old 5-step text/);
+  assert.equal(patchClaudeMd(''), '@AGENTS.md\n');
+});
+

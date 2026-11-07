@@ -28,7 +28,7 @@ Extract and upgrade the shared AI development workflow into a standalone, public
 - [x] `scripts/ticket.mjs review` records `reviewedBy` and `reviewVerdict` (`pass|warn|block`) and blocks `check`/`ship`/`ci-check` on `block` verified: tested via `ticket.test.mjs` and live review stamp
 - [x] `scripts/ticket.mjs` auto-resolves the active plan when `<plan>` is omitted and falls back to the main checkout `.env` inside git worktrees verified: tested via `ticket.test.mjs` subtests 23 and 26
 - [x] Identical `dev-workflow` and `quick-review` skills exist in `.agents/skills/` and `.claude/skills/` verified: `Get-FileHash` confirmed matching SHA-256 hashes across both directories
-- [x] `scripts/sync-repos.ps1` detects drift (`-Check`) and syncs workflow files without overwriting per-repo `ticket.config.json` verified: ran `.\scripts\sync-repos.ps1 -AllKnown -Check` across sibling repos
+- [x] `scripts/sync.mjs` and `scripts/sync-repos.ps1` detect drift (`--check`), auto-patch the `## Development process` section in `AGENTS.md`, and sync workflow files without overwriting per-repo `ticket.config.json` verified: `node --test scripts/ticket.test.mjs` passed all 27 tests including `patchAgentsMd`
 - [x] Repository contains zero private Notion UUIDs or secrets and is published to a public GitHub remote verified: regex secret scan returned 0 matches; published via `gh repo create`
 
 ## Steps
