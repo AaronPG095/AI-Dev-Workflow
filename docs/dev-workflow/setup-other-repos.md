@@ -2,9 +2,21 @@
 
 `AI-Dev-Workflow` is the upstream source of the shared AI development process (plan, plan doc, ticket, implement while ticking the plan, single-pass review via `pack`, finish only when closed out). Any AI client can follow it: Claude Code, Codex, Gemini/Antigravity, or Cursor.
 
-## 1. Quick Sync or Bootstrap (`sync-repos.ps1`)
+## 1. Quick Sync or Bootstrap
 
-From the `AI-Dev-Workflow` checkout:
+### A. Remote Sync (Any Machine, Standalone Clones)
+If you are on another PC or do not have `AI-Dev-Workflow` cloned next to your repository:
+
+```powershell
+# Check for drift against upstream
+node scripts/sync.mjs --remote --check
+
+# Pull the latest workflow files directly from GitHub
+node scripts/sync.mjs --remote
+```
+
+### B. Local Multi-Repo Sync (`sync-repos.ps1`)
+From the `AI-Dev-Workflow` checkout when sibling repositories are present:
 
 ```powershell
 # Check drift across all configured sibling repositories
@@ -17,7 +29,7 @@ From the `AI-Dev-Workflow` checkout:
 .\scripts\sync-repos.ps1 C:\path\to\repo
 ```
 
-`sync-repos.ps1` updates the shared engine files (`scripts/ticket.mjs`, `scripts/ticket.test.mjs`, `docs/plans/_template.plan.md`, `.agents/skills/{dev-workflow,quick-review}/SKILL.md`, `.claude/skills/{dev-workflow,quick-review}/SKILL.md`, `.github/workflows/{plan-check,ticket-done}.yml`, and `.github/pull_request_template.md`) while preserving each repository's `scripts/ticket.config.json`.
+`sync.mjs` updates the shared engine files (`scripts/ticket.mjs`, `scripts/ticket.test.mjs`, `docs/plans/_template.plan.md`, `.agents/skills/{dev-workflow,quick-review}/SKILL.md`, `.claude/skills/{dev-workflow,quick-review}/SKILL.md`, `.github/workflows/{plan-check,ticket-done,workflow-sync}.yml`, and `.github/pull_request_template.md`) while preserving each repository's `scripts/ticket.config.json`.
 
 ---
 
