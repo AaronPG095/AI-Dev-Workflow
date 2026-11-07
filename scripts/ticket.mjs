@@ -19,10 +19,17 @@
 // Tracker: "notion" (default when dataSourceId is set) or "local" (offline/public markdown-only mode).
 // Auth: NOTION_TOKEN from the environment, the repository's .env, or the main git checkout's .env when in a worktree.
 
-import { readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
+import {
+  readFileSync,
+  writeFileSync,
+  existsSync,
+  readdirSync,
+  unlinkSync,
+  mkdirSync,
+} from 'node:fs';
 import { dirname, join, resolve, relative, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, execSync } from 'node:child_process';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..');
@@ -74,6 +81,8 @@ const opts = { files: [] };
 for (let i = 0; i < rest.length; i++) {
   const a = rest[i];
   if (a === '--dry-run') opts.dryRun = true;
+  else if (a === '--test') opts.test = true;
+  else if (a === '--branch') opts.branch = true;
   else if (a.startsWith('--')) opts[a.slice(2)] = rest[++i];
   else opts.files.push(a);
 }
@@ -550,6 +559,157 @@ function formatFilteredDiff(
 // ---------- commands ----------
 
 const commands = {
+  async new() {
+    const rawTopic = opts.files[0] || opts.topic || '';
+    if (!rawTopic)
+      fail(
+        'usage: node scripts/ticket.mjs new "<Topic>" [--type Feature|Bug|Refactor|Process|Docs] [--priority <p>] [--state <s>] [--due <YYYY-MM-DD>] [--branch]'
+      );
+    const type = opts.type || 'Feature';
+    const topic = rawTopic.replace(/^["']|["']$/g, '').trim();
+    const kebabTopic = topic
+      .replace(/[^a-zA-Z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+    const month = today().slice(0, 7);
+    const filename = `${config.prefix}-Plan-${kebabTopic}-${month}.plan.md`;
+    const relPath = join(config.plansDir, filename).replace(/\\/g, '/');
+    const fullPath = join(repoRoot, relPath);
+
+    if (existsSync(fullPath)) fail(`plan already exists: ${relPath}`);
+
+    const priority = opts.priority || '';
+    const state = opts.state || '';
+    const due = opts.due || '';
+
+    const templatePath = join(repoRoot, config.plansDir, '_template.plan.md');
+    let template = existsSync(templatePath)
+      ? readFileSync(templatePath, 'utf8')
+      : '';
+
+    let content;
+    if (template) {
+      content = template
+        .replace(/^title:.*$/m, `title: Plan - ${type}: ${topic}`)
+        .replace(/^priority:.*$/m, `priority: ${priority}`)
+        .replace(/^state:.*$/m, `state: ${state}`)
+        .replace(/^due:.*$/m, `due: ${due}`)
+        .replace(/^# <Title>.*$/m, `# ${topic}`)
+        .replace(/<!--[\s\S]*?-->\n*/m, '');
+    } else {
+      content = [
+        '---',
+        `title: Plan - ${type}: ${topic}`,
+        'ticket:',
+        'status: draft',
+        `priority: ${priority}`,
+        `state: ${state}`,
+        `due: ${due}`,
+        '---',
+        `# ${topic}`,
+        '',
+        '## Summary',
+        '',
+        '<2-3 sentences: what changes and why.>',
+        '',
+        '## Acceptance criteria',
+        '',
+        '- [ ] <Checkable outcome>',
+        '',
+        '## Steps',
+        '',
+        '- [ ] <Step>',
+        '',
+        '## Risks',
+        '',
+        '<What could go wrong and how it is contained.>',
+        '',
+        '## Out of scope',
+        '',
+        '<What this plan deliberately does not do.>',
+        '',
+        '## Notes',
+        '',
+        '<Discoveries and decisions during implementation.>',
+        '',
+        '## Progress log',
+        '',
+        '<!-- One line per session/review, added with `ticket.mjs log` or `ticket.mjs review` -->',
+      ].join('\n');
+    }
+
+    mkdirSync(dirname(fullPath), { recursive: true });
+    writeFileSync(fullPath, `${content.trimEnd()}\n`, 'utf8');
+    console.log(`Created plan: ${relPath}`);
+
+    if (opts.branch) {
+      const agent = (opts.agent || process.env.AI_CLIENT || 'feat').toLowerCase();
+      const branchName = `${agent}/${kebabTopic.toLowerCase()}`;
+      try {
+        git(['checkout', '-b', branchName]);
+        console.log(`Checked out branch: ${branchName}`);
+      } catch (err) {
+        console.warn(`Could not checkout branch ${branchName}: ${err.message}`);
+      }
+    }
+  },
+
+  async prime() {
+    const plan = onePlan();
+    const branch =
+      git(['rev-parse', '--abbrev-ref', 'HEAD'], { allowFail: true }) ||
+      'detached';
+    const statusShort = git(['status', '--short'], { allowFail: true }) || '';
+    const clean = !statusShort.trim();
+
+    const criteriaSection = section(plan.body, 'Acceptance criteria') || '';
+    const stepsSection = section(plan.body, 'Steps') || '';
+    const progressSection = section(plan.body, 'Progress log') || '';
+
+    const openCriteria = criteriaSection
+      .split('\n')
+      .map((l) => l.trim())
+      .filter((l) => l.startsWith('- [ ]'));
+    const openSteps = stepsSection
+      .split('\n')
+      .map((l) => l.trim())
+      .filter((l) => l.startsWith('- [ ]'));
+
+    const progressLines = progressSection
+      .split('\n')
+      .map((l) => l.trim())
+      .filter((l) => l && !l.startsWith('<!--') && !l.endsWith('-->'));
+    const lastLog = progressLines.length
+      ? progressLines[progressLines.length - 1]
+      : '(none)';
+
+    const lines = [
+      `# Session Context: ${plan.meta.title || plan.rel}`,
+      `Plan: ${plan.rel} | Status: ${plan.meta.status || 'unknown'} | Ticket: ${plan.meta.ticket || 'none'}`,
+      `Branch: ${branch} | Tree: ${clean ? 'clean' : 'dirty'}${plan.meta.reviewedBy ? ` | Reviewed: ${plan.meta.reviewedBy} (${plan.meta.reviewVerdict})` : ''}`,
+      ...(config.verifyCommand ? [`Verify: \`${config.verifyCommand}\``] : []),
+      '',
+      `## Open Acceptance Criteria (${openCriteria.length} remaining)`,
+      ...(openCriteria.length
+        ? openCriteria.slice(0, 5)
+        : ['- None (all ticked or none defined)']),
+      ...(openCriteria.length > 5
+        ? [`  ... and ${openCriteria.length - 5} more`]
+        : []),
+      '',
+      `## Next Steps (${openSteps.length} remaining)`,
+      ...(openSteps.length
+        ? openSteps.slice(0, 5)
+        : ['- None (all ticked or none defined)']),
+      ...(openSteps.length > 5
+        ? [`  ... and ${openSteps.length - 5} more`]
+        : []),
+      '',
+      '## Latest Progress',
+      lastLog,
+    ];
+    console.log(lines.join('\n'));
+  },
+
   async create() {
     const plan = onePlan();
     if (hasTicket(plan.meta.ticket))
@@ -711,6 +871,26 @@ const commands = {
       ignorePatterns,
     });
 
+    let testOutput = '';
+    let testPassed = true;
+    if (opts.test && config.verifyCommand) {
+      try {
+        const out = execSync(config.verifyCommand, {
+          cwd: repoRoot,
+          encoding: 'utf8',
+          stdio: ['pipe', 'pipe', 'pipe'],
+          env: { ...process.env, CI: '1' },
+        });
+        const outLines = out.trim().split('\n').filter(Boolean);
+        testOutput = outLines.slice(-5).join('\n');
+      } catch (err) {
+        testPassed = false;
+        const out = (err.stdout || '') + (err.stderr || '');
+        const outLines = out.trim().split('\n').filter(Boolean);
+        testOutput = outLines.slice(-8).join('\n') || err.message;
+      }
+    }
+
     const lines = [
       `# Review Packet: ${plan.meta.title || plan.rel}`,
       `Plan: ${plan.rel} | Status: ${plan.meta.status || 'unknown'} | Branch: ${plan.meta.branch || git(['rev-parse', '--abbrev-ref', 'HEAD'], { allowFail: true })}`,
@@ -719,6 +899,17 @@ const commands = {
         ? [`Verify command: \`${config.verifyCommand}\``]
         : []),
       '',
+      ...(opts.test && config.verifyCommand
+        ? [
+            '## Test Verification',
+            `Command: \`${config.verifyCommand}\``,
+            `Result: ${testPassed ? 'PASS (exit code 0)' : 'FAIL'}`,
+            '```',
+            testOutput || '(no output)',
+            '```',
+            '',
+          ]
+        : []),
       '## Plan Summary',
       section(plan.body, 'Summary') || '(none)',
       '',
@@ -913,6 +1104,207 @@ const commands = {
         await closeTicket(plan.meta.ticket);
         console.log(`${f}: ticket set to Done.`);
       }
+    }
+  },
+
+  async overview() {
+    const parentDir = dirname(repoRoot);
+    const candidateDirs = [];
+    const knownNames = [
+      'FluentOverlay',
+      'Fluent-Studio-Website',
+      'FluentTimer',
+      'TokenHUD',
+      'Fluent-Studio-Atlas',
+      'AI-Dev-Workflow',
+    ];
+    for (const name of knownNames) {
+      const p = join(parentDir, name);
+      if (existsSync(p) && !candidateDirs.includes(p)) candidateDirs.push(p);
+    }
+    if (!candidateDirs.includes(repoRoot)) candidateDirs.push(repoRoot);
+
+    const rows = [];
+    for (const dir of candidateDirs) {
+      const name = basename(dir);
+      const isGit = existsSync(join(dir, '.git'));
+      if (!isGit) continue;
+
+      let branch = '(unknown)';
+      try {
+        branch = execFileSync(
+          'git',
+          ['-C', dir, 'rev-parse', '--abbrev-ref', 'HEAD'],
+          {
+            encoding: 'utf8',
+            stdio: ['pipe', 'pipe', 'ignore'],
+          }
+        ).trim();
+      } catch {}
+
+      let statusShort = '';
+      try {
+        statusShort = execFileSync('git', ['-C', dir, 'status', '--short'], {
+          encoding: 'utf8',
+          stdio: ['pipe', 'pipe', 'ignore'],
+        }).trim();
+      } catch {}
+      const clean = !statusShort;
+
+      const plansDir = join(dir, 'docs/plans');
+      let activePlan = null;
+      let openBoxes = '-';
+      let state = 'Idle';
+
+      if (existsSync(plansDir)) {
+        try {
+          const files = readdirSync(plansDir).filter(
+            (f) => f.endsWith('.plan.md') && !f.startsWith('_')
+          );
+          const plans = files.map((f) => {
+            const raw = readFileSync(join(plansDir, f), 'utf8');
+            const match = raw.match(/^---\n([\s\S]*?)\n---/);
+            const meta = match
+              ? Object.fromEntries(
+                  match[1]
+                    .split('\n')
+                    .filter((l) => l.includes(':'))
+                    .map((l) => {
+                      const idx = l.indexOf(':');
+                      return [l.slice(0, idx).trim(), l.slice(idx + 1).trim()];
+                    })
+                )
+              : {};
+            return { file: f, meta, raw };
+          });
+
+          activePlan = plans.find((p) => p.meta.branch === branch);
+          if (!activePlan && branch !== 'main' && branch !== 'master') {
+            activePlan = plans.find((p) => p.meta.status === 'in-progress');
+          }
+          if (activePlan) {
+            state =
+              activePlan.meta.status === 'in-progress'
+                ? 'Doing'
+                : activePlan.meta.status || 'Active';
+            const openCriteria = (activePlan.raw.match(/^- \[ \] /gm) || [])
+              .length;
+            openBoxes = String(openCriteria);
+          }
+        } catch {}
+      }
+
+      rows.push({
+        repo: name,
+        branch: branch + (clean ? '' : '*'),
+        plan: activePlan ? activePlan.file.replace(/\.plan\.md$/, '') : '(none)',
+        open: openBoxes,
+        state,
+      });
+    }
+
+    const colWidths = {
+      repo: Math.max(4, ...rows.map((r) => r.repo.length)),
+      branch: Math.max(6, ...rows.map((r) => r.branch.length)),
+      plan: Math.max(4, ...rows.map((r) => r.plan.length)),
+      open: Math.max(4, ...rows.map((r) => r.open.length)),
+      state: Math.max(5, ...rows.map((r) => r.state.length)),
+    };
+
+    const header = [
+      'Repo'.padEnd(colWidths.repo),
+      'Branch'.padEnd(colWidths.branch),
+      'Plan'.padEnd(colWidths.plan),
+      'Open'.padStart(colWidths.open),
+      'State'.padEnd(colWidths.state),
+    ].join('  ');
+    const divider = '-'.repeat(header.length);
+
+    console.log(header);
+    console.log(divider);
+    for (const r of rows) {
+      console.log(
+        [
+          r.repo.padEnd(colWidths.repo),
+          r.branch.padEnd(colWidths.branch),
+          r.plan.padEnd(colWidths.plan),
+          r.open.padStart(colWidths.open),
+          r.state.padEnd(colWidths.state),
+        ].join('  ')
+      );
+    }
+  },
+
+  async hook() {
+    const action = opts.files[0] || 'status';
+    let gitDir;
+    try {
+      gitDir = git(['rev-parse', '--git-path', 'hooks']);
+    } catch {
+      gitDir = join(repoRoot, '.git', 'hooks');
+    }
+    const hookPath = resolve(repoRoot, gitDir, 'pre-push');
+
+    if (action === 'install') {
+      mkdirSync(dirname(hookPath), { recursive: true });
+      const script = [
+        '#!/bin/sh',
+        '# AI-Dev-Workflow pre-push hook: guardrails against direct push to protected branches',
+        '# and warns if the active plan check fails.',
+        '',
+        'remote="$1"',
+        'url="$2"',
+        '',
+        'protected_branches="main master develop"',
+        'if [ -f "scripts/ticket.config.json" ]; then',
+        '  custom=$(node -e "try{console.log((JSON.parse(require(\'fs\').readFileSync(\'scripts/ticket.config.json\',\'utf8\')).protectedBranches||[]).join(\' \'))}catch(e){}" 2>/dev/null)',
+        '  if [ -n "$custom" ]; then',
+        '    protected_branches="$custom"',
+        '  fi',
+        'fi',
+        '',
+        'while read -r local_ref local_oid remote_ref remote_oid; do',
+        '  branch=$(echo "$remote_ref" | sed \'s@^refs/heads/@@\')',
+        '  for pb in $protected_branches; do',
+        '    if [ "$branch" = "$pb" ]; then',
+        '      if [ "$GIT_ALLOW_PROTECTED_PUSH" != "1" ]; then',
+        '        echo "================================================================================"',
+        '        echo "BLOCKED: Direct push to protected branch \'$branch\' is disallowed by AI-Dev-Workflow."',
+        '        echo "Please push to a feature branch (e.g. gemini/<topic>) and open a Pull Request."',
+        '        echo "(Emergency bypass: GIT_ALLOW_PROTECTED_PUSH=1 git push)"',
+        '        echo "================================================================================"',
+        '        exit 1',
+        '      fi',
+        '    fi',
+        '  done',
+        'done',
+        '',
+        'if [ -f "scripts/ticket.mjs" ]; then',
+        '  node scripts/ticket.mjs check >/dev/null 2>&1',
+        '  if [ $? -ne 0 ]; then',
+        '    echo "Note: Active plan check did not pass yet. CI will enforce plan completion on PR."',
+        '  fi',
+        'fi',
+        '',
+        'exit 0',
+      ].join('\n');
+      writeFileSync(hookPath, `${script}\n`, { mode: 0o755 });
+      console.log(`Pre-push hook installed: ${hookPath}`);
+    } else if (action === 'uninstall') {
+      if (existsSync(hookPath)) {
+        unlinkSync(hookPath);
+        console.log(`Pre-push hook removed: ${hookPath}`);
+      } else {
+        console.log(`Pre-push hook not present: ${hookPath}`);
+      }
+    } else if (action === 'status') {
+      console.log(
+        existsSync(hookPath)
+          ? `Pre-push hook is installed at ${hookPath}`
+          : `Pre-push hook is NOT installed. Run 'node scripts/ticket.mjs hook install' to install.`
+      );
+    } else {
+      fail('usage: node scripts/ticket.mjs hook [install|uninstall|status]');
     }
   },
 };
