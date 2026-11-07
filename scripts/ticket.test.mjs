@@ -746,3 +746,41 @@ test('pr command validates plan closeout and outputs PR body in dry-run mode', (
   assert.match(r.stdout, /Test fixture/);
   assert.match(r.stdout, /Works verified: fixture/);
 });
+
+test('ci-check allows workflow infrastructure sync under no-plan', (t) => {
+  const f = fixture(t, 'status: in-progress\nticket: https://www.notion.so/test\n');
+  f.git('init', '-b', 'main');
+  f.git('add', '.');
+  f.git(
+    '-c',
+    'user.name=Test',
+    '-c',
+    'user.email=test@example.invalid',
+    'commit',
+    '-m',
+    'init'
+  );
+  const baseSha = f.git('rev-parse', 'HEAD').trim();
+
+  // Create a branch modifying workflow files
+  f.git('checkout', '-b', 'chore/sync-workflow');
+  writeFileSync(join(f.root, 'AGENTS.md'), '# Updated Development Process\n');
+  f.git('add', 'AGENTS.md');
+  f.git(
+    '-c',
+    'user.name=Test',
+    '-c',
+    'user.email=test@example.invalid',
+    'commit',
+    '-m',
+    'chore(workflow): sync'
+  );
+  const headSha = f.git('rev-parse', 'HEAD').trim();
+
+  const r = f.run('ci-check', ['--base', baseSha, '--head', headSha], [], {
+    envOverrides: { NO_PLAN: '1' },
+    omitPlan: true,
+  });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /allowed as workflow infrastructure sync/i);
+});

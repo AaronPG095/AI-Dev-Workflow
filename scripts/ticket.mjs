@@ -71,6 +71,27 @@ const DEFAULT_PACK_IGNORE = [
   '*.min.css',
   '*.Designer.cs',
 ];
+const WORKFLOW_FILES = new Set([
+  'scripts/ticket.mjs',
+  'scripts/ticket.test.mjs',
+  'scripts/ticket.config.json',
+  'scripts/ticket.config.example.json',
+  'scripts/sync.mjs',
+  'scripts/sync-repos.ps1',
+  'scripts/install.ps1',
+  'docs/plans/_template.plan.md',
+  'docs/dev-workflow/setup-other-repos.md',
+  '.agents/skills/quick-review/SKILL.md',
+  '.claude/skills/quick-review/SKILL.md',
+  '.agents/skills/dev-workflow/SKILL.md',
+  '.claude/skills/dev-workflow/SKILL.md',
+  '.github/pull_request_template.md',
+  '.github/workflows/workflow-sync.yml',
+  '.github/workflows/plan-check.yml',
+  '.github/workflows/ticket-done.yml',
+  'AGENTS.md',
+  'CLAUDE.md',
+]);
 const today = () =>
   new Date().toLocaleDateString('sv-SE', {
     timeZone: config.timeZone || 'Europe/Berlin',
@@ -1239,6 +1260,13 @@ const commands = {
           `no plan with a ticket header changed in this PR. Add one under ${config.plansDir}/ (see AGENTS.md), or add the "no-plan" label for a trivial change.`
         );
       const { maxChangedLines, noNewFilesUnder } = config.noPlan;
+      const changedFiles = git(['diff', '--name-only', range])
+        .split('\n')
+        .map(f => f.trim().replace(/\\/g, '/'))
+        .filter(Boolean);
+      const isWorkflowSync =
+        changedFiles.length > 0 &&
+        changedFiles.every(f => WORKFLOW_FILES.has(f));
       const changed = git(['diff', '--numstat', range])
         .split('\n')
         .filter(Boolean)
@@ -1246,6 +1274,11 @@ const commands = {
           const [a, d] = l.split('\t');
           return n + (Number(a) || 0) + (Number(d) || 0);
         }, 0);
+      if (isWorkflowSync) {
+        return console.log(
+          `No plan in this PR; allowed as workflow infrastructure sync (${changed} changed lines across ${changedFiles.length} workflow files).`
+        );
+      }
       const newFiles = git([
         'diff',
         '--name-only',
