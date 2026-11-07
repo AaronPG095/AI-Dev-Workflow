@@ -6,6 +6,7 @@
 // Usage:
 //   node scripts/sync.mjs --all-known --check
 //   node scripts/sync.mjs --all-known
+//   node scripts/sync.mjs --remote [--check] [--dry-run]
 //   node scripts/sync.mjs <repo-path> [--check] [--dry-run] [--init-prefix <PREFIX>]
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
@@ -39,18 +40,54 @@ const PREFIX_TEMPLATED_FILES = [
 ];
 
 const args = process.argv.slice(2);
-const opts = { repos: [], allKnown: false, check: false, dryRun: false, initPrefix: '' };
+const opts = {
+  repos: [],
+  allKnown: false,
+  check: false,
+  dryRun: false,
+  initPrefix: '',
+  remote: false,
+  upstream: 'AaronPG095/AI-Dev-Workflow',
+  branch: 'main',
+};
 for (let i = 0; i < args.length; i++) {
   const a = args[i];
   if (a === '--all-known' || a === '-AllKnown') opts.allKnown = true;
   else if (a === '--check' || a === '-Check') opts.check = true;
   else if (a === '--dry-run' || a === '-DryRun') opts.dryRun = true;
+  else if (a === '--remote' || a === '-Remote') opts.remote = true;
+  else if (a === '--upstream' || a === '-Upstream') opts.upstream = args[++i] || opts.upstream;
+  else if (a === '--branch' || a === '-Branch') opts.branch = args[++i] || opts.branch;
   else if (a === '--init-prefix' || a === '-InitPrefix') opts.initPrefix = args[++i] || '';
   else opts.repos.push(a);
 }
 
+const remoteCache = new Map();
+async function getSourceFile(rel) {
+  if (opts.remote) {
+    if (remoteCache.has(rel)) return remoteCache.get(rel);
+    const url = `https://raw.githubusercontent.com/${opts.upstream}/${opts.branch}/${rel}`;
+    const res = await fetch(url);
+    if (res.status === 404) {
+      remoteCache.set(rel, null);
+      return null;
+    }
+    if (!res.ok) {
+      throw new Error(`Failed to fetch ${url}: HTTP ${res.status}`);
+    }
+    const text = await res.text();
+    remoteCache.set(rel, text);
+    return text;
+  }
+  const localPath = join(workflowRoot, rel);
+  if (!existsSync(localPath)) return null;
+  return readFileSync(localPath, 'utf8');
+}
+
 if (resolve(process.argv[1] || '') === fileURLToPath(import.meta.url)) {
-  if (opts.allKnown && opts.repos.length === 0) {
+  if (opts.remote && opts.repos.length === 0) {
+    opts.repos.push(process.cwd());
+  } else if (opts.allKnown && opts.repos.length === 0) {
     for (const name of KNOWN_REPOS) {
       const candidate = join(codingRoot, name);
       if (existsSync(candidate)) opts.repos.push(candidate);
@@ -61,6 +98,7 @@ if (resolve(process.argv[1] || '') === fileURLToPath(import.meta.url)) {
     console.log('Usage:');
     console.log('  node scripts/sync.mjs --all-known --check');
     console.log('  node scripts/sync.mjs --all-known');
+    console.log('  node scripts/sync.mjs --remote [--check] [--dry-run]');
     console.log('  node scripts/sync.mjs <repo-path> [--check] [--dry-run] [--init-prefix <PREFIX>]');
     process.exit(0);
   }
@@ -92,19 +130,21 @@ export function renderDevProcessSection({ prefix, noNewFilesUnder = ['src'], max
     `Non-trivial changes follow these six steps. Only trivial changes (at most ${maxChangedLines} changed lines, no new files under ${folders}: typos, dependency bumps, one-line fixes) may skip them; their PR gets the \`no-plan\` label.`,
     '',
     '1. **Plan.** Investigate read-only and propose a plan. Wait for Aaron\'s approval before changing code, and quote it under Notes in the plan.',
-    `2. **Plan doc.** Copy \`docs/plans/_template.plan.md\` to \`docs/plans/${prefix}-Plan-<Topic>-<YYYY-MM>.plan.md\` and fill it in. The title reads \`<Plan|Debug|Ask> - <Type>: <Title>\` (for example \`Plan - Feature: Smart Shortcut Suggestions\`); optionally set \`priority\`, \`state\` and \`due\` in the frontmatter. Acceptance criteria and Steps are \`- [ ]\` checkboxes. A plan bigger than one PR is split into separate plans, one per PR.`,
+    `2. **Plan doc.** Copy \`docs/plans/_template.plan.md\` to \`docs/plans/${prefix}-Plan-<Topic>-<YYYY-MM>.plan.md\` or scaffold with \`node scripts/ticket.mjs new "<Topic>" [--type Feature] [--branch]\`. The title reads \`<Plan|Debug|Ask> - <Type>: <Title>\` (for example \`Plan - Feature: Smart Shortcut Suggestions\`); optionally set \`priority\`, \`state\` and \`due\` in the frontmatter. Acceptance criteria and Steps are \`- [ ]\` checkboxes. A plan bigger than one PR is split into separate plans, one per PR.`,
     `3. **Ticket.** Run \`node scripts/ticket.mjs create <plan> --agent <Claude|Codex|Gemini|Other>\`. It creates the Notion Task (${prefix} prefix, To Do, \`Task Lane = Development\`, a stable \`Dev Ticket Key\`, plus any explicit priority, state and real deadline (\`due\`); no Focus Slot or scheduling Date) and writes its URL into the plan. Create ${prefix} tickets only this way. Creation queries the stable key first; if the Task already exists, it restores its canonical URL without changing the Task. Preserve \`devTicketKey\` when renaming a plan. Do not run concurrent creates for the same plan (Notion has no unique-key constraint).`,
     '4. **Implement.** Create a branch, commit the plan on it, and run `node scripts/ticket.mjs start [<plan>]` (Task → Doing and Started At; records the branch and worktree in the plan).',
+    '   - Cold start / resume: run `node scripts/ticket.mjs prime` for a compact session context primer, or `node scripts/ticket.mjs overview` for multi-repo status.',
     '   - Tick each checkbox as soon as it is done. A ticked acceptance criterion ends with concise `verified: <how it was checked and the result>` evidence (one line, no raw terminal dumps); never tick one you have not verified.',
     '   - Never delete a checkbox. Anything you will not do stays unticked and ends with `deferred: <reason>`.',
     '   - Record discoveries under Notes. Progress lives in the plan; do not post progress to Notion.',
     '   - **Before you stop** (end of session, usage limit, handing over), run `node scripts/ticket.mjs log [<plan>] --agent <you> --message "<done>; next: <step>; open: <questions>"` and commit the plan. To continue someone else\'s work, find the plan with `status: in-progress`, read it fully including the Progress log, and resume at the first unticked step.',
-    '5. **Review.** Before closing out, run `node scripts/ticket.mjs pack [<plan>]` (0 LLM tokens) to generate a compact review digest (plan criteria, hygiene check, and filtered diff). Perform a single-pass review checking plan fidelity, regressions, and verification honesty (using the `quick-review` skill or a fresh session/second model when practical), then stamp the result with `node scripts/ticket.mjs review [<plan>] --agent <you> --verdict <pass|warn|block> --summary "<findings>"`. A `block` verdict fails close-out until resolved.',
+    '5. **Review.** Before closing out, run `node scripts/ticket.mjs pack [<plan>] [--test]` (0 LLM tokens, embeds test results with `--test`) to generate a compact review digest (plan criteria, hygiene check, and filtered diff). Perform a single-pass review checking plan fidelity, regressions, and verification honesty (using the `quick-review` skill or a fresh session/second model when practical), then stamp the result with `node scripts/ticket.mjs review [<plan>] --agent <you> --verdict <pass|warn|block> --summary "<findings>"`. A `block` verdict fails close-out until resolved.',
     '6. **Finish.** You are done only when `node scripts/ticket.mjs check [<plan>]` passes. Then open the PR with the template filled in and run `node scripts/ticket.mjs ship [<plan>] --pr <url>`; copy the deferred items it prints into the PR. Merging closes the Task (Done and Completed At); never set it to Done yourself.',
     '',
     'If a `ticket.mjs` command fails (for example no `NOTION_TOKEN`), say so and stop at that step. Do not create or update the ticket another way. CI (`Plan check`) blocks a PR whose plan has open items, unverified criteria, a `block` review verdict, removed checkboxes or no ticket, and a `no-plan` PR that is not trivial.',
+    'Git pre-push guardrail: run `node scripts/ticket.mjs hook install` to prevent accidental direct pushes to protected branches.',
     '',
-    'Upstream workflow & multi-repo sync: https://github.com/AaronPG095/AI-Dev-Workflow (`node scripts/sync.mjs`).',
+    'Upstream workflow & multi-repo sync: https://github.com/AaronPG095/AI-Dev-Workflow (`node scripts/sync.mjs --remote` or `scripts/sync-repos.ps1`).',
   ].join('\n');
 }
 
@@ -162,6 +202,7 @@ if (resolve(process.argv[1] || '') === fileURLToPath(import.meta.url)) {
     console.log(`=== ${repoName} (prefix: ${prefix}) ===`);
 
     function syncItem(rel, expectedText) {
+      if (expectedText === null) return;
       const dst = join(repo, rel);
       const expected = norm(expectedText);
       const actual = readNorm(dst);
@@ -180,11 +221,11 @@ if (resolve(process.argv[1] || '') === fileURLToPath(import.meta.url)) {
     }
 
     for (const rel of DIRECT_FILES) {
-      syncItem(rel, readFileSync(join(workflowRoot, rel), 'utf8'));
+      syncItem(rel, await getSourceFile(rel));
     }
 
     for (const rel of PREFIX_TEMPLATED_FILES) {
-      const raw = readFileSync(join(workflowRoot, rel), 'utf8');
+      const raw = await getSourceFile(rel);
       syncItem(rel, raw.replace(/ADW-Plan-/g, `${prefix}-Plan-`));
     }
 
@@ -192,9 +233,11 @@ if (resolve(process.argv[1] || '') === fileURLToPath(import.meta.url)) {
       ? `[${cfg.protectedBranches.join(', ')}]`
       : '[main]';
     for (const wf of ['.github/workflows/plan-check.yml', '.github/workflows/ticket-done.yml']) {
-      const raw = readFileSync(join(workflowRoot, wf), 'utf8');
+      const raw = await getSourceFile(wf);
       syncItem(wf, raw.replace(/branches: \[main, develop\]/g, `branches: ${branches}`));
     }
+    const syncWfRaw = await getSourceFile('.github/workflows/workflow-sync.yml');
+    syncItem('.github/workflows/workflow-sync.yml', syncWfRaw);
 
     const agentsPath = join(repo, 'AGENTS.md');
     const existingAgents = existsSync(agentsPath) ? readFileSync(agentsPath, 'utf8') : '';

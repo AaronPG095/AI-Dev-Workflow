@@ -8,6 +8,7 @@ import {
   copyFileSync,
   rmSync,
   existsSync,
+  readdirSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -543,4 +544,101 @@ test('sync.mjs patches AGENTS.md Development process section while preserving su
   );
   assert.doesNotMatch(updated, /Old 5-step text/);
   assert.equal(patchClaudeMd(''), '@AGENTS.md\n');
+});
+
+test('new command scaffolds a valid plan doc with slugified title and frontmatter', (t) => {
+  const f = fixture(t);
+  const r = f.run(
+    'new',
+    ['"Smart Shortcut Suggestions"', '--type', 'Feature', '--priority', 'high'],
+    [],
+    { omitPlan: true }
+  );
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /Created plan: docs\/plans\/FO-Plan-Smart-Shortcut-Suggestions-/);
+
+  const plans = readdirSync(join(f.root, 'docs/plans')).filter((p) =>
+    p.startsWith('FO-Plan-Smart-Shortcut-Suggestions-')
+  );
+  assert.equal(plans.length, 1);
+  const content = readFileSync(join(f.root, 'docs/plans', plans[0]), 'utf8');
+  assert.match(content, /title: Plan - Feature: Smart Shortcut Suggestions/);
+  assert.match(content, /priority: high/);
+  assert.match(content, /# Smart Shortcut Suggestions/);
+  assert.match(content, /## Acceptance criteria/);
+});
+
+test('prime command outputs compact session context with open criteria and steps', (t) => {
+  const f = fixture(
+    t,
+    'status: in-progress\nticket: local://FO:FO-Plan-Test\nbranch: feat/test\n'
+  );
+  f.git('init', '-b', 'feat/test');
+  f.git('add', '.');
+  f.git(
+    '-c',
+    'user.name=Test',
+    '-c',
+    'user.email=test@example.invalid',
+    'commit',
+    '-m',
+    'init'
+  );
+  const r = f.run('prime', [], [], { omitPlan: true });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /# Session Context:/);
+  assert.match(r.stdout, /Plan: docs\/plans\/FO-Plan-Test\.plan\.md/);
+  assert.match(r.stdout, /Status: in-progress/);
+  assert.match(r.stdout, /Branch: feat\/test/);
+  assert.match(r.stdout, /## Open Acceptance Criteria/);
+  assert.match(r.stdout, /## Next Steps/);
+});
+
+test('pack with --test embeds test execution result into review packet', (t) => {
+  const f = fixture(t, 'status: in-progress\n', [], {
+    verifyCommand: 'node -e "console.log(\'mock tests 10 passed\')"',
+  });
+  f.git('init', '-b', 'main');
+  f.git('add', '.');
+  f.git(
+    '-c',
+    'user.name=Test',
+    '-c',
+    'user.email=test@example.invalid',
+    'commit',
+    '-m',
+    'base'
+  );
+  const r = f.run('pack', ['--test']);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /## Test Verification/);
+  assert.match(r.stdout, /Result: PASS \(exit code 0\)/);
+  assert.match(r.stdout, /mock tests 10 passed/);
+});
+
+test('overview command outputs table with repo branches and plans', (t) => {
+  const f = fixture(t, 'status: in-progress\n');
+  f.git('init', '-b', 'main');
+  const r = f.run('overview', [], [], { omitPlan: true });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /Repo\s+Branch\s+Plan\s+Open\s+State/);
+});
+
+test('hook install, status, and uninstall manages pre-push guardrail script', (t) => {
+  const f = fixture(t);
+  f.git('init', '-b', 'main');
+  const rInstall = f.run('hook', ['install'], [], { omitPlan: true });
+  assert.equal(rInstall.status, 0, rInstall.stderr);
+
+  const hookPath = join(f.root, '.git', 'hooks', 'pre-push');
+  assert.equal(existsSync(hookPath), true);
+  const content = readFileSync(hookPath, 'utf8');
+  assert.match(content, /AI-Dev-Workflow pre-push hook/);
+
+  const rStatus = f.run('hook', ['status'], [], { omitPlan: true });
+  assert.match(rStatus.stdout, /Pre-push hook is installed/);
+
+  const rUninstall = f.run('hook', ['uninstall'], [], { omitPlan: true });
+  assert.equal(rUninstall.status, 0, rUninstall.stderr);
+  assert.equal(existsSync(hookPath), false);
 });
