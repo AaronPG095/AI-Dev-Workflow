@@ -642,3 +642,107 @@ test('hook install, status, and uninstall manages pre-push guardrail script', (t
   assert.equal(rUninstall.status, 0, rUninstall.stderr);
   assert.equal(existsSync(hookPath), false);
 });
+
+test('handoff and resume commands record and display multi-model handoff context', (t) => {
+  const f = fixture(
+    t,
+    'status: in-progress\nticket: local://FO:FO-Plan-Test\nbranch: feat/test\n'
+  );
+  f.git('init', '-b', 'feat/test');
+  f.git('add', '.');
+  f.git(
+    '-c',
+    'user.name=Test',
+    '-c',
+    'user.email=test@example.invalid',
+    'commit',
+    '-m',
+    'init'
+  );
+
+  const rHandoff = f.run(
+    'handoff',
+    [
+      '--agent',
+      'Gemini',
+      '--done',
+      'Implemented parser',
+      '--next',
+      'Run unit tests',
+      '--open',
+      'none',
+    ],
+    [],
+    { omitPlan: true }
+  );
+  assert.equal(rHandoff.status, 0, rHandoff.stderr);
+  assert.match(rHandoff.stdout, /=== Session Handoff Stamped ===/);
+  assert.match(rHandoff.stdout, /Done:\s+Implemented parser/);
+  assert.match(rHandoff.stdout, /Next:\s+Run unit tests/);
+
+  const rResume = f.run('resume', [], [], { omitPlan: true });
+  assert.equal(rResume.status, 0, rResume.stderr);
+  assert.match(rResume.stdout, /=== Resuming Session ===/);
+  assert.match(rResume.stdout, /Last Handoff:.*Implemented parser/);
+});
+
+test('adr command scaffolds in-repo architectural decision records', (t) => {
+  const f = fixture(t);
+  const r1 = f.run(
+    'adr',
+    ['"Use Native Child Process"', '--agent', 'Gemini'],
+    [],
+    { omitPlan: true }
+  );
+  assert.equal(r1.status, 0, r1.stderr);
+  assert.match(
+    r1.stdout,
+    /Created ADR: docs\/decisions\/ADR-001-use-native-child-process\.md/
+  );
+
+  const adrPath = join(
+    f.root,
+    'docs/decisions/ADR-001-use-native-child-process.md'
+  );
+  assert.equal(existsSync(adrPath), true);
+  const content = readFileSync(adrPath, 'utf8');
+  assert.match(content, /# ADR 001: Use Native Child Process/);
+  assert.match(content, /Author:\*\* Gemini/);
+
+  const r2 = f.run('adr', ['"Second Decision"'], [], { omitPlan: true });
+  assert.equal(r2.status, 0, r2.stderr);
+  assert.match(r2.stdout, /ADR-002-second-decision\.md/);
+});
+
+test('exec command runs shell commands across repositories', (t) => {
+  const f = fixture(t);
+  const r = f.run('exec', ['git --version'], [], { omitPlan: true });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /Repo\s+Status\s+Output/);
+  assert.match(r.stdout, /git version/i);
+});
+
+test('pr command validates plan closeout and outputs PR body in dry-run mode', (t) => {
+  const f = fixture(
+    t,
+    'status: in-progress\nticket: https://www.notion.so/test\nbranch: feat/pr-test\nreviewedBy: Gemini\nreviewVerdict: pass\n'
+  );
+  f.git('init', '-b', 'feat/pr-test');
+  f.git('add', '.');
+  f.git(
+    '-c',
+    'user.name=Test',
+    '-c',
+    'user.email=test@example.invalid',
+    'commit',
+    '-m',
+    'init'
+  );
+
+  const r = f.run('pr', ['--dry-run'], [], { omitPlan: true });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /--- Dry Run: PR Title ---/);
+  assert.match(r.stdout, /--- Dry Run: PR Body ---/);
+  assert.match(r.stdout, /Test fixture/);
+  assert.match(r.stdout, /Works verified: fixture/);
+});
