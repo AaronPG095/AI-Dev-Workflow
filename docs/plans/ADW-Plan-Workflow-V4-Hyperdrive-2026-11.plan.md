@@ -1,12 +1,15 @@
 ---
 title: Plan - Feature: Workflow V4 Hyperdrive
 ticket: local://ADW:ADW-Plan-Workflow-V4-Hyperdrive-2026-11
-status: planned
+status: in-progress
 priority: high
 state: flow
 due: 
 devTicketKey: ADW:ADW-Plan-Workflow-V4-Hyperdrive-2026-11
 agent: Gemini
+branch: feat/workflow-v4
+worktree: AI-Dev-Workflow
+startedAt: 2026-11-07
 ---
 # Workflow V4 Hyperdrive
 
