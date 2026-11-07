@@ -82,20 +82,27 @@ AI-Dev-Workflow/
 Requires **Node.js 22+**. When `<plan>` is omitted on a feature branch, `ticket.mjs` automatically resolves the active plan for the current branch.
 
 ```powershell
-# 1. Plan Scaffolding
+# 1. Plan Scaffolding & Single-Command Ignition
 # Automatically creates docs/plans/<PREFIX>-Plan-<Topic>-<YYYY-MM>.plan.md
 node scripts/ticket.mjs new "Smart Shortcut Suggestions" --type Feature [--branch]
+
+# Fast one-command ignition: scaffold, set criteria, checkout branch, ticket, and start Doing
+node scripts/ticket.mjs new "Fast Feature" --summary "..." --criteria "c1|c2" --steps "s1|s2" --branch --create --start --agent Gemini
 
 # 2. Ticket Lifecycle
 # Create ticket (Notion Task or local:// key)
 node scripts/ticket.mjs create docs/plans/ADW-Plan-Example-2026-11.plan.md --agent Gemini
 
-# Start work on a feature branch (records branch + worktree)
-node scripts/ticket.mjs start
+# Start work on a feature branch (records branch + worktree; optionally creates ticket if missing)
+node scripts/ticket.mjs start [--create]
 
-# 3. Agent Session Ignition & Handoff
-# Prints a compact ~20-line context primer for fresh chat sessions
+# 3. Agent Session Ignition, Zero-Token Ticking & Handoff
+# Prints a compact ~20-line context primer with numbered [1], [2] checkboxes for fresh chat sessions
 node scripts/ticket.mjs prime
+
+# Tick checkboxes by index or substring without editing markdown files (enforces --verified on criteria)
+node scripts/ticket.mjs tick 1 --verified "tests pass"
+node scripts/ticket.mjs defer 2 --reason "covered in follow-up"
 
 # Record structured handoff between AI models (Gemini -> Claude -> Codex)
 node scripts/ticket.mjs handoff --agent Gemini --done "Built parser" --next "Write tests" --open "none"
@@ -117,15 +124,29 @@ node scripts/ticket.mjs review --agent Codex --verdict pass --summary "Criteria 
 # Verify all checkboxes are ticked/deferred and criteria carry verified: evidence
 node scripts/ticket.mjs check
 
-# Automated PR creation & ticket shipping in one command (uses GitHub CLI gh)
-node scripts/ticket.mjs pr [--draft]
+# Automated PR creation & ticket shipping in one command (pushes branch, verifies, opens PR, auto-merges)
+node scripts/ticket.mjs pr [--verify] [--auto] [--draft]
 
 # Or link an already-opened PR manually:
 node scripts/ticket.mjs ship --pr https://github.com/owner/repo/pull/1
 
-# 6. Technical Memory, Utilities & Safety
+# 6. Technical Memory, Worktrees, Diagnostics & Safety
 # Scaffold in-repo Architecture Decision Record in docs/decisions/
 node scripts/ticket.mjs adr "Use Native Child Process Over External Packages"
+
+# Instant keyword search across in-repo ADRs, plan Notes, and Progress logs
+node scripts/ticket.mjs recall "Notion" [--fleet]
+
+# Safely archive completed plans to docs/plans/archive/<YYYY-MM>/
+node scripts/ticket.mjs archive [--all]
+
+# Isolated worktree lifecycle management with Windows extended-path cleanup
+node scripts/ticket.mjs wt list [--fleet]
+node scripts/ticket.mjs wt new [<plan>] [--name <dir>]
+node scripts/ticket.mjs wt prune [--fleet] [--all] [--dry-run]
+
+# Workspace and fleet diagnostic audit (drift, hooks, tracker tokens, worktrees, dirty state)
+node scripts/ticket.mjs doctor [--fleet]
 
 # Execute command across all local repositories in parallel
 node scripts/ticket.mjs exec "git status --short"
@@ -133,7 +154,7 @@ node scripts/ticket.mjs exec "git status --short"
 # Install pure shell pre-push hook to prevent direct push to protected branches
 node scripts/ticket.mjs hook install
 
-# Run the 36-test hermetic test suite
+# Run the 44-test hermetic test suite
 node --test scripts/ticket.test.mjs
 ```
 

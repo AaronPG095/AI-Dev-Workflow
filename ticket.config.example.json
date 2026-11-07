@@ -11,6 +11,15 @@
   "captureSources": ["Claude", "Codex", "Gemini", "ChatGPT", "Notion AI", "Other"],
   "verifyCommand": "npm test",
   "requireReview": false,
+  "knownRepos": [
+    "FluentOverlay",
+    "Fluent-Studio-Website",
+    "FluentTimer",
+    "TokenHUD",
+    "Fluent-Studio-Atlas",
+    "AI-Cortex",
+    "AI-Dev-Workflow"
+  ],
   "packMaxFileLines": 120,
   "packMaxLines": 400,
   "packIgnore": [],
