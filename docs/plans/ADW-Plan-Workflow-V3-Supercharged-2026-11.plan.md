@@ -1,7 +1,7 @@
 ---
 title: Plan - Feature: Workflow V3 Supercharged (PR Automation, Handoff/Resume, In-Repo ADRs, Batch Exec, Installer)
 ticket: local://ADW:ADW-Plan-Workflow-V3-Supercharged-2026-11
-status: in-progress
+status: shipped
 priority: high
 state: flow
 due: 
@@ -12,6 +12,7 @@ worktree: AI-Dev-Workflow
 startedAt: 2026-11-07
 reviewedBy: Gemini
 reviewVerdict: pass
+pr: https://github.com/AaronPG095/AI-Dev-Workflow/pull/3
 ---
 # Workflow V3 Supercharged (PR Automation, Handoff/Resume, In-Repo ADRs, Batch Exec, Installer)
 
