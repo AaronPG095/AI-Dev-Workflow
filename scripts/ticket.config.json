@@ -7,6 +7,15 @@
   "captureSources": ["Claude", "Codex", "Gemini", "ChatGPT", "Notion AI", "Other"],
   "verifyCommand": "node --test scripts/ticket.test.mjs",
   "requireReview": false,
+  "knownRepos": [
+    "FluentOverlay",
+    "Fluent-Studio-Website",
+    "FluentTimer",
+    "TokenHUD",
+    "Fluent-Studio-Atlas",
+    "AI-Cortex",
+    "AI-Dev-Workflow"
+  ],
   "noPlan": {
     "maxChangedLines": 40,
     "noNewFilesUnder": ["scripts"]

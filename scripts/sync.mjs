@@ -17,13 +17,20 @@ const here = dirname(fileURLToPath(import.meta.url));
 const workflowRoot = resolve(here, '..');
 const codingRoot = resolve(workflowRoot, '..');
 
-const KNOWN_REPOS = [
+let KNOWN_REPOS = [
   'FluentOverlay',
   'Fluent-Studio-Website',
   'FluentTimer',
   'TokenHUD',
   'Fluent-Studio-Atlas',
+  'AI-Cortex',
 ];
+try {
+  const cfg = JSON.parse(readFileSync(join(here, 'ticket.config.json'), 'utf8'));
+  if (Array.isArray(cfg.knownRepos)) {
+    KNOWN_REPOS = cfg.knownRepos.filter((r) => r !== 'AI-Dev-Workflow');
+  }
+} catch {}
 
 const DIRECT_FILES = [
   'scripts/ticket.mjs',
