@@ -83,6 +83,7 @@ for (let i = 0; i < rest.length; i++) {
   if (a === '--dry-run') opts.dryRun = true;
   else if (a === '--test') opts.test = true;
   else if (a === '--branch') opts.branch = true;
+  else if (a === '--draft') opts.draft = true;
   else if (a.startsWith('--')) opts[a.slice(2)] = rest[++i];
   else opts.files.push(a);
 }
@@ -832,6 +833,98 @@ const commands = {
     console.log(`Progress logged in ${plan.rel}`);
   },
 
+  async handoff() {
+    const plan = onePlan();
+    const agent = opts.agent || process.env.AI_CLIENT || 'Unknown';
+    const done = opts.done || opts.message || '';
+    const next = opts.next || '';
+    const open = opts.open || opts.questions || 'none';
+
+    if (!done && !next) {
+      fail(
+        'usage: node scripts/ticket.mjs handoff --agent <agent> --done "<completed>" --next "<next step>" [--open "<questions>"]'
+      );
+    }
+
+    const branch =
+      git(['rev-parse', '--abbrev-ref', 'HEAD'], { allowFail: true }) ||
+      'detached';
+    const statusShort = git(['status', '--short'], { allowFail: true }) || '';
+    const dirtyCount = statusShort.split('\n').filter(Boolean).length;
+
+    const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ');
+    const logLine = `- ${stamp} UTC, ${agent} (handoff): Done: ${done || 'in-flight'}; Next: ${next || 'continue'}; Open: ${open}; Tree: ${dirtyCount ? `${dirtyCount} dirty file(s)` : 'clean'}`;
+
+    plan.body = appendToSection(plan.body, 'Progress log', logLine);
+    writePlan(plan);
+
+    console.log(`\n=== Session Handoff Stamped ===`);
+    console.log(`Agent: ${agent} | Branch: ${branch}`);
+    console.log(`Done:  ${done || '(in-flight)'}`);
+    console.log(`Next:  ${next || '(see plan)'}`);
+    console.log(`Open:  ${open}`);
+    console.log(
+      `Tree:  ${dirtyCount ? `${dirtyCount} uncommitted file(s)` : 'clean'}`
+    );
+    console.log(`Logged in: ${plan.rel}\n`);
+  },
+
+  async resume() {
+    const plan = onePlan();
+    const branch =
+      git(['rev-parse', '--abbrev-ref', 'HEAD'], { allowFail: true }) ||
+      'detached';
+    const statusShort = git(['status', '--short'], { allowFail: true }) || '';
+    const clean = !statusShort.trim();
+
+    const progressSection = section(plan.body, 'Progress log') || '';
+    const progressLines = progressSection
+      .split('\n')
+      .map((l) => l.trim())
+      .filter((l) => l && !l.startsWith('<!--') && !l.endsWith('-->'));
+    const lastHandoff =
+      progressLines
+        .slice()
+        .reverse()
+        .find((l) => l.includes('(handoff):')) ||
+      progressLines[progressLines.length - 1] ||
+      '(none)';
+
+    const stepsSection = section(plan.body, 'Steps') || '';
+    const openSteps = stepsSection
+      .split('\n')
+      .map((l) => l.trim())
+      .filter((l) => l.startsWith('- [ ]'));
+    const nextStep = openSteps[0]
+      ? openSteps[0].slice(6)
+      : '(all steps ticked)';
+
+    const criteriaSection = section(plan.body, 'Acceptance criteria') || '';
+    const openCriteria = criteriaSection
+      .split('\n')
+      .map((l) => l.trim())
+      .filter((l) => l.startsWith('- [ ]'));
+
+    console.log(`\n=== Resuming Session ===`);
+    console.log(`Plan:         ${plan.rel} (${plan.meta.status || 'unknown'})`);
+    console.log(`Branch:       ${branch} (${clean ? 'clean' : 'dirty'})`);
+    if (statusShort) {
+      console.log(
+        `Dirty files:\n${statusShort
+          .split('\n')
+          .map((l) => `  ${l}`)
+          .join('\n')}`
+      );
+    }
+    console.log(`Last Handoff: ${lastHandoff}`);
+    console.log(`Next Action:  ${nextStep}`);
+    console.log(`Criteria:     ${openCriteria.length} remaining open`);
+    if (config.verifyCommand) {
+      console.log(`Verify with:  ${config.verifyCommand}`);
+    }
+    console.log(`========================\n`);
+  },
+
   async pack() {
     const plan = onePlan();
     const base = resolveDiffBase();
@@ -1014,6 +1107,113 @@ const commands = {
     plan.meta.pr = opts.pr;
     writePlan(plan);
     console.log(`Ticket linked to ${opts.pr}`);
+  },
+
+  async pr() {
+    const plan = onePlan();
+    const found = problems(plan);
+    if (found.length)
+      fail(`plan is not closed out:\n- ${found.join('\n- ')}`);
+
+    const branch = git(['rev-parse', '--abbrev-ref', 'HEAD']);
+    const protectedList = [
+      ...(config.protectedBranches || ['main', 'master', 'develop']),
+      'HEAD',
+      '',
+    ];
+    if (protectedList.includes(branch)) {
+      fail(
+        `cannot open PR directly from protected branch "${branch}". Checkout a feature branch first.`
+      );
+    }
+
+    const summary = section(plan.body, 'Summary') || '';
+    const criteria = section(plan.body, 'Acceptance criteria') || '';
+    const deferred = deferredItems(plan.body);
+    const deferredText = deferred.length ? deferred.join('\n') : 'None';
+
+    const prTemplatePath = join(
+      repoRoot,
+      '.github',
+      'pull_request_template.md'
+    );
+    let body = '';
+    if (existsSync(prTemplatePath)) {
+      const template = readFileSync(prTemplatePath, 'utf8');
+      body = template
+        .replace(/<!-- 2-3 sentences: what changes and why -->/g, summary)
+        .replace(
+          /<!-- Paste the acceptance criteria list[\s\S]*?-->/g,
+          criteria
+        )
+        .replace(
+          /<!-- Explicitly note any unticked acceptance criteria[\s\S]*?-->/g,
+          deferredText
+        );
+      if (plan.meta.ticket) {
+        body = body.replace(
+          /Ticket:\s*\[Notion Task\]\([^\)]*\)/g,
+          `Ticket: ${plan.meta.ticket}`
+        );
+      }
+    } else {
+      body = [
+        '## Summary',
+        summary,
+        '',
+        '## Acceptance criteria',
+        criteria,
+        '',
+        '## Deferred',
+        deferredText,
+        '',
+        `Ticket: ${plan.meta.ticket || 'none'}`,
+      ].join('\n');
+    }
+
+    if (opts.dryRun || opts['dry-run']) {
+      console.log('--- Dry Run: PR Title ---');
+      console.log(plan.meta.title || plan.rel);
+      console.log('--- Dry Run: PR Body ---');
+      console.log(body);
+      return;
+    }
+
+    const title = plan.meta.title || plan.rel;
+    const ghArgs = ['pr', 'create', '--title', title, '--body', body];
+    if (opts.draft) ghArgs.push('--draft');
+
+    let prUrl = '';
+    try {
+      prUrl = execFileSync('gh', ghArgs, {
+        encoding: 'utf8',
+        stdio: ['pipe', 'pipe', 'pipe'],
+      }).trim();
+    } catch (err) {
+      console.error(
+        'ticket: gh pr create failed. Ensure GitHub CLI (gh) is installed and authenticated (`gh auth login`).'
+      );
+      console.log('\n--- Generated PR Title ---');
+      console.log(title);
+      console.log('\n--- Generated PR Body ---');
+      console.log(body);
+      fail(err.message);
+    }
+
+    console.log(`Pull Request created: ${prUrl}`);
+    opts.pr = prUrl;
+    await commands.ship();
+
+    try {
+      git(['add', plan.rel]);
+      git(['commit', '-m', `chore: link pr ${prUrl}`]);
+      git(['push', 'origin', branch]);
+      console.log(`Branch ${branch} updated with shipped ticket state.`);
+    } catch (err) {
+      console.warn(
+        `Could not commit/push shipped state automatically: ${err.message}`
+      );
+    }
   },
 
   async done() {
@@ -1305,6 +1505,144 @@ const commands = {
       );
     } else {
       fail('usage: node scripts/ticket.mjs hook [install|uninstall|status]');
+    }
+  },
+
+  async adr() {
+    const rawTitle = opts.files[0] || opts.title || '';
+    if (!rawTitle) {
+      fail(
+        'usage: node scripts/ticket.mjs adr "<Decision Title>" [--agent <client>]'
+      );
+    }
+    const title = rawTitle.replace(/^["']|["']$/g, '').trim();
+    const kebab = title
+      .replace(/[^a-zA-Z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .toLowerCase();
+    const decisionsDir = join(repoRoot, 'docs', 'decisions');
+    mkdirSync(decisionsDir, { recursive: true });
+
+    let nextNum = 1;
+    if (existsSync(decisionsDir)) {
+      const existing = readdirSync(decisionsDir).filter((f) =>
+        f.endsWith('.md')
+      );
+      for (const f of existing) {
+        const m = f.match(/^ADR-(\d+)/i);
+        if (m) {
+          const num = parseInt(m[1], 10);
+          if (num >= nextNum) nextNum = num + 1;
+        }
+      }
+    }
+
+    const numStr = String(nextNum).padStart(3, '0');
+    const filename = `ADR-${numStr}-${kebab}.md`;
+    const fullPath = join(decisionsDir, filename);
+    const relPath = join('docs', 'decisions', filename).replace(/\\/g, '/');
+
+    const agent = opts.agent || process.env.AI_CLIENT || 'Gemini';
+    const content = [
+      `# ADR ${numStr}: ${title}`,
+      '',
+      `- **Status:** Accepted`,
+      `- **Date:** ${today()}`,
+      `- **Author:** ${agent}`,
+      `- **Deciders:** Aaron, ${agent}`,
+      '',
+      '## Context',
+      '<What problem, requirement, or architecture choice are we facing?>',
+      '',
+      '## Decision',
+      '<What architecture or technical choice was made, and why?>',
+      '',
+      '## Consequences',
+      '',
+      '### Positive',
+      '- <What becomes easier, cleaner, or faster?>',
+      '',
+      '### Negative / Trade-offs',
+      '- <What constraints or follow-ups does this introduce?>',
+      '',
+    ].join('\n');
+
+    writeFileSync(fullPath, content, 'utf8');
+    console.log(`Created ADR: ${relPath}`);
+  },
+
+  async exec() {
+    const cmd = opts.files.join(' ') || opts.cmd || '';
+    if (!cmd) {
+      fail('usage: node scripts/ticket.mjs exec "<shell-command>"');
+    }
+    const parentDir = dirname(repoRoot);
+    const candidateDirs = [];
+    const knownNames = [
+      'FluentOverlay',
+      'Fluent-Studio-Website',
+      'FluentTimer',
+      'TokenHUD',
+      'Fluent-Studio-Atlas',
+      'AI-Dev-Workflow',
+    ];
+    for (const name of knownNames) {
+      const p = join(parentDir, name);
+      if (existsSync(p) && !candidateDirs.includes(p)) candidateDirs.push(p);
+    }
+    if (!candidateDirs.includes(repoRoot)) candidateDirs.push(repoRoot);
+
+    console.log(
+      `Running across ${candidateDirs.length} repositories: "${cmd}"\n`
+    );
+    const results = [];
+    for (const dir of candidateDirs) {
+      const name = basename(dir);
+      try {
+        const out = execSync(cmd, {
+          cwd: dir,
+          encoding: 'utf8',
+          stdio: ['pipe', 'pipe', 'pipe'],
+          timeout: 60000,
+        }).trim();
+        const firstLine = out.split('\n')[0] || '(empty)';
+        results.push({
+          repo: name,
+          status: 'OK',
+          message: firstLine.slice(0, 50),
+        });
+      } catch (err) {
+        const errLine =
+          (err.stderr || err.stdout || err.message).trim().split('\n')[0] ||
+          'failed';
+        results.push({
+          repo: name,
+          status: 'FAIL',
+          message: errLine.slice(0, 50),
+        });
+      }
+    }
+
+    const colWidths = {
+      repo: Math.max(4, ...results.map((r) => r.repo.length)),
+      status: Math.max(6, ...results.map((r) => r.status.length)),
+      message: Math.max(7, ...results.map((r) => r.message.length)),
+    };
+    const header = [
+      'Repo'.padEnd(colWidths.repo),
+      'Status'.padEnd(colWidths.status),
+      'Output'.padEnd(colWidths.message),
+    ].join('  ');
+    console.log(header);
+    console.log('-'.repeat(header.length));
+    for (const r of results) {
+      console.log(
+        [
+          r.repo.padEnd(colWidths.repo),
+          r.status.padEnd(colWidths.status),
+          r.message.padEnd(colWidths.message),
+        ].join('  ')
+      );
     }
   },
 };

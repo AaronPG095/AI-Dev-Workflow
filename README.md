@@ -58,6 +58,7 @@ AI-Dev-Workflow/
 │   │   └── workflow-sync.yml      # Weekly automated drift check and sync PR generator
 │   └── pull_request_template.md
 ├── docs/
+│   ├── decisions/                 # In-repo Architecture Decision Records (ADRs)
 │   ├── dev-workflow/
 │   │   └── setup-other-repos.md   # Guide for bootstrapping and syncing target repos
 │   └── plans/
@@ -65,9 +66,10 @@ AI-Dev-Workflow/
 ├── scripts/
 │   ├── ticket.mjs                 # Zero-dependency workflow & review CLI (Node 22+)
 │   ├── ticket.config.json         # Repository configuration (local mode default)
-│   ├── ticket.test.mjs            # 32 unit & integration tests (node:test)
+│   ├── ticket.test.mjs            # 36 unit & integration tests (node:test)
 │   ├── sync.mjs                   # Cross-platform sync and drift engine (--remote & local)
-│   └── sync-repos.ps1             # PowerShell wrapper for multi-repo sync
+│   ├── sync-repos.ps1             # PowerShell wrapper for multi-repo sync
+│   └── install.ps1                # One-line multi-machine bootstrapper (curl/iex)
 ├── AGENTS.md                      # Universal instructions for Codex, Gemini/Antigravity, Cursor
 ├── CLAUDE.md                      # @AGENTS.md import for Claude Code
 └── ticket.config.example.json     # Example config for Local and Notion tracker modes
@@ -91,15 +93,18 @@ node scripts/ticket.mjs create docs/plans/ADW-Plan-Example-2026-11.plan.md --age
 # Start work on a feature branch (records branch + worktree)
 node scripts/ticket.mjs start
 
-# 3. Agent Session Ignition
+# 3. Agent Session Ignition & Handoff
 # Prints a compact ~20-line context primer for fresh chat sessions
 node scripts/ticket.mjs prime
 
+# Record structured handoff between AI models (Gemini -> Claude -> Codex)
+node scripts/ticket.mjs handoff --agent Gemini --done "Built parser" --next "Write tests" --open "none"
+
+# Resume session with dirty tree check and next pending action
+node scripts/ticket.mjs resume
+
 # View active plans and branch status across all known repositories
 node scripts/ticket.mjs overview
-
-# Log handoff progress before ending a session or switching AI models
-node scripts/ticket.mjs log --agent Gemini --message "Implemented pack; next: unit tests; open: none"
 
 # 4. Review & Verification
 # Generate a 0-token review packet; optionally embed verifyCommand results
@@ -112,14 +117,23 @@ node scripts/ticket.mjs review --agent Codex --verdict pass --summary "Criteria 
 # Verify all checkboxes are ticked/deferred and criteria carry verified: evidence
 node scripts/ticket.mjs check
 
-# Link pull request and print deferred items for the PR body
+# Automated PR creation & ticket shipping in one command (uses GitHub CLI gh)
+node scripts/ticket.mjs pr [--draft]
+
+# Or link an already-opened PR manually:
 node scripts/ticket.mjs ship --pr https://github.com/owner/repo/pull/1
 
-# 6. Safety Guardrails & Tests
+# 6. Technical Memory, Utilities & Safety
+# Scaffold in-repo Architecture Decision Record in docs/decisions/
+node scripts/ticket.mjs adr "Use Native Child Process Over External Packages"
+
+# Execute command across all local repositories in parallel
+node scripts/ticket.mjs exec "git status --short"
+
 # Install pure shell pre-push hook to prevent direct push to protected branches
 node scripts/ticket.mjs hook install
 
-# Run the 32-test hermetic test suite
+# Run the 36-test hermetic test suite
 node --test scripts/ticket.test.mjs
 ```
 
