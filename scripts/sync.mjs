@@ -23,6 +23,7 @@ const KNOWN_REPOS = [
   'FluentTimer',
   'TokenHUD',
   'Fluent-Studio-Atlas',
+  'AI-Cortex',
 ];
 
 const DIRECT_FILES = [
