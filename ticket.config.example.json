@@ -12,13 +12,9 @@
   "verifyCommand": "npm test",
   "requireReview": false,
   "knownRepos": [
-    "FluentOverlay",
-    "Fluent-Studio-Website",
-    "FluentTimer",
-    "TokenHUD",
-    "Fluent-Studio-Atlas",
-    "AI-Cortex",
-    "AI-Dev-Workflow"
+    "my-backend",
+    "my-frontend",
+    "my-shared-lib"
   ],
   "packMaxFileLines": 120,
   "packMaxLines": 400,

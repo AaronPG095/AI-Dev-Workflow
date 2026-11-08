@@ -82,6 +82,7 @@ const WORKFLOW_FILES = new Set([
   'scripts/sync.mjs',
   'scripts/sync-repos.ps1',
   'scripts/install.ps1',
+  'scripts/install.sh',
   'docs/plans/_template.plan.md',
   'docs/dev-workflow/setup-other-repos.md',
   '.agents/skills/quick-review/SKILL.md',
