@@ -2360,8 +2360,14 @@ const commands = {
         existsSync(canonicalTicket)
       ) {
         try {
-          const canonical = readFileSync(canonicalTicket, 'utf8');
-          const current = readFileSync(ticketScript, 'utf8');
+          const canonical = readFileSync(canonicalTicket, 'utf8').replace(
+            /\r\n/g,
+            '\n'
+          );
+          const current = readFileSync(ticketScript, 'utf8').replace(
+            /\r\n/g,
+            '\n'
+          );
           if (canonical !== current) syncDrift = 'drift detected';
         } catch {}
       }
