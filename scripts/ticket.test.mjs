@@ -559,7 +559,10 @@ test('new command scaffolds a valid plan doc with slugified title and frontmatte
     { omitPlan: true }
   );
   assert.equal(r.status, 0, r.stderr);
-  assert.match(r.stdout, /Created plan: docs\/plans\/FO-Plan-Smart-Shortcut-Suggestions-/);
+  assert.match(
+    r.stdout,
+    /Created plan: docs\/plans\/FO-Plan-Smart-Shortcut-Suggestions-/
+  );
 
   const plans = readdirSync(join(f.root, 'docs/plans')).filter((p) =>
     p.startsWith('FO-Plan-Smart-Shortcut-Suggestions-')
@@ -752,7 +755,10 @@ test('pr command validates plan closeout and outputs PR body in dry-run mode', (
 });
 
 test('ci-check allows workflow infrastructure sync under no-plan', (t) => {
-  const f = fixture(t, 'status: in-progress\nticket: https://www.notion.so/test\n');
+  const f = fixture(
+    t,
+    'status: in-progress\nticket: https://www.notion.so/test\n'
+  );
   f.git('init', '-b', 'main');
   f.git('add', '.');
   f.git(
@@ -823,21 +829,15 @@ Testing tick and defer.
   assert.equal(rFail.status, 1);
   assert.match(rFail.stderr, /requires verified evidence/i);
 
-  const rTick1 = f.run(
-    'tick',
-    ['1', '--verified', 'tested manually'],
-    [],
-    { omitPlan: true }
-  );
+  const rTick1 = f.run('tick', ['1', '--verified', 'tested manually'], [], {
+    omitPlan: true,
+  });
   assert.equal(rTick1.status, 0, rTick1.stderr);
   assert.match(rTick1.stdout, /Ticked \[1\]/);
 
-  const rDefer = f.run(
-    'defer',
-    ['Step 2', '--reason', 'out of scope'],
-    [],
-    { omitPlan: true }
-  );
+  const rDefer = f.run('defer', ['Step 2', '--reason', 'out of scope'], [], {
+    omitPlan: true,
+  });
   assert.equal(rDefer.status, 0, rDefer.stderr);
   assert.match(rDefer.stdout, /Deferred/);
 
@@ -994,7 +994,7 @@ test('wt command lists worktrees and supports prune in dry-run mode', (t) => {
 
 test('public distribution and installer files integrity', () => {
   const repoRoot = join(scripts, '..');
-  
+
   // 1. Verify installer scripts exist
   const ps1Path = join(repoRoot, 'scripts', 'install.ps1');
   const shPath = join(repoRoot, 'scripts', 'install.sh');
@@ -1009,11 +1009,18 @@ test('public distribution and installer files integrity', () => {
   const examplePath = join(repoRoot, 'ticket.config.example.json');
   if (existsSync(examplePath)) {
     const exampleCfg = JSON.parse(readFileSync(examplePath, 'utf8'));
-    assert.deepEqual(exampleCfg.knownRepos, ['my-backend', 'my-frontend', 'my-shared-lib']);
+    assert.deepEqual(exampleCfg.knownRepos, [
+      'my-backend',
+      'my-frontend',
+      'my-shared-lib',
+    ]);
   }
 
   // 3. Verify scripts/ticket.mjs WORKFLOW_FILES includes install.sh
-  const ticketMjsContent = readFileSync(join(repoRoot, 'scripts', 'ticket.mjs'), 'utf8');
+  const ticketMjsContent = readFileSync(
+    join(repoRoot, 'scripts', 'ticket.mjs'),
+    'utf8'
+  );
   assert.match(ticketMjsContent, /'scripts\/install\.sh'/);
   assert.match(ticketMjsContent, /'scripts\/install\.ps1'/);
 });
