@@ -991,3 +991,28 @@ test('wt command lists worktrees and supports prune in dry-run mode', (t) => {
   assert.equal(rPrune.status, 0, rPrune.stderr);
   assert.match(rPrune.stdout, /Prune complete: 0 worktree\(s\) pruned\./);
 });
+
+test('public distribution and installer files integrity', () => {
+  const repoRoot = join(scripts, '..');
+  
+  // 1. Verify installer scripts exist
+  const ps1Path = join(repoRoot, 'scripts', 'install.ps1');
+  const shPath = join(repoRoot, 'scripts', 'install.sh');
+  assert.equal(existsSync(ps1Path), true, 'install.ps1 should exist');
+  assert.equal(existsSync(shPath), true, 'install.sh should exist');
+
+  const shContent = readFileSync(shPath, 'utf8');
+  assert.match(shContent, /AI-Dev-Workflow Installer/);
+  assert.match(shContent, /PREFIX=/);
+
+  // 2. Verify ticket.config.example.json is sanitized
+  const examplePath = join(repoRoot, 'ticket.config.example.json');
+  assert.equal(existsSync(examplePath), true);
+  const exampleCfg = JSON.parse(readFileSync(examplePath, 'utf8'));
+  assert.deepEqual(exampleCfg.knownRepos, ['my-backend', 'my-frontend', 'my-shared-lib']);
+
+  // 3. Verify scripts/ticket.mjs WORKFLOW_FILES includes install.sh
+  const ticketMjsContent = readFileSync(join(repoRoot, 'scripts', 'ticket.mjs'), 'utf8');
+  assert.match(ticketMjsContent, /'scripts\/install\.sh'/);
+  assert.match(ticketMjsContent, /'scripts\/install\.ps1'/);
+});

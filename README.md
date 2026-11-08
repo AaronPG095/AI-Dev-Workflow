@@ -21,6 +21,32 @@ Most AI coding workflows fail in one of two ways:
 
 ---
 
+## 60-Second Quickstart (Adopt in Any Repository)
+
+Adopt the full token-lean AI development workflow into any git repository with a single command:
+
+### macOS / Linux / WSL
+```bash
+curl -fsSL https://raw.githubusercontent.com/AaronPG095/AI-Dev-Workflow/main/scripts/install.sh | bash
+# Or with a custom ticket prefix (e.g. FO):
+curl -fsSL https://raw.githubusercontent.com/AaronPG095/AI-Dev-Workflow/main/scripts/install.sh | bash -s -- --prefix FO
+```
+
+### Windows (PowerShell)
+```powershell
+irm https://raw.githubusercontent.com/AaronPG095/AI-Dev-Workflow/main/scripts/install.ps1 | iex
+# Or with a custom ticket prefix:
+& (irm https://raw.githubusercontent.com/AaronPG095/AI-Dev-Workflow/main/scripts/install.ps1) -Prefix FO
+```
+
+**What the installer does automatically:**
+1. Downloads the engine (`scripts/ticket.mjs`), test suite, sync tool, skills, and GitHub Actions workflows.
+2. Generates a starter `scripts/ticket.config.json` in local tracker mode (ready to use immediately with zero API keys or external services).
+3. Installs git pre-push guardrails (`.git/hooks/pre-push`) to prevent accidental pushes to protected branches.
+4. Sets up agent skills for Claude Code (`.claude/skills/`), Antigravity/Gemini, Codex, and Cursor (`.agents/skills/`).
+
+---
+
 ## The 6-Step Workflow
 
 Trivial changes (`<= 40` changed lines and no new files in the main source folder) can skip the process using the `no-plan` PR label. All non-trivial changes follow six steps:

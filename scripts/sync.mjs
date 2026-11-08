@@ -36,6 +36,7 @@ const DIRECT_FILES = [
   'scripts/ticket.mjs',
   'scripts/ticket.test.mjs',
   'scripts/install.ps1',
+  'scripts/install.sh',
   'docs/plans/_template.plan.md',
   '.agents/skills/quick-review/SKILL.md',
   '.claude/skills/quick-review/SKILL.md',
