@@ -1400,8 +1400,7 @@ const commands = {
   async pr() {
     const plan = onePlan();
     const found = problems(plan);
-    if (found.length)
-      fail(`plan is not closed out:\n- ${found.join('\n- ')}`);
+    if (found.length) fail(`plan is not closed out:\n- ${found.join('\n- ')}`);
 
     const branch = git(['rev-parse', '--abbrev-ref', 'HEAD']);
     const protectedList = [
@@ -1583,11 +1582,11 @@ const commands = {
       const { maxChangedLines, noNewFilesUnder } = config.noPlan;
       const changedFiles = git(['diff', '--name-only', range])
         .split('\n')
-        .map(f => f.trim().replace(/\\/g, '/'))
+        .map((f) => f.trim().replace(/\\/g, '/'))
         .filter(Boolean);
       const isWorkflowSync =
         changedFiles.length > 0 &&
-        changedFiles.every(f => WORKFLOW_FILES.has(f));
+        changedFiles.every((f) => WORKFLOW_FILES.has(f));
       const changed = git(['diff', '--numstat', range])
         .split('\n')
         .filter(Boolean)
@@ -1737,7 +1736,9 @@ const commands = {
       rows.push({
         repo: name,
         branch: branch + (clean ? '' : '*'),
-        plan: activePlan ? activePlan.file.replace(/\.plan\.md$/, '') : '(none)',
+        plan: activePlan
+          ? activePlan.file.replace(/\.plan\.md$/, '')
+          : '(none)',
         open: openBoxes,
         state,
       });
@@ -1797,7 +1798,7 @@ const commands = {
         '',
         'protected_branches="main master develop"',
         'if [ -f "scripts/ticket.config.json" ]; then',
-        '  custom=$(node -e "try{console.log((JSON.parse(require(\'fs\').readFileSync(\'scripts/ticket.config.json\',\'utf8\')).protectedBranches||[]).join(\' \'))}catch(e){}" 2>/dev/null)',
+        "  custom=$(node -e \"try{console.log((JSON.parse(require('fs').readFileSync('scripts/ticket.config.json','utf8')).protectedBranches||[]).join(' '))}catch(e){}\" 2>/dev/null)",
         '  if [ -n "$custom" ]; then',
         '    protected_branches="$custom"',
         '  fi',
@@ -2154,7 +2155,9 @@ const commands = {
       return;
     }
 
-    fail('usage: node scripts/ticket.mjs wt [list|new|prune] [--fleet] [--all]');
+    fail(
+      'usage: node scripts/ticket.mjs wt [list|new|prune] [--fleet] [--all]'
+    );
   },
 
   async recall() {
@@ -2257,8 +2260,7 @@ const commands = {
         continue;
       }
 
-      const month =
-        plan.meta.completedAt?.slice(0, 7) || today().slice(0, 7);
+      const month = plan.meta.completedAt?.slice(0, 7) || today().slice(0, 7);
       const archiveDir = join(plansDir, 'archive', month);
       mkdirSync(archiveDir, { recursive: true });
 
