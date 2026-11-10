@@ -120,10 +120,12 @@ const BOOLEAN_FLAGS = new Set([
   '--path',
   '--prompt',
   '--no-create',
+  '--worktrees',
 ]);
 for (let i = 0; i < rest.length; i++) {
   const a = rest[i];
-  if (BOOLEAN_FLAGS.has(a)) {
+  const isFleetPr = command === 'fleet' && a === '--pr';
+  if (BOOLEAN_FLAGS.has(a) || isFleetPr) {
     const rawKey = a.slice(2);
     const camel = rawKey.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
     opts[rawKey] = true;
@@ -2409,6 +2411,7 @@ const commands = {
       fail('usage: node scripts/ticket.mjs recall "<keyword>" [--fleet]');
     }
     const qLower = query.toLowerCase();
+    const queryTerms = qLower.split(/\s+/).filter(Boolean);
     const dirs = opts.fleet ? getKnownRepoDirs() : [repoRoot];
 
     const results = [];
@@ -2435,7 +2438,14 @@ const commands = {
       for (const f of files) {
         try {
           const content = readFileSync(f, 'utf8');
-          if (!content.toLowerCase().includes(qLower)) continue;
+          const contentLower = content.toLowerCase();
+
+          // Match if full phrase is present OR all individual search terms are present
+          const matchesAllTerms =
+            contentLower.includes(qLower) ||
+            (queryTerms.length > 1 &&
+              queryTerms.every((term) => contentLower.includes(term)));
+          if (!matchesAllTerms) continue;
 
           const lines = content.split('\n');
           const relPath = relative(dir, f).replace(/\\/g, '/');
@@ -2445,9 +2455,13 @@ const commands = {
 
           const matches = [];
           for (let i = 0; i < lines.length; i++) {
-            if (lines[i].toLowerCase().includes(qLower)) {
+            const lineLower = lines[i].toLowerCase();
+            const lineMatches =
+              lineLower.includes(qLower) ||
+              queryTerms.some((term) => lineLower.includes(term));
+            if (lineMatches) {
               matches.push({ line: i + 1, text: lines[i].trim() });
-              if (matches.length >= 3) break;
+              if (matches.length >= 4) break;
             }
           }
 
@@ -2467,7 +2481,7 @@ const commands = {
     }
 
     console.log(
-      `=== Recall: "${query}" (${results.length} match${results.length === 1 ? '' : 'es'}) ===\n`,
+      `=== Recall: "${query}" (${results.length} match${results.length === 1 ? '' : 'es'}${opts.fleet ? ' across fleet' : ''}) ===\n`,
     );
     for (const r of results) {
       console.log(
@@ -3052,6 +3066,322 @@ const commands = {
     console.log(
       `To ticket Part 2: node scripts/ticket.mjs create ${part2Rel} --agent <client>`,
     );
+  },
+
+  async fleet() {
+    const sub = (opts.files[0] || '').toLowerCase();
+
+    // 1. Fleet Verification Matrix Runner
+    if (sub === 'verify' || opts.verify) {
+      const dirs = getKnownRepoDirs();
+      const requestedTier = opts.tier || 'test';
+      console.log(
+        `=== Fleet Verification (${opts.all ? 'all tiers' : `tier: ${requestedTier}`}) ===\n`,
+      );
+
+      const results = [];
+      const startTime = Date.now();
+
+      for (const dir of dirs) {
+        const repoName = basename(dir);
+        let repoCfg = {};
+        const cfgPath = join(dir, 'scripts/ticket.config.json');
+        if (existsSync(cfgPath)) {
+          try {
+            repoCfg = JSON.parse(readFileSync(cfgPath, 'utf8'));
+          } catch {}
+        }
+
+        const tiers = getVerifyTiers(repoCfg);
+        const tierKeys = Object.keys(tiers);
+
+        if (!tierKeys.length) {
+          console.log(`- ${repoName}: SKIPPED (no verification configured)`);
+          results.push({
+            repo: repoName,
+            status: 'skipped',
+            reason: 'no verify command',
+          });
+          continue;
+        }
+
+        const runTiers = opts.all ? tierKeys : [requestedTier];
+        for (const t of runTiers) {
+          const resolved = resolveVerifyCommand(repoCfg, t);
+          if (!resolved) {
+            console.log(`- ${repoName} (${t}): SKIPPED (tier not defined)`);
+            results.push({
+              repo: repoName,
+              tier: t,
+              status: 'skipped',
+              reason: 'tier not defined',
+            });
+            continue;
+          }
+
+          process.stdout.write(`• ${repoName} (${resolved.tier}): running... `);
+          const t0 = Date.now();
+          try {
+            execSync(resolved.cmd, {
+              cwd: dir,
+              encoding: 'utf8',
+              stdio: ['pipe', 'pipe', 'pipe'],
+              env: { ...process.env, CI: '1' },
+            });
+            const dur = ((Date.now() - t0) / 1000).toFixed(1);
+            process.stdout.write(
+              `\r✓ ${repoName} (${resolved.tier}): PASS (${dur}s)\n`,
+            );
+            results.push({
+              repo: repoName,
+              tier: resolved.tier,
+              status: 'pass',
+              duration: dur,
+            });
+          } catch (err) {
+            const dur = ((Date.now() - t0) / 1000).toFixed(1);
+            process.stdout.write(
+              `\r✗ ${repoName} (${resolved.tier}): FAIL (${dur}s)\n`,
+            );
+            results.push({
+              repo: repoName,
+              tier: resolved.tier,
+              status: 'fail',
+              duration: dur,
+              error: err.message,
+            });
+          }
+        }
+      }
+
+      const totalDur = ((Date.now() - startTime) / 1000).toFixed(1);
+      const passed = results.filter((r) => r.status === 'pass').length;
+      const failed = results.filter((r) => r.status === 'fail').length;
+      const skipped = results.filter((r) => r.status === 'skipped').length;
+
+      console.log(
+        `\nFleet Verification: ${passed} passed, ${failed} failed, ${skipped} skipped (${totalDur}s total).`,
+      );
+
+      if (failed > 0) {
+        fail(`${failed} repository verification(s) failed across the fleet.`);
+      }
+      return;
+    }
+
+    // 2. Fleet PRs
+    if (sub === 'pr' || opts.pr) {
+      const dirs = getKnownRepoDirs();
+      console.log('=== Fleet Open Pull Requests ===\n');
+      const prs = [];
+
+      for (const dir of dirs) {
+        const repoName = basename(dir);
+        let out = '';
+        try {
+          out = execFileSync(
+            'gh',
+            [
+              'pr',
+              'list',
+              '--state',
+              'open',
+              '--json',
+              'number,title,author,headRefName,url',
+            ],
+            { cwd: dir, encoding: 'utf8', stdio: ['pipe', 'pipe', 'ignore'] },
+          );
+        } catch {
+          continue;
+        }
+
+        if (out) {
+          try {
+            const list = JSON.parse(out);
+            for (const item of list) {
+              prs.push({
+                repo: repoName,
+                number: `#${item.number}`,
+                title: item.title,
+                branch: item.headRefName || '',
+                author: item.author?.login || 'unknown',
+                url: item.url,
+              });
+            }
+          } catch {}
+        }
+      }
+
+      if (!prs.length) {
+        console.log('No open pull requests found across the fleet.');
+        return;
+      }
+
+      const colWidths = {
+        repo: Math.max(4, ...prs.map((p) => p.repo.length)),
+        number: Math.max(4, ...prs.map((p) => p.number.length)),
+        branch: Math.max(6, ...prs.map((p) => p.branch.length)),
+        author: Math.max(6, ...prs.map((p) => p.author.length)),
+        title: Math.max(5, ...prs.map((p) => p.title.slice(0, 40).length)),
+      };
+
+      const header = [
+        'Repo'.padEnd(colWidths.repo),
+        'PR'.padEnd(colWidths.number),
+        'Branch'.padEnd(colWidths.branch),
+        'Author'.padEnd(colWidths.author),
+        'Title'.padEnd(colWidths.title),
+      ].join('  ');
+      console.log(header);
+      console.log('-'.repeat(header.length));
+      for (const p of prs) {
+        console.log(
+          [
+            p.repo.padEnd(colWidths.repo),
+            p.number.padEnd(colWidths.number),
+            p.branch.padEnd(colWidths.branch),
+            p.author.padEnd(colWidths.author),
+            p.title.slice(0, 40).padEnd(colWidths.title),
+          ].join('  '),
+        );
+      }
+      return;
+    }
+
+    // 3. Fleet Worktrees
+    if (sub === 'worktrees' || sub === 'wt' || opts.worktrees) {
+      opts.fleet = true;
+      opts.files = ['list'];
+      return commands.wt();
+    }
+
+    // 4. Default Fleet Dashboard Table
+    const dirs = getKnownRepoDirs();
+    const rows = [];
+
+    for (const dir of dirs) {
+      const repoName = basename(dir);
+      const isGit = existsSync(join(dir, '.git'));
+      if (!isGit) continue;
+
+      let branch = '(unknown)';
+      try {
+        branch = execFileSync(
+          'git',
+          ['-C', dir, 'rev-parse', '--abbrev-ref', 'HEAD'],
+          { encoding: 'utf8', stdio: ['pipe', 'pipe', 'ignore'] },
+        ).trim();
+      } catch {}
+
+      let statusShort = '';
+      try {
+        statusShort = execFileSync('git', ['-C', dir, 'status', '--short'], {
+          encoding: 'utf8',
+          stdio: ['pipe', 'pipe', 'ignore'],
+        }).trim();
+      } catch {}
+
+      const dirtyCount = statusShort
+        ? statusShort.split('\n').filter(Boolean).length
+        : 0;
+      const treeDisplay = dirtyCount === 0 ? 'clean' : `${dirtyCount} dirty`;
+
+      let wtCount = 1;
+      try {
+        const wtOut = execFileSync(
+          'git',
+          ['-C', dir, 'worktree', 'list', '--porcelain'],
+          { encoding: 'utf8', stdio: ['pipe', 'pipe', 'ignore'] },
+        );
+        wtCount = (wtOut.match(/^worktree /gm) || []).length || 1;
+      } catch {}
+
+      const plansDir = join(dir, 'docs/plans');
+      let activePlanName = '-';
+      let reviewStatus = '-';
+
+      if (existsSync(plansDir)) {
+        try {
+          const files = readdirSync(plansDir).filter(
+            (f) => f.endsWith('.plan.md') && !f.startsWith('_'),
+          );
+          for (const f of files) {
+            const raw = readFileSync(join(plansDir, f), 'utf8');
+            const match = raw.match(/^---\n([\s\S]*?)\n---/);
+            if (match) {
+              const meta = Object.fromEntries(
+                match[1]
+                  .split('\n')
+                  .filter((l) => l.includes(':'))
+                  .map((l) => {
+                    const idx = l.indexOf(':');
+                    return [l.slice(0, idx).trim(), l.slice(idx + 1).trim()];
+                  }),
+              );
+              if (
+                meta.branch === branch ||
+                (branch !== 'main' && meta.status === 'in-progress')
+              ) {
+                activePlanName = f.replace(/\.plan\.md$/, '').slice(0, 32);
+                reviewStatus =
+                  meta.reviewVerdict ||
+                  (meta.reviewedBy ? 'reviewed' : 'unreviewed');
+                break;
+              }
+            }
+          }
+        } catch {}
+      }
+
+      rows.push({
+        repo: repoName,
+        branch: branch.slice(0, 28),
+        tree: treeDisplay,
+        worktrees: String(wtCount),
+        plan: activePlanName,
+        review: reviewStatus,
+      });
+    }
+
+    const colWidths = {
+      repo: Math.max(4, ...rows.map((r) => r.repo.length)),
+      branch: Math.max(6, ...rows.map((r) => r.branch.length)),
+      tree: Math.max(4, ...rows.map((r) => r.tree.length)),
+      worktrees: Math.max(2, ...rows.map((r) => r.worktrees.length)),
+      plan: Math.max(4, ...rows.map((r) => r.plan.length)),
+      review: Math.max(6, ...rows.map((r) => r.review.length)),
+    };
+
+    console.log(
+      `=== Fleet Status Dashboard (${rows.length} repositories) ===\n`,
+    );
+    const header = [
+      'Repo'.padEnd(colWidths.repo),
+      'Branch'.padEnd(colWidths.branch),
+      'Tree'.padEnd(colWidths.tree),
+      'WT'.padStart(colWidths.worktrees),
+      'Active Plan'.padEnd(colWidths.plan),
+      'Review'.padEnd(colWidths.review),
+    ].join('  ');
+
+    console.log(header);
+    console.log('-'.repeat(header.length));
+    for (const r of rows) {
+      console.log(
+        [
+          r.repo.padEnd(colWidths.repo),
+          r.branch.padEnd(colWidths.branch),
+          r.tree.padEnd(colWidths.tree),
+          r.worktrees.padStart(colWidths.worktrees),
+          r.plan.padEnd(colWidths.plan),
+          r.review.padEnd(colWidths.review),
+        ].join('  '),
+      );
+    }
+    console.log('\nTips:');
+    console.log('  node scripts/ticket.mjs fleet verify [--tier <name>|--all]');
+    console.log('  node scripts/ticket.mjs fleet --pr');
+    console.log('  node scripts/ticket.mjs fleet --worktrees');
   },
 };
 
