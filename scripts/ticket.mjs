@@ -1067,13 +1067,15 @@ const commands = {
 
     console.log(`Ticked [${match.openIndex}]: - [x] ${updatedText}`);
 
-    const remaining = items.filter(
-      (it) => it.openIndex !== null && it.lineIndex !== match.lineIndex,
+    const afterItems = findCheckboxes(plan.body).items.filter(
+      (it) => it.openIndex !== null,
     );
-    if (remaining.length > 0) {
-      const next = remaining[0];
+    if (afterItems.length > 0) {
+      const nextStep =
+        afterItems.find((it) => it.section.toLowerCase() === 'steps') ||
+        afterItems[0];
       console.log(
-        `Next open item: - [ ] ${next.text} (section: ${next.section})`,
+        `Next open item [${nextStep.openIndex}]: - [ ] ${nextStep.text} (section: ${nextStep.section})`,
       );
     } else {
       console.log('All criteria and steps in the plan are now completed!');
@@ -1143,6 +1145,7 @@ const commands = {
     const maxRetries = opts.maxRetries
       ? parseInt(opts.maxRetries, 10)
       : (cfgAgentic.maxRetries ?? 3);
+    const currentRetries = parseInt(plan.meta.retryCount || '0', 10) || 0;
     const requestedTier = opts.tier || cfgAgentic.verifyTier || 'test';
     const resolvedVerify =
       resolveVerifyCommand(config, requestedTier) ||
@@ -1175,6 +1178,7 @@ const commands = {
           tier: verifyTier,
           cmd: verifyCmd,
         },
+        retryCount: currentRetries,
         maxRetries,
       };
       console.log(JSON.stringify(data, null, 2));
@@ -1189,6 +1193,18 @@ const commands = {
           : '(all criteria ticked or none defined)';
         const summary = section(plan.body, 'Summary') || '(none)';
 
+        const completedSteps = items.filter(
+          (it) => it.isChecked && it.section.toLowerCase() === 'steps',
+        );
+        const progressSection = section(plan.body, 'Progress log') || '';
+        const progressLines = progressSection
+          .split('\n')
+          .map((l) => l.trim())
+          .filter((l) => l && !l.startsWith('<!--') && !l.endsWith('-->'));
+        const lastLog = progressLines.length
+          ? progressLines[progressLines.length - 1]
+          : '(none)';
+
         const brief = [
           `# Autonomous Builder Brief: ${plan.meta.title || plan.rel}`,
           `Plan: ${plan.rel} | Branch: ${plan.meta.branch || branch}`,
@@ -1197,13 +1213,19 @@ const commands = {
           '## Objective & Scope',
           summary,
           '',
+          '## Completed Steps & Latest Progress',
+          completedSteps.length
+            ? completedSteps.map((s) => `- [x] ${s.text}`).join('\n')
+            : '- (no steps completed yet)',
+          `Latest log: ${lastLog}`,
+          '',
           '## Active Criteria to Keep Green',
           criteriaList,
           '',
           '## Execution Protocol',
           '1. Implement the target step cleanly in the codebase.',
           `2. Run verification: \`${verifyCmd}\` (tier: ${verifyTier}).`,
-          `3. Retry budget: up to ${maxRetries} self-healing attempts. If still failing after ${maxRetries} tries, STOP, log handoff, and escalate.`,
+          `3. Retry budget: up to ${maxRetries} self-healing attempts (currently ${currentRetries}/${maxRetries} used). If still failing after ${maxRetries} tries, STOP, log handoff, and escalate.`,
           `4. Checkpoint & tick: node scripts/ticket.mjs checkpoint ${nextItem ? nextItem.openIndex : ''} --commit`,
         ];
         console.log(brief.join('\n'));
@@ -1294,7 +1316,7 @@ const commands = {
       `Section: ${nextItem.section}`,
       `Remaining: ${openSteps.length} step(s), ${openCriteria.length} criterion/criteria`,
       `Verify: \`${verifyCmd}\` (${verifyTier})`,
-      `Retry Budget: ${maxRetries} attempt(s) before circuit breaker`,
+      `Retry Budget: ${maxRetries} attempt(s) before circuit breaker (retries used: ${currentRetries}/${maxRetries})`,
       `Checkpoint: node scripts/ticket.mjs checkpoint ${nextItem.openIndex} --commit`,
     ];
     console.log(linesOut.join('\n'));
@@ -1305,15 +1327,24 @@ const commands = {
     const plan = planArg ? readPlan(planArg) : resolveActivePlan();
 
     const { lines, items } = findCheckboxes(plan.body);
+    const openCriteria = items.filter(
+      (it) =>
+        it.openIndex !== null &&
+        it.section.toLowerCase() === 'acceptance criteria',
+    );
+    const openSteps = items.filter(
+      (it) => it.openIndex !== null && it.section.toLowerCase() === 'steps',
+    );
     const openItems = items.filter((it) => it.openIndex !== null);
     if (!openItems.length) {
       fail(`all checkboxes in ${plan.rel} are already completed or deferred.`);
     }
 
+    const defaultTargetItem = openSteps[0] || openCriteria[0] || openItems[0];
     const rawTarget =
       opts.files.find((f) => !f.endsWith('.plan.md')) ||
       opts.target ||
-      (openItems[0] ? String(openItems[0].openIndex) : '');
+      (defaultTargetItem ? String(defaultTargetItem.openIndex) : '');
 
     if (!rawTarget) {
       fail(
@@ -1340,6 +1371,9 @@ const commands = {
     }
 
     const cfgAgentic = config.agentic || {};
+    const maxRetries = opts.maxRetries
+      ? parseInt(opts.maxRetries, 10)
+      : (cfgAgentic.maxRetries ?? 3);
     const requestedTier = opts.tier || cfgAgentic.verifyTier || 'test';
     const resolvedVerify =
       resolveVerifyCommand(config, requestedTier) ||
@@ -1356,9 +1390,31 @@ const commands = {
           stdio: 'inherit',
           env: { ...process.env, CI: '1' },
         });
+        if (plan.meta.retryCount) {
+          delete plan.meta.retryCount;
+        }
       } catch (err) {
+        const currentRetries =
+          (parseInt(plan.meta.retryCount || '0', 10) || 0) + 1;
+        plan.meta.retryCount = String(currentRetries);
+        writePlan(plan);
+        if (currentRetries >= maxRetries) {
+          fail(
+            `CIRCUIT BREAKER TRIPPED (${currentRetries}/${maxRetries} failed verification attempts on \`${resolvedVerify.cmd}\`). Stop retrying, run 'node scripts/ticket.mjs handoff', and escalate to human.`,
+          );
+        } else {
+          fail(
+            `checkpoint verification failed (attempt ${currentRetries}/${maxRetries}: \`${resolvedVerify.cmd}\`). Resolve issues or test failures before ticking.`,
+          );
+        }
+      }
+    }
+
+    if (opts.commit) {
+      const hyg = checkHygiene();
+      if (!hyg.clean && !opts.force) {
         fail(
-          `checkpoint verification failed (\`${resolvedVerify.cmd}\`). Resolve issues or test failures before ticking.`,
+          `checkpoint commit blocked by hygiene issues:\n- ${hyg.issues.join('\n- ')}`,
         );
       }
     }
@@ -1415,13 +1471,15 @@ const commands = {
       }
     }
 
-    const remaining = items.filter(
-      (it) => it.openIndex !== null && it.lineIndex !== match.lineIndex,
+    const afterItems = findCheckboxes(plan.body).items.filter(
+      (it) => it.openIndex !== null,
     );
-    if (remaining.length > 0) {
-      const next = remaining[0];
+    if (afterItems.length > 0) {
+      const nextStep =
+        afterItems.find((it) => it.section.toLowerCase() === 'steps') ||
+        afterItems[0];
       console.log(
-        `Next open item [${next.openIndex}]: - [ ] ${next.text} (section: ${next.section})`,
+        `Next open item [${nextStep.openIndex}]: - [ ] ${nextStep.text} (section: ${nextStep.section})`,
       );
     } else {
       console.log(
@@ -3769,6 +3827,12 @@ const commands = {
         }
         writePlan(plan);
 
+        const wtPlanPath = join(targetDir, plan.rel);
+        try {
+          mkdirSync(dirname(wtPlanPath), { recursive: true });
+          writeFileSync(wtPlanPath, readFileSync(plan.full, 'utf8'), 'utf8');
+        } catch {}
+
         spawned.push({
           plan: plan.rel,
           worktree: `.worktrees/${name}`,
@@ -3787,12 +3851,22 @@ const commands = {
     }
 
     console.log(`=== Wave Orchestration Dashboard ===\n`);
-    const activePlans = plans.filter(
-      (p) =>
-        p.meta.worktree ||
+    const activePlans = plans.filter((p) => {
+      if (
+        !opts.all &&
+        (p.meta.status === 'done' || p.meta.status === 'shipped')
+      ) {
+        return false;
+      }
+      const hasIsolatedWt =
+        p.meta.worktree && p.meta.worktree !== basename(repoRoot);
+      return (
+        hasIsolatedWt ||
         p.meta.status === 'in-progress' ||
-        p.meta.status === 'planned',
-    );
+        p.meta.status === 'planned' ||
+        opts.all
+      );
+    });
 
     if (!activePlans.length) {
       console.log('No active plans or wave worktrees found.');
@@ -3800,17 +3874,30 @@ const commands = {
     }
 
     const rows = [];
-    for (const plan of activePlans) {
+    for (const rawPlan of activePlans) {
+      let plan = rawPlan;
+      const isIsolated =
+        rawPlan.meta.worktree && rawPlan.meta.worktree !== basename(repoRoot);
+      if (isIsolated) {
+        const wtClean = rawPlan.meta.worktree.replace(/^\.worktrees[\\/]/, '');
+        const wtPlanFile = join(repoRoot, '.worktrees', wtClean, rawPlan.rel);
+        if (existsSync(wtPlanFile)) {
+          try {
+            plan = readPlan(wtPlanFile);
+            plan.rel = rawPlan.rel;
+          } catch {}
+        }
+      }
+
       const { items } = findCheckboxes(plan.body);
       const total = items.length;
       const open = items.filter((it) => it.openIndex !== null).length;
       const closed = total - open;
-      const wtDir =
-        plan.meta.worktree && plan.meta.worktree !== basename(repoRoot)
-          ? (plan.meta.worktree.startsWith('.worktrees/')
-              ? plan.meta.worktree
-              : `.worktrees/${plan.meta.worktree}`)
-          : '(main)';
+      const wtDir = isIsolated
+        ? (rawPlan.meta.worktree.startsWith('.worktrees/')
+            ? rawPlan.meta.worktree
+            : `.worktrees/${rawPlan.meta.worktree}`)
+        : '(main)';
       const probList = problems(plan);
       const ready = probList.length === 0 ? 'YES' : 'no';
       const review =
@@ -3820,7 +3907,7 @@ const commands = {
       rows.push({
         plan: plan.rel.replace(/^docs\/plans\/|\.plan\.md$/g, '').slice(0, 36),
         branch: (plan.meta.branch || '-').slice(0, 24),
-        worktree: wtDir.slice(0, 20),
+        worktree: wtDir.slice(0, 30),
         progress: `${closed}/${total}`,
         review,
         ready,
