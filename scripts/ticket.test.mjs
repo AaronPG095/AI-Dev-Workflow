@@ -1381,3 +1381,65 @@ test('review enhancements: --prompt, dual-pass metadata, and verdict guardrails'
     /Review \(block \[standards: pass, spec: block\]\) recorded/,
   );
 });
+
+test('fleet dashboard and fleet --worktrees report multi-repo status', (t) => {
+  const f = fixture(t);
+  f.git('init', '-b', 'main');
+  f.git('config', 'user.name', 'Test');
+  f.git('config', 'user.email', 'test@example.invalid');
+  f.git('add', '.');
+  f.git('commit', '-m', 'initial commit');
+
+  // Dashboard table
+  const rFleet = f.run('fleet', [], [], { omitPlan: true });
+  assert.equal(rFleet.status, 0, rFleet.stderr);
+  assert.match(rFleet.stdout, /=== Fleet Status Dashboard/);
+  assert.match(
+    rFleet.stdout,
+    /Repo\s+Branch\s+Tree\s+WT\s+Active Plan\s+Review/,
+  );
+
+  // Worktrees listing
+  const rWt = f.run('fleet', ['--worktrees'], [], { omitPlan: true });
+  assert.equal(rWt.status, 0, rWt.stderr);
+  assert.match(rWt.stdout, /main/);
+});
+
+test('fleet verify runs verification across repositories and reports summary', (t) => {
+  const f = fixture(t, '', [], {
+    verify: {
+      test: 'node -e "console.log(\'fleet-verify-ok\')"',
+    },
+  });
+  f.git('init', '-b', 'main');
+  f.git('config', 'user.name', 'Test');
+  f.git('config', 'user.email', 'test@example.invalid');
+  f.git('add', '.');
+  f.git('commit', '-m', 'initial commit');
+
+  const rVerify = f.run('fleet', ['verify'], [], { omitPlan: true });
+  assert.equal(rVerify.status, 0, rVerify.stderr);
+  assert.match(rVerify.stdout, /=== Fleet Verification/);
+  assert.match(rVerify.stdout, /PASS/);
+  assert.match(rVerify.stdout, /Fleet Verification: \d+ passed/);
+});
+
+test('enhanced recall searches across multiple words with line citations', (t) => {
+  const f = fixture(t);
+  mkdirSync(join(f.root, 'docs/decisions'), { recursive: true });
+  writeFileSync(
+    join(f.root, 'docs/decisions/001-architecture.md'),
+    '# Architecture Core\n\nWe decided to use native child processes.\nLine three with extra details.\n',
+  );
+
+  const rRecall = f.run('recall', ['Architecture Core'], [], {
+    omitPlan: true,
+  });
+  assert.equal(rRecall.status, 0, rRecall.stderr);
+  assert.match(rRecall.stdout, /=== Recall: "Architecture Core"/);
+  assert.match(
+    rRecall.stdout,
+    /\[ADR\] docs\/decisions\/001-architecture\.md — Architecture Core/,
+  );
+  assert.match(rRecall.stdout, /L1: # Architecture Core/);
+});

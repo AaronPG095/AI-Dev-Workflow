@@ -201,13 +201,21 @@ node scripts/ticket.mjs wt prune [--fleet] [--all] [--dry-run]
 # Workspace and fleet diagnostic audit (drift, hooks, tracker tokens, worktrees, dirty state)
 node scripts/ticket.mjs doctor [--fleet]
 
+# Unified Fleet Dashboard across all repositories (branches, dirty status, active plans, review verdicts)
+node scripts/ticket.mjs fleet
+node scripts/ticket.mjs fleet --pr
+node scripts/ticket.mjs fleet --worktrees
+
+# Run verification tiers across all repositories in the fleet with pass/fail summary
+node scripts/ticket.mjs fleet verify [--tier <name>|--all]
+
 # Execute command across all local repositories in parallel
 node scripts/ticket.mjs exec "git status --short"
 
 # Install pure shell pre-push hook to prevent direct push to protected branches
 node scripts/ticket.mjs hook install
 
-# Run the 51-test hermetic test suite
+# Run the 54-test hermetic test suite
 node --test scripts/ticket.test.mjs
 ```
 
