@@ -1443,3 +1443,168 @@ test('enhanced recall searches across multiple words with line citations', (t) =
   );
   assert.match(rRecall.stdout, /L1: # Architecture Core/);
 });
+
+test('step command supports text output, --json, and role briefs', (t) => {
+  const f = fixture(
+    t,
+    'branch: feat/test\n',
+    [],
+    {
+      agentic: { maxRetries: 3, verifyTier: 'test' },
+      verify: { test: 'node -e "console.log(\'test-ok\')"' },
+    },
+  );
+  const planPath = join(f.root, 'docs/plans/FO-Plan-Test.plan.md');
+  writeFileSync(
+    planPath,
+    `---\ntitle: Plan - Feature: Agentic Test\nstatus: in-progress\nbranch: feat/test\n---\n# Agentic Test\n\n## Summary\nAgentic summary\n\n## Acceptance criteria\n- [ ] Criterion 1\n\n## Steps\n- [ ] Step 1\n\n## Progress log\n- 2026-11-10 10:00 UTC, Codex (review: block): Missing edge case handling\n`,
+  );
+
+  // 1. Text output
+  const rText = f.run('step', ['docs/plans/FO-Plan-Test.plan.md'], [], {
+    omitPlan: true,
+  });
+  assert.equal(rText.status, 0, rText.stderr);
+  assert.match(rText.stdout, /# Next Step Brief: Plan - Feature: Agentic Test/);
+  assert.match(rText.stdout, /Target \[2\]: Step 1/);
+  assert.match(rText.stdout, /Retry Budget: 3 attempt\(s\)/);
+
+  // 2. JSON output
+  const rJson = f.run('step', ['docs/plans/FO-Plan-Test.plan.md', '--json'], [], {
+    omitPlan: true,
+  });
+  assert.equal(rJson.status, 0, rJson.stderr);
+  const data = JSON.parse(rJson.stdout);
+  assert.equal(data.nextStep.index, 2);
+  assert.equal(data.nextStep.text, 'Step 1');
+  assert.equal(data.maxRetries, 3);
+  assert.equal(data.remainingSteps, 1);
+  assert.equal(data.remainingCriteria, 1);
+
+  // 3. Builder brief
+  const rBuilder = f.run(
+    'step',
+    ['docs/plans/FO-Plan-Test.plan.md', '--role', 'builder'],
+    [],
+    { omitPlan: true },
+  );
+  assert.equal(rBuilder.status, 0, rBuilder.stderr);
+  assert.match(rBuilder.stdout, /# Autonomous Builder Brief:/);
+  assert.match(rBuilder.stdout, /Target: \[2\] Step 1/);
+  assert.match(rBuilder.stdout, /Execution Protocol/);
+
+  // 4. Reviewer brief
+  const rReviewer = f.run(
+    'step',
+    ['docs/plans/FO-Plan-Test.plan.md', '--role', 'reviewer'],
+    [],
+    { omitPlan: true },
+  );
+  assert.equal(rReviewer.status, 0, rReviewer.stderr);
+  assert.match(rReviewer.stdout, /# Adversarial Review Brief:/);
+  assert.match(rReviewer.stdout, /ticket\.mjs pack --test/);
+
+  // 5. Fixer brief
+  const rFixer = f.run(
+    'step',
+    ['docs/plans/FO-Plan-Test.plan.md', '--role', 'fixer'],
+    [],
+    { omitPlan: true },
+  );
+  assert.equal(rFixer.status, 0, rFixer.stderr);
+  assert.match(rFixer.stdout, /# Block-Fixer Brief:/);
+  assert.match(rFixer.stdout, /Missing edge case handling/);
+});
+
+test('checkpoint command verifies, ticks checkbox, and creates git commit', (t) => {
+  const f = fixture(
+    t,
+    'branch: feat/checkpoint-test\n',
+    [],
+    {
+      verify: { test: 'node -e "console.log(\'chk-ok\')"' },
+    },
+  );
+  f.git('init', '-b', 'main');
+  f.git('config', 'user.name', 'Test');
+  f.git('config', 'user.email', 'test@example.invalid');
+  f.git('add', '.');
+  f.git('commit', '-m', 'initial commit');
+
+  const planPath = join(f.root, 'docs/plans/FO-Plan-Test.plan.md');
+  writeFileSync(
+    planPath,
+    `---\ntitle: Plan - Feature: Checkpoint Test\nstatus: in-progress\nbranch: main\n---\n# Checkpoint Test\n\n## Acceptance criteria\n- [ ] First criterion\n\n## Steps\n- [ ] First step\n`,
+  );
+  f.git('commit', '-am', 'add test plan');
+
+  // Checkpoint criterion 1 (runs verify and adds verified stamp)
+  const rChk1 = f.run(
+    'checkpoint',
+    ['docs/plans/FO-Plan-Test.plan.md', '1', '--commit'],
+    [],
+    { omitPlan: true },
+  );
+  assert.equal(rChk1.status, 0, rChk1.stderr);
+  assert.match(rChk1.stdout, /✓ Ticked \[1\]: - \[x\] First criterion verified:/);
+  assert.match(rChk1.stdout, /✓ Git checkpoint committed:/);
+
+  const updatedPlan = readFileSync(planPath, 'utf8');
+  assert.match(updatedPlan, /- \[x\] First criterion verified:/);
+
+  // Failing verification stops checkpoint
+  writeFileSync(
+    join(f.root, 'scripts/ticket.config.json'),
+    JSON.stringify(
+      {
+        ...defaultNotionConfig,
+        verify: { test: 'node -e "process.exit(1)"' },
+      },
+      null,
+      2,
+    ),
+  );
+  const rChkFail = f.run(
+    'checkpoint',
+    ['docs/plans/FO-Plan-Test.plan.md', '1'],
+    [],
+    { omitPlan: true },
+  );
+  assert.equal(rChkFail.status, 1);
+  assert.match(rChkFail.stderr, /checkpoint verification failed/);
+
+  const unchangedPlan = readFileSync(planPath, 'utf8');
+  assert.match(unchangedPlan, /- \[ \] First step/);
+});
+
+test('wave command renders dashboard status and spawns worktrees', (t) => {
+  const f = fixture(t);
+  f.git('init', '-b', 'main');
+  f.git('config', 'user.name', 'Test');
+  f.git('config', 'user.email', 'test@example.invalid');
+  f.git('add', '.');
+  f.git('commit', '-m', 'initial commit');
+
+  // Status check
+  const rStatus = f.run('wave', ['--status'], [], { omitPlan: true });
+  assert.equal(rStatus.status, 0, rStatus.stderr);
+  assert.match(rStatus.stdout, /=== Wave Orchestration Dashboard ===/);
+
+  // Spawn worktrees for planned plans
+  const plan2 = join(f.root, 'docs/plans/FO-Plan-Wave-Worker.plan.md');
+  writeFileSync(
+    plan2,
+    `---\ntitle: Plan - Feature: Wave Worker\nstatus: planned\nbranch: feat/wave-worker\n---\n# Wave Worker\n\n## Acceptance criteria\n- [ ] Criterion A\n\n## Steps\n- [ ] Step A\n`,
+  );
+
+  const rSpawn = f.run(
+    'wave',
+    ['docs/plans/FO-Plan-Wave-Worker.plan.md', '--spawn'],
+    [],
+    { omitPlan: true },
+  );
+  assert.equal(rSpawn.status, 0, rSpawn.stderr);
+  assert.match(rSpawn.stdout, /=== Wave Orchestration: Spawning 1 Worktree/);
+  assert.match(rSpawn.stdout, /Wave spawn complete: 1 worktree\(s\) active/);
+  assert.ok(existsSync(join(f.root, '.worktrees/wave-worker')));
+});

@@ -40,6 +40,8 @@ const DIRECT_FILES = [
   'docs/plans/_template.plan.md',
   '.agents/skills/quick-review/SKILL.md',
   '.claude/skills/quick-review/SKILL.md',
+  '.agents/skills/agentic-workflow/SKILL.md',
+  '.claude/skills/agentic-workflow/SKILL.md',
   '.github/pull_request_template.md',
 ];
 

@@ -1,8 +1,33 @@
-# AI-Dev-Workflow
+# AI-Dev-Workflow — Deterministic & Agentic Engineering Harness
 
-A lightweight, **token-lean**, multi-agent development workflow for **Claude Code**, **OpenAI Codex**, **Google Gemini / Antigravity**, and **Cursor**.
+A lightweight, **token-lean**, two-layer development and execution harness for **Claude Code**, **OpenAI Codex**, **Google Gemini / Antigravity**, and **Cursor**.
 
-Designed for developers working across multiple AI clients on real-world token budgets—enforcing plan discipline, verifiable acceptance criteria, single-pass code review, and CI close-out gates with **zero external npm dependencies**.
+Designed for software engineers and high-velocity multi-agent coding on real-world token budgets—combining a **Deterministic Core** (plan discipline, verifiable acceptance criteria, single-pass code review, CI close-out gates) with an **Opt-In Modular Agentic Engine** (self-healing step execution loops, role-isolated adversarial reviews, parallel worktree waves) with **zero external npm dependencies** on Node.js 22+.
+
+---
+
+## Two-Layer Architecture
+
+```mermaid
+flowchart TD
+    subgraph Layer1 ["Layer 1: Deterministic Core (Guided & Token-Lean)"]
+        P1["Plan Scaffolding & Doc\n(ticket.mjs new / split)"]
+        P2["Session Ignition (0 Tokens)\n(ticket.mjs prime)"]
+        P3["Deterministic Verification\n(ticket.mjs verify / hygiene)"]
+        P4["Single-Pass Review Digest (0 Tokens)\n(ticket.mjs pack --test)"]
+        P5["CI Close-Out Gatekeeper\n(ticket.mjs check / ci-check)"]
+        P1 --> P2 --> P3 --> P4 --> P5
+    end
+
+    subgraph Layer2 ["Layer 2: Modular Agentic Engine (Autonomous Add-On)"]
+        A1["Level A: Autonomous Step Loop\n(ticket.mjs step / checkpoint --commit)"]
+        A2["Level B: Adversarial Builder ↔ Reviewer\n(ticket.mjs step --role builder|reviewer|fixer)"]
+        A3["Level C: Worktree Wave Swarm\n(ticket.mjs wave --spawn|--status)"]
+    end
+
+    Layer1 -.->|"Opt-In Autonomy"| Layer2
+    Layer2 -.->|"Deterministic Gating"| Layer1
+```
 
 ---
 
@@ -12,8 +37,11 @@ Most AI coding workflows fail in one of two ways:
 1. **Too loose:** The agent jumps straight into code, forgets half the requirements, deletes failing checks, or ships unverified changes.
 2. **Too bloated:** Heavy multi-agent pipelines, redundant sub-agent reviews, and 6-turn exploratory tool loops burn through token quotas on plans like Gemini Flash/Pro and ChatGPT Plus (Codex) before the real work is done.
 
-`AI-Dev-Workflow` sits in the sweet spot:
+`AI-Dev-Workflow` delivers the best of both worlds:
+- **Layer 1 (Deterministic Core):** Enforces plan fidelity, verified criteria evidence, zero-token context ignition (`prime`), zero-token review digests (`pack`), and strict pre-push/CI gates.
+- **Layer 2 (Modular Agentic Engine):** Enables autonomous self-healing loops with retry circuit breakers (`step`), verification-gated atomic git checkpoints (`checkpoint`), adversarial role briefs (`--role builder|reviewer|fixer`), and parallel git worktree waves (`wave`).
 - **One canonical process in `AGENTS.md`** (loaded natively by Codex, Antigravity/Gemini, Cursor, and via `@AGENTS.md` in Claude Code).
+- **One zero-dependency CLI (`scripts/ticket.mjs`)** with 57 hermetic tests running across macOS, Linux, and Windows.
 - **One zero-dependency CLI (`scripts/ticket.mjs`)** for plan scaffolding, session ignition, local or Notion ticket tracking, handoff logs, deterministic review packets, git guardrails, and GitHub Actions CI gates.
 - **Zero-token session ignition (`ticket.mjs prime`)** that prints a compact ~20-line context primer for fresh agent chat sessions (active plan, branch, open criteria, next steps, tiered verify commands).
 - **Zero-token review preparation (`ticket.mjs pack`)** that replaces 6+ exploratory tool calls with a single compact digest (plan criteria + working-tree hygiene + lockfile-filtered git diff + optional test verification proof via `--test`).
@@ -83,7 +111,8 @@ Trivial changes (`<= 40` changed lines and no new files in the main source folde
 AI-Dev-Workflow/
 ├── .agents/skills/
 │   ├── dev-workflow/SKILL.md      # Runnable 6-step checklist for agents
-│   └── quick-review/SKILL.md      # Single-pass, token-lean code review skill
+│   ├── quick-review/SKILL.md      # Single-pass, token-lean code review skill
+│   └── agentic-workflow/SKILL.md  # Layer 2 modular agentic execution engine
 ├── .claude/skills/                # Mirror for Claude Code skill discovery
 ├── .github/
 │   ├── workflows/
@@ -101,7 +130,7 @@ AI-Dev-Workflow/
 ├── scripts/
 │   ├── ticket.mjs                 # Zero-dependency workflow & review CLI (Node 22+)
 │   ├── ticket.config.json         # Repository configuration (local mode default)
-│   ├── ticket.test.mjs            # 36 unit & integration tests (node:test)
+│   ├── ticket.test.mjs            # 57 hermetic unit & integration tests (node:test)
 │   ├── sync.mjs                   # Cross-platform sync and drift engine (--remote & local)
 │   ├── sync-repos.ps1             # PowerShell wrapper for multi-repo sync
 │   └── install.ps1                # One-line multi-machine bootstrapper (curl/iex)
@@ -215,7 +244,25 @@ node scripts/ticket.mjs exec "git status --short"
 # Install pure shell pre-push hook to prevent direct push to protected branches
 node scripts/ticket.mjs hook install
 
-# Run the 54-test hermetic test suite
+# 7. Layer 2: Modular Agentic Coding Engine (Levels A, B, C)
+# Level A: Get the next unticked step, verify command, and retry budget
+node scripts/ticket.mjs step
+node scripts/ticket.mjs step --json
+
+# Level A: Verify, tick step/criterion, and commit atomic git checkpoint in one shot
+node scripts/ticket.mjs checkpoint <#> --commit [--message "<msg>"] [--tier <name>]
+
+# Level B: Generate role-isolated sub-agent briefs (Builder, Adversarial Reviewer, Block-Fixer)
+node scripts/ticket.mjs step --role builder
+node scripts/ticket.mjs step --role reviewer
+node scripts/ticket.mjs step --role fixer
+
+# Level C: Parallel Worktree Wave Swarm (provision isolated worktrees & live dashboard)
+node scripts/ticket.mjs wave --spawn
+node scripts/ticket.mjs wave docs/plans/Plan-A.plan.md docs/plans/Plan-B.plan.md --spawn
+node scripts/ticket.mjs wave --status
+
+# Run the 57-test hermetic test suite
 node --test scripts/ticket.test.mjs
 ```
 
