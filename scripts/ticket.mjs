@@ -3851,6 +3851,14 @@ const commands = {
     }
 
     console.log(`=== Wave Orchestration Dashboard ===\n`);
+    const commonDir = git(['rev-parse', '--git-common-dir'], {
+      allowFail: true,
+    });
+    const mainRoot = commonDir
+      ? resolve(repoRoot, commonDir, '..')
+      : repoRoot;
+    const mainName = basename(mainRoot);
+
     const activePlans = plans.filter((p) => {
       if (
         !opts.all &&
@@ -3859,7 +3867,9 @@ const commands = {
         return false;
       }
       const hasIsolatedWt =
-        p.meta.worktree && p.meta.worktree !== basename(repoRoot);
+        p.meta.worktree &&
+        p.meta.worktree !== basename(repoRoot) &&
+        p.meta.worktree !== mainName;
       return (
         hasIsolatedWt ||
         p.meta.status === 'in-progress' ||
@@ -3877,10 +3887,12 @@ const commands = {
     for (const rawPlan of activePlans) {
       let plan = rawPlan;
       const isIsolated =
-        rawPlan.meta.worktree && rawPlan.meta.worktree !== basename(repoRoot);
+        rawPlan.meta.worktree &&
+        rawPlan.meta.worktree !== basename(repoRoot) &&
+        rawPlan.meta.worktree !== mainName;
       if (isIsolated) {
         const wtClean = rawPlan.meta.worktree.replace(/^\.worktrees[\\/]/, '');
-        const wtPlanFile = join(repoRoot, '.worktrees', wtClean, rawPlan.rel);
+        const wtPlanFile = join(mainRoot, '.worktrees', wtClean, rawPlan.rel);
         if (existsSync(wtPlanFile)) {
           try {
             plan = readPlan(wtPlanFile);

@@ -1623,11 +1623,11 @@ test('checkpoint command verifies, ticks checkbox, and creates git commit', (t) 
   assert.equal(rHygieneBlock.status, 1);
   assert.match(rHygieneBlock.stderr, /checkpoint commit blocked by hygiene issues/);
 
-  // Clean hygiene allows checkpoint to pass and clears retryCount
+  // Clean hygiene allows checkpoint (with no target index argument) to default to First step [1], pass, and clear retryCount
   rmSync(join(f.root, '.tmp'), { recursive: true, force: true });
   const rPass = f.run(
     'checkpoint',
-    ['docs/plans/FO-Plan-Test.plan.md', '1', '--commit'],
+    ['docs/plans/FO-Plan-Test.plan.md', '--commit'],
     [],
     { omitPlan: true },
   );
