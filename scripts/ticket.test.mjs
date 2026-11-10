@@ -1478,6 +1478,7 @@ test('step command supports text output, --json, and role briefs', (t) => {
   assert.equal(data.nextStep.index, 2);
   assert.equal(data.nextStep.text, 'Step 1');
   assert.equal(data.maxRetries, 3);
+  assert.equal(data.retryCount, 0);
   assert.equal(data.remainingSteps, 1);
   assert.equal(data.remainingCriteria, 1);
 
@@ -1491,6 +1492,7 @@ test('step command supports text output, --json, and role briefs', (t) => {
   assert.equal(rBuilder.status, 0, rBuilder.stderr);
   assert.match(rBuilder.stdout, /# Autonomous Builder Brief:/);
   assert.match(rBuilder.stdout, /Target: \[2\] Step 1/);
+  assert.match(rBuilder.stdout, /## Completed Steps & Latest Progress/);
   assert.match(rBuilder.stdout, /Execution Protocol/);
 
   // 4. Reviewer brief
@@ -1538,7 +1540,7 @@ test('checkpoint command verifies, ticks checkbox, and creates git commit', (t) 
   );
   f.git('commit', '-am', 'add test plan');
 
-  // Checkpoint criterion 1 (runs verify and adds verified stamp)
+  // Checkpoint criterion 1 (runs verify, adds verified stamp, and reports accurately re-indexed next item [1])
   const rChk1 = f.run(
     'checkpoint',
     ['docs/plans/FO-Plan-Test.plan.md', '1', '--commit'],
@@ -1548,33 +1550,91 @@ test('checkpoint command verifies, ticks checkbox, and creates git commit', (t) 
   assert.equal(rChk1.status, 0, rChk1.stderr);
   assert.match(rChk1.stdout, /✓ Ticked \[1\]: - \[x\] First criterion verified:/);
   assert.match(rChk1.stdout, /✓ Git checkpoint committed:/);
+  assert.match(rChk1.stdout, /Next open item \[1\]: - \[ \] First step \(section: Steps\)/);
 
   const updatedPlan = readFileSync(planPath, 'utf8');
   assert.match(updatedPlan, /- \[x\] First criterion verified:/);
 
-  // Failing verification stops checkpoint
+  // Default target alignment: calling checkpoint without index picks First step [1]
+  const rDefault = f.run('step', ['docs/plans/FO-Plan-Test.plan.md'], [], {
+    omitPlan: true,
+  });
+  assert.match(rDefault.stdout, /Target \[1\]: First step/);
+
+  // Deterministic retry circuit breaker on failing verify
   writeFileSync(
     join(f.root, 'scripts/ticket.config.json'),
     JSON.stringify(
       {
         ...defaultNotionConfig,
+        agentic: { maxRetries: 2, verifyTier: 'test' },
         verify: { test: 'node -e "process.exit(1)"' },
       },
       null,
       2,
     ),
   );
-  const rChkFail = f.run(
+
+  // Attempt 1/2
+  const rChkFail1 = f.run(
     'checkpoint',
     ['docs/plans/FO-Plan-Test.plan.md', '1'],
     [],
     { omitPlan: true },
   );
-  assert.equal(rChkFail.status, 1);
-  assert.match(rChkFail.stderr, /checkpoint verification failed/);
+  assert.equal(rChkFail1.status, 1);
+  assert.match(rChkFail1.stderr, /checkpoint verification failed \(attempt 1\/2:/);
+  const planAfterFail1 = readFileSync(planPath, 'utf8');
+  assert.match(planAfterFail1, /retryCount:\s*['"]?1['"]?/);
 
-  const unchangedPlan = readFileSync(planPath, 'utf8');
-  assert.match(unchangedPlan, /- \[ \] First step/);
+  // Attempt 2/2 -> Circuit breaker trips
+  const rChkFail2 = f.run(
+    'checkpoint',
+    ['docs/plans/FO-Plan-Test.plan.md', '1'],
+    [],
+    { omitPlan: true },
+  );
+  assert.equal(rChkFail2.status, 1);
+  assert.match(rChkFail2.stderr, /CIRCUIT BREAKER TRIPPED \(2\/2 failed verification attempts/);
+
+  // Hygiene guardrail prevents checkpoint --commit with junk files
+  writeFileSync(
+    join(f.root, 'scripts/ticket.config.json'),
+    JSON.stringify(
+      {
+        ...defaultNotionConfig,
+        agentic: { maxRetries: 3, verifyTier: 'test' },
+        verify: { test: 'node -e "console.log(\'pass\')"' },
+        hygiene: { disallowedPatterns: ['.tmp'] },
+      },
+      null,
+      2,
+    ),
+  );
+  mkdirSync(join(f.root, '.tmp'), { recursive: true });
+  writeFileSync(join(f.root, '.tmp/junk.txt'), 'garbage');
+
+  const rHygieneBlock = f.run(
+    'checkpoint',
+    ['docs/plans/FO-Plan-Test.plan.md', '1', '--commit'],
+    [],
+    { omitPlan: true },
+  );
+  assert.equal(rHygieneBlock.status, 1);
+  assert.match(rHygieneBlock.stderr, /checkpoint commit blocked by hygiene issues/);
+
+  // Clean hygiene allows checkpoint (with no target index argument) to default to First step [1], pass, and clear retryCount
+  rmSync(join(f.root, '.tmp'), { recursive: true, force: true });
+  const rPass = f.run(
+    'checkpoint',
+    ['docs/plans/FO-Plan-Test.plan.md', '--commit'],
+    [],
+    { omitPlan: true },
+  );
+  assert.equal(rPass.status, 0, rPass.stderr);
+  assert.match(rPass.stdout, /All criteria and steps in docs\/plans\/FO-Plan-Test\.plan\.md are now completed!/);
+  const planAfterPass = readFileSync(planPath, 'utf8');
+  assert.doesNotMatch(planAfterPass, /retryCount:/);
 });
 
 test('wave command renders dashboard status and spawns worktrees', (t) => {
@@ -1606,5 +1666,33 @@ test('wave command renders dashboard status and spawns worktrees', (t) => {
   assert.equal(rSpawn.status, 0, rSpawn.stderr);
   assert.match(rSpawn.stdout, /=== Wave Orchestration: Spawning 1 Worktree/);
   assert.match(rSpawn.stdout, /Wave spawn complete: 1 worktree\(s\) active/);
-  assert.ok(existsSync(join(f.root, '.worktrees/wave-worker')));
+  const wtDir = join(f.root, '.worktrees/wave-worker');
+  assert.ok(existsSync(wtDir));
+
+  // Verify plan doc was synced into worktree
+  const wtPlanPath = join(wtDir, 'docs/plans/FO-Plan-Wave-Worker.plan.md');
+  assert.ok(existsSync(wtPlanPath));
+
+  // Simulate subagent progress in worktree
+  writeFileSync(
+    wtPlanPath,
+    `---\ntitle: Plan - Feature: Wave Worker\nstatus: in-progress\nbranch: feat/wave-worker\nworktree: wave-worker\n---\n# Wave Worker\n\n## Acceptance criteria\n- [x] Criterion A verified: pass\n\n## Steps\n- [ ] Step A\n`,
+  );
+
+  // wave --status reads live worktree progress (1/2 completed)
+  const rLive = f.run('wave', ['--status'], [], { omitPlan: true });
+  assert.equal(rLive.status, 0, rLive.stderr);
+  assert.match(rLive.stdout, /FO-Plan-Wave-Worker\s+feat\/wave-worker\s+\.worktrees\/wave-worker\s+1\/2/);
+
+  // Closed plans filtering
+  const planClosed = join(f.root, 'docs/plans/FO-Plan-Closed.plan.md');
+  writeFileSync(
+    planClosed,
+    `---\ntitle: Plan - Feature: Closed\nstatus: done\nbranch: main\n---\n# Closed\n`,
+  );
+  const rFilter = f.run('wave', ['--status'], [], { omitPlan: true });
+  assert.doesNotMatch(rFilter.stdout, /FO-Plan-Closed/);
+
+  const rAll = f.run('wave', ['--status', '--all'], [], { omitPlan: true });
+  assert.match(rAll.stdout, /FO-Plan-Closed/);
 });
