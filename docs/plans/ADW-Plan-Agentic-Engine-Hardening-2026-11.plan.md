@@ -1,12 +1,15 @@
 ---
 title: Plan - Bug: Agentic Engine Hardening, Cross-Worktree Sync & Deterministic Circuit Breaker
 ticket: local://ADW:ADW-Plan-Agentic-Engine-Hardening-2026-11
-status: planned
+status: in-progress
 priority: high
 state: flow
 due: 
 devTicketKey: ADW:ADW-Plan-Agentic-Engine-Hardening-2026-11
 agent: Gemini
+branch: feat/agentic-engine-hardening
+worktree: AI-Dev-Workflow
+startedAt: 2026-11-10
 ---
 # Agentic Engine Hardening, Cross-Worktree Sync & Deterministic Circuit Breaker
 
