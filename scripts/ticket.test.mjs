@@ -50,12 +50,12 @@ function fixture(t, front = '', responses = [], configOverrides = {}) {
   copyFileSync(join(scripts, 'ticket.mjs'), join(root, 'scripts/ticket.mjs'));
   writeFileSync(
     join(root, 'scripts/ticket.config.json'),
-    JSON.stringify({ ...defaultNotionConfig, ...configOverrides }, null, 2)
+    JSON.stringify({ ...defaultNotionConfig, ...configOverrides }, null, 2),
   );
   const plan = join(root, 'docs/plans/FO-Plan-Test.plan.md');
   writeFileSync(
     plan,
-    `---\ntitle: Plan - Process: Test\nstatus: draft\n${front}---\n# Test\n\n## Summary\nTest fixture\n\n## Acceptance criteria\n- [x] Works verified: fixture\n\n## Steps\n- [x] Implement\n`
+    `---\ntitle: Plan - Process: Test\nstatus: draft\n${front}---\n# Test\n\n## Summary\nTest fixture\n\n## Acceptance criteria\n- [x] Works verified: fixture\n\n## Steps\n- [x] Implement\n`,
   );
   const requests = join(root, 'requests.jsonl');
   const preload = join(root, 'mock.mjs');
@@ -69,13 +69,13 @@ globalThis.fetch = async (url, init) => {
   if (!response) throw new Error('unexpected API request');
   if (response.throw) throw new Error(response.throw);
   return new Response(JSON.stringify(response.body), {status: response.status || 200});
-};`
+};`,
   );
   function run(
     command,
     options = [],
     replies = responses,
-    { omitPlan = false, envOverrides = {}, cwd = root } = {}
+    { omitPlan = false, envOverrides = {}, cwd = root } = {},
   ) {
     const args = [
       '--import',
@@ -139,7 +139,7 @@ test('create stamps development fields, optional fields and canonical provenance
   assert.equal(p['Task Lane'].select.name, 'Development');
   assert.equal(
     p['Dev Ticket Key'].rich_text[0].text.content,
-    'FO:FO-Plan-Test'
+    'FO:FO-Plan-Test',
   );
   assert.equal(p['Capture Source'].select.name, 'Codex');
   assert.equal(p['Capture State'].select.name, 'Pending');
@@ -157,7 +157,7 @@ test('create stamps development fields, optional fields and canonical provenance
   assert.equal(
     again.calls.length,
     2,
-    'recorded URL prevents additional API calls'
+    'recorded URL prevents additional API calls',
   );
 });
 
@@ -211,7 +211,7 @@ test('invalid title fails both create and check before API calls', (t) => {
   const f = fixture(t);
   writeFileSync(
     f.plan,
-    readFileSync(f.plan, 'utf8').replace('Plan - Process: Test', 'Fix this')
+    readFileSync(f.plan, 'utf8').replace('Plan - Process: Test', 'Fix this'),
   );
   for (const command of ['create', 'check']) {
     const r = f.run(command, ['--agent', 'Codex']);
@@ -236,7 +236,7 @@ test('known Life Area refusal retries once while keeping development fields', (t
   assert.equal(r.calls[2].body.properties['Life Area'], undefined);
   assert.equal(
     r.calls[2].body.properties['Task Lane'].select.name,
-    'Development'
+    'Development',
   );
 });
 
@@ -280,7 +280,7 @@ for (const started of [null, '2026-10-31'])
       'commit',
       '--allow-empty',
       '-m',
-      'base'
+      'base',
     );
     const r = f.run('start');
     assert.equal(r.status, 0, r.stderr);
@@ -290,7 +290,7 @@ for (const started of [null, '2026-10-31'])
     else
       assert.match(
         r.calls[1].body.properties['Started At'].date.start,
-        /^\d{4}-\d{2}-\d{2}$/
+        /^\d{4}-\d{2}-\d{2}$/,
       );
   });
 
@@ -300,7 +300,7 @@ test('done writes Done and Completed At together', (t) => {
   assert.equal(r.calls[0].body.properties.Status.status.name, 'Done');
   assert.match(
     r.calls[0].body.properties['Completed At'].date.start,
-    /^\d{4}-\d{2}-\d{2}$/
+    /^\d{4}-\d{2}-\d{2}$/,
   );
 });
 
@@ -315,7 +315,7 @@ test('ci-done closes the merged plan with Completed At', (t) => {
     'commit',
     '--allow-empty',
     '-m',
-    'base'
+    'base',
   );
   f.git('add', 'docs/plans');
   f.git(
@@ -325,14 +325,14 @@ test('ci-done closes the merged plan with Completed At', (t) => {
     'user.email=test@example.invalid',
     'commit',
     '-m',
-    'plan'
+    'plan',
   );
   const r = f.run('ci-done', ['--head', f.git('rev-parse', 'HEAD')]);
   assert.equal(r.status, 0, r.stderr);
   assert.equal(r.calls[0].body.properties.Status.status.name, 'Done');
   assert.match(
     r.calls[0].body.properties['Completed At'].date.start,
-    /^\d{4}-\d{2}-\d{2}$/
+    /^\d{4}-\d{2}-\d{2}$/,
   );
 });
 
@@ -365,7 +365,7 @@ test('local tracker mode supports full lifecycle without Notion API calls', (t) 
     'commit',
     '--allow-empty',
     '-m',
-    'base'
+    'base',
   );
 
   const c = f.run('create', ['--agent', 'Gemini']);
@@ -397,7 +397,7 @@ test('local tracker mode supports full lifecycle without Notion API calls', (t) 
 test('auto-resolves active plan when plan argument is omitted', (t) => {
   const f = fixture(
     t,
-    `ticket: ${url}\nstatus: in-progress\nbranch: feat/auto\n`
+    `ticket: ${url}\nstatus: in-progress\nbranch: feat/auto\n`,
   );
   f.git('init', '-b', 'feat/auto');
   f.git(
@@ -408,7 +408,7 @@ test('auto-resolves active plan when plan argument is omitted', (t) => {
     'commit',
     '--allow-empty',
     '-m',
-    'base'
+    'base',
   );
 
   const chk = f.run('check', [], [], { omitPlan: true });
@@ -435,7 +435,7 @@ test('review command records verdict and blocks check when verdict is block', (t
   assert.match(blocked.plan, /reviewVerdict: block/);
   assert.match(
     blocked.plan,
-    /\(review: block\): Missing null check in handler/
+    /\(review: block\): Missing null check in handler/,
   );
 
   const blockedCheck = f.run('check');
@@ -463,7 +463,7 @@ test('pack outputs compact review packet, filters lockfiles, and truncates large
     t,
     `ticket: ${url}\nstatus: in-progress\nbranch: feat/pack\n`,
     [],
-    { packMaxFileLines: 8 }
+    { packMaxFileLines: 8 },
   );
   f.git('init', '-b', 'main');
   mkdirSync(join(f.root, 'src'), { recursive: true });
@@ -477,19 +477,19 @@ test('pack outputs compact review packet, filters lockfiles, and truncates large
     'user.email=test@example.invalid',
     'commit',
     '-m',
-    'base'
+    'base',
   );
 
   f.git('checkout', '-b', 'feat/pack');
   writeFileSync(
     join(f.root, 'src/app.js'),
     Array.from({ length: 20 }, (_, i) => `export const v${i} = ${i};`).join(
-      '\n'
-    ) + '\n'
+      '\n',
+    ) + '\n',
   );
   writeFileSync(
     join(f.root, 'pnpm-lock.yaml'),
-    'lockfileVersion: 9.0\npackages: {}\n'
+    'lockfileVersion: 9.0\npackages: {}\n',
   );
 
   const p = f.run('pack', [], [], { omitPlan: true });
@@ -511,11 +511,11 @@ test('worktree .env fallback reads NOTION_TOKEN from main checkout', (t) => {
     'user.email=test@example.invalid',
     'commit',
     '-m',
-    'base'
+    'base',
   );
   writeFileSync(
     join(f.root, '.env'),
-    'NOTION_TOKEN="main-repo-secret-token"\n'
+    'NOTION_TOKEN="main-repo-secret-token"\n',
   );
 
   const wt = join(f.root, '.worktrees/wt-test');
@@ -544,7 +544,7 @@ test('sync.mjs patches AGENTS.md Development process section while preserving su
   assert.match(updated, /node scripts\/ticket\.mjs pack/);
   assert.match(
     updated,
-    /<!-- BEGIN:nextjs-agent-rules -->\n## Next\.js rules\nKeep this block\.\n<!-- END:nextjs-agent-rules -->/
+    /<!-- BEGIN:nextjs-agent-rules -->\n## Next\.js rules\nKeep this block\.\n<!-- END:nextjs-agent-rules -->/,
   );
   assert.doesNotMatch(updated, /Old 5-step text/);
   assert.equal(patchClaudeMd(''), '@AGENTS.md\n');
@@ -556,16 +556,16 @@ test('new command scaffolds a valid plan doc with slugified title and frontmatte
     'new',
     ['"Smart Shortcut Suggestions"', '--type', 'Feature', '--priority', 'high'],
     [],
-    { omitPlan: true }
+    { omitPlan: true },
   );
   assert.equal(r.status, 0, r.stderr);
   assert.match(
     r.stdout,
-    /Created plan: docs\/plans\/FO-Plan-Smart-Shortcut-Suggestions-/
+    /Created plan: docs\/plans\/FO-Plan-Smart-Shortcut-Suggestions-/,
   );
 
   const plans = readdirSync(join(f.root, 'docs/plans')).filter((p) =>
-    p.startsWith('FO-Plan-Smart-Shortcut-Suggestions-')
+    p.startsWith('FO-Plan-Smart-Shortcut-Suggestions-'),
   );
   assert.equal(plans.length, 1);
   const content = readFileSync(join(f.root, 'docs/plans', plans[0]), 'utf8');
@@ -578,7 +578,7 @@ test('new command scaffolds a valid plan doc with slugified title and frontmatte
 test('prime command outputs compact session context with open criteria and steps', (t) => {
   const f = fixture(
     t,
-    'status: in-progress\nticket: local://FO:FO-Plan-Test\nbranch: feat/test\n'
+    'status: in-progress\nticket: local://FO:FO-Plan-Test\nbranch: feat/test\n',
   );
   f.git('init', '-b', 'feat/test');
   f.git('add', '.');
@@ -589,7 +589,7 @@ test('prime command outputs compact session context with open criteria and steps
     'user.email=test@example.invalid',
     'commit',
     '-m',
-    'init'
+    'init',
   );
   const r = f.run('prime', [], [], { omitPlan: true });
   assert.equal(r.status, 0, r.stderr);
@@ -614,7 +614,7 @@ test('pack with --test embeds test execution result into review packet', (t) => 
     'user.email=test@example.invalid',
     'commit',
     '-m',
-    'base'
+    'base',
   );
   const r = f.run('pack', ['--test']);
   assert.equal(r.status, 0, r.stderr);
@@ -653,7 +653,7 @@ test('hook install, status, and uninstall manages pre-push guardrail script', (t
 test('handoff and resume commands record and display multi-model handoff context', (t) => {
   const f = fixture(
     t,
-    'status: in-progress\nticket: local://FO:FO-Plan-Test\nbranch: feat/test\n'
+    'status: in-progress\nticket: local://FO:FO-Plan-Test\nbranch: feat/test\n',
   );
   f.git('init', '-b', 'feat/test');
   f.git('add', '.');
@@ -664,7 +664,7 @@ test('handoff and resume commands record and display multi-model handoff context
     'user.email=test@example.invalid',
     'commit',
     '-m',
-    'init'
+    'init',
   );
 
   const rHandoff = f.run(
@@ -680,7 +680,7 @@ test('handoff and resume commands record and display multi-model handoff context
       'none',
     ],
     [],
-    { omitPlan: true }
+    { omitPlan: true },
   );
   assert.equal(rHandoff.status, 0, rHandoff.stderr);
   assert.match(rHandoff.stdout, /=== Session Handoff Stamped ===/);
@@ -699,17 +699,17 @@ test('adr command scaffolds in-repo architectural decision records', (t) => {
     'adr',
     ['"Use Native Child Process"', '--agent', 'Gemini'],
     [],
-    { omitPlan: true }
+    { omitPlan: true },
   );
   assert.equal(r1.status, 0, r1.stderr);
   assert.match(
     r1.stdout,
-    /Created ADR: docs\/decisions\/ADR-001-use-native-child-process\.md/
+    /Created ADR: docs\/decisions\/ADR-001-use-native-child-process\.md/,
   );
 
   const adrPath = join(
     f.root,
-    'docs/decisions/ADR-001-use-native-child-process.md'
+    'docs/decisions/ADR-001-use-native-child-process.md',
   );
   assert.equal(existsSync(adrPath), true);
   const content = readFileSync(adrPath, 'utf8');
@@ -732,7 +732,7 @@ test('exec command runs shell commands across repositories', (t) => {
 test('pr command validates plan closeout and outputs PR body in dry-run mode', (t) => {
   const f = fixture(
     t,
-    'status: in-progress\nticket: https://www.notion.so/test\nbranch: feat/pr-test\nreviewedBy: Gemini\nreviewVerdict: pass\n'
+    'status: in-progress\nticket: https://www.notion.so/test\nbranch: feat/pr-test\nreviewedBy: Gemini\nreviewVerdict: pass\n',
   );
   f.git('init', '-b', 'feat/pr-test');
   f.git('add', '.');
@@ -743,7 +743,7 @@ test('pr command validates plan closeout and outputs PR body in dry-run mode', (
     'user.email=test@example.invalid',
     'commit',
     '-m',
-    'init'
+    'init',
   );
 
   const r = f.run('pr', ['--dry-run'], [], { omitPlan: true });
@@ -757,7 +757,7 @@ test('pr command validates plan closeout and outputs PR body in dry-run mode', (
 test('ci-check allows workflow infrastructure sync under no-plan', (t) => {
   const f = fixture(
     t,
-    'status: in-progress\nticket: https://www.notion.so/test\n'
+    'status: in-progress\nticket: https://www.notion.so/test\n',
   );
   f.git('init', '-b', 'main');
   f.git('add', '.');
@@ -768,7 +768,7 @@ test('ci-check allows workflow infrastructure sync under no-plan', (t) => {
     'user.email=test@example.invalid',
     'commit',
     '-m',
-    'init'
+    'init',
   );
   const baseSha = f.git('rev-parse', 'HEAD').trim();
 
@@ -783,7 +783,7 @@ test('ci-check allows workflow infrastructure sync under no-plan', (t) => {
     'user.email=test@example.invalid',
     'commit',
     '-m',
-    'chore(workflow): sync'
+    'chore(workflow): sync',
   );
   const headSha = f.git('rev-parse', 'HEAD').trim();
 
@@ -798,7 +798,7 @@ test('ci-check allows workflow infrastructure sync under no-plan', (t) => {
 test('tick and defer commands update plan checkboxes without manual markdown edits', (t) => {
   const f = fixture(
     t,
-    'status: in-progress\nticket: https://www.notion.so/test\nbranch: feat/test\n'
+    'status: in-progress\nticket: https://www.notion.so/test\nbranch: feat/test\n',
   );
 
   const planPath = f.plan;
@@ -822,7 +822,7 @@ Testing tick and defer.
 ## Steps
 - [ ] Step 1
 - [ ] Step 2
-`
+`,
   );
 
   const rFail = f.run('tick', ['1'], [], { omitPlan: true });
@@ -849,7 +849,7 @@ Testing tick and defer.
 test('prime command numbers open checkboxes sequentially', (t) => {
   const f = fixture(
     t,
-    'status: in-progress\nticket: https://www.notion.so/test\nbranch: feat/prime-test\n'
+    'status: in-progress\nticket: https://www.notion.so/test\nbranch: feat/prime-test\n',
   );
   writeFileSync(
     f.plan,
@@ -869,7 +869,7 @@ Test fixture
 
 ## Steps
 - [ ] Implement
-`
+`,
   );
   const r = f.run('prime', [], [], { omitPlan: true });
   assert.equal(r.status, 0, r.stderr);
@@ -894,7 +894,7 @@ test('new command with --summary, --criteria, --steps, and --create scaffolds an
       'Gemini',
     ],
     [],
-    { omitPlan: true }
+    { omitPlan: true },
   );
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /Created plan: docs\/plans\/FO-Plan-Fast-Feature/);
@@ -903,7 +903,7 @@ test('new command with --summary, --criteria, --steps, and --create scaffolds an
   const month = new Date().toISOString().slice(0, 7);
   const planPath = join(
     f.root,
-    `docs/plans/FO-Plan-Fast-Feature-${month}.plan.md`
+    `docs/plans/FO-Plan-Fast-Feature-${month}.plan.md`,
   );
   assert.equal(existsSync(planPath), true);
   const content = readFileSync(planPath, 'utf8');
@@ -915,7 +915,7 @@ test('new command with --summary, --criteria, --steps, and --create scaffolds an
 test('recall command searches across ADRs and plans', (t) => {
   const f = fixture(
     t,
-    'status: in-progress\nticket: https://www.notion.so/test\n'
+    'status: in-progress\nticket: https://www.notion.so/test\n',
   );
   f.run('adr', ['"Use SQLite for Cache"'], [], { omitPlan: true });
 
@@ -928,18 +928,18 @@ test('recall command searches across ADRs and plans', (t) => {
 test('archive command safely moves completed plans into archive folder', (t) => {
   const f = fixture(
     t,
-    'status: done\nticket: https://www.notion.so/test\ncompletedAt: 2026-11-01\n'
+    'status: done\nticket: https://www.notion.so/test\ncompletedAt: 2026-11-01\n',
   );
   const r = f.run('archive', [], [], { omitPlan: true });
   assert.equal(r.status, 0, r.stderr);
   assert.match(
     r.stdout,
-    /Archived: docs\/plans\/FO-Plan-Test\.plan\.md -> docs\/plans\/archive\/2026-11\/FO-Plan-Test\.plan\.md/
+    /Archived: docs\/plans\/FO-Plan-Test\.plan\.md -> docs\/plans\/archive\/2026-11\/FO-Plan-Test\.plan\.md/,
   );
 
   const archivePath = join(
     f.root,
-    'docs/plans/archive/2026-11/FO-Plan-Test.plan.md'
+    'docs/plans/archive/2026-11/FO-Plan-Test.plan.md',
   );
   assert.equal(existsSync(archivePath), true);
 });
@@ -947,7 +947,7 @@ test('archive command safely moves completed plans into archive folder', (t) => 
 test('doctor command reports repository diagnostics', (t) => {
   const f = fixture(
     t,
-    'status: in-progress\nticket: https://www.notion.so/test\n'
+    'status: in-progress\nticket: https://www.notion.so/test\n',
   );
   f.git('init', '-b', 'main');
   f.git('add', '.');
@@ -958,7 +958,7 @@ test('doctor command reports repository diagnostics', (t) => {
     'user.email=test@example.invalid',
     'commit',
     '-m',
-    'init'
+    'init',
   );
   const r = f.run('doctor', [], [], { omitPlan: true });
   assert.equal(r.status, 0, r.stderr);
@@ -970,7 +970,7 @@ test('doctor command reports repository diagnostics', (t) => {
 test('wt command lists worktrees and supports prune in dry-run mode', (t) => {
   const f = fixture(
     t,
-    'status: in-progress\nticket: https://www.notion.so/test\n'
+    'status: in-progress\nticket: https://www.notion.so/test\n',
   );
   f.git('init', '-b', 'main');
   f.git('add', '.');
@@ -981,7 +981,7 @@ test('wt command lists worktrees and supports prune in dry-run mode', (t) => {
     'user.email=test@example.invalid',
     'commit',
     '-m',
-    'init'
+    'init',
   );
 
   const rList = f.run('wt', ['list'], [], { omitPlan: true });
@@ -1019,8 +1019,142 @@ test('public distribution and installer files integrity', () => {
   // 3. Verify scripts/ticket.mjs WORKFLOW_FILES includes install.sh
   const ticketMjsContent = readFileSync(
     join(repoRoot, 'scripts', 'ticket.mjs'),
-    'utf8'
+    'utf8',
   );
-  assert.match(ticketMjsContent, /'scripts\/install\.sh'/);
-  assert.match(ticketMjsContent, /'scripts\/install\.ps1'/);
+  assert.match(ticketMjsContent, /['"]scripts\/install\.sh['"]/);
+  assert.match(ticketMjsContent, /['"]scripts\/install\.ps1['"]/);
+});
+
+test('verify command executes tiered commands and falls back to legacy verifyCommand', (t) => {
+  // 1. Tiered config
+  const fTiered = fixture(t, '', [], {
+    verify: {
+      fast: 'node -e "console.log(\'fast-passed\')"',
+      test: 'node -e "console.log(\'test-passed\')"',
+      full: 'node -e "console.log(\'full-passed\')"',
+    },
+  });
+
+  // Default tier is 'test'
+  const rDefault = fTiered.run('verify', [], [], { omitPlan: true });
+  assert.equal(rDefault.status, 0, rDefault.stderr);
+  assert.match(rDefault.stdout, /Running verification \(test\)/);
+  assert.match(rDefault.stdout, /test-passed/);
+
+  // Custom tier --tier full
+  const rFull = fTiered.run('verify', ['--tier', 'full'], [], {
+    omitPlan: true,
+  });
+  assert.equal(rFull.status, 0, rFull.stderr);
+  assert.match(rFull.stdout, /Running verification \(full\)/);
+  assert.match(rFull.stdout, /full-passed/);
+
+  // --all executes all tiers sequentially
+  const rAll = fTiered.run('verify', ['--all'], [], { omitPlan: true });
+  assert.equal(rAll.status, 0, rAll.stderr);
+  assert.match(
+    rAll.stdout,
+    /Running all verification tiers: fast -> test -> full/,
+  );
+  assert.match(rAll.stdout, /Tier "fast" passed/);
+  assert.match(rAll.stdout, /Tier "test" passed/);
+  assert.match(rAll.stdout, /Tier "full" passed/);
+
+  // Unknown tier fails with exit code 1
+  const rUnknown = fTiered.run('verify', ['--tier', 'lint'], [], {
+    omitPlan: true,
+  });
+  assert.equal(rUnknown.status, 1);
+  assert.match(rUnknown.stderr, /unknown verification tier "lint"/);
+
+  // 2. Legacy fallback to verifyCommand
+  const fLegacy = fixture(t, '', [], {
+    verifyCommand: 'node -e "console.log(\'legacy-passed\')"',
+  });
+  const rLegacy = fLegacy.run('verify', [], [], { omitPlan: true });
+  assert.equal(rLegacy.status, 0, rLegacy.stderr);
+  assert.match(rLegacy.stdout, /Running verification \(test\)/);
+  assert.match(rLegacy.stdout, /legacy-passed/);
+});
+
+test('hygiene command detects unmerged conflicts, disallowed files, oversized files and integrates with check and pack', (t) => {
+  const f = fixture(
+    t,
+    'ticket: https://www.notion.so/40a0b9c6786f817fab0ff2059ad410e3\n',
+    [],
+    {
+      hygiene: {
+        maxFileSizeKB: 1,
+        disallowedPatterns: ['*.dump'],
+      },
+    },
+  );
+
+  f.git('init', '-b', 'main');
+  f.git('config', 'user.name', 'Test');
+  f.git('config', 'user.email', 'test@example.invalid');
+  f.git('add', '.');
+  f.git('commit', '-m', 'initial commit');
+
+  // Clean hygiene check
+  const rClean = f.run('hygiene', [], [], { omitPlan: true });
+  assert.equal(rClean.status, 0, rClean.stderr);
+  assert.match(rClean.stdout, /Working tree hygiene clean\./);
+
+  // Pack reports clean hygiene
+  const rPackClean = f.run('pack', [], [], { omitPlan: true });
+  assert.equal(rPackClean.status, 0, rPackClean.stderr);
+  assert.match(rPackClean.stdout, /Hygiene check: clean/);
+
+  // Introduce a disallowed directory and pattern
+  mkdirSync(join(f.root, '.tmp'), { recursive: true });
+  writeFileSync(join(f.root, '.tmp/cache.json'), '{}');
+  writeFileSync(join(f.root, 'error.dump'), 'dump');
+
+  const rDirty = f.run('hygiene', [], [], { omitPlan: true });
+  assert.equal(rDirty.status, 1);
+  assert.match(rDirty.stdout, /Disallowed temporary or build artifact: \.tmp/);
+  assert.match(
+    rDirty.stdout,
+    /Disallowed temporary or build artifact: error\.dump/,
+  );
+
+  // Introduce oversized file (> 1KB)
+  writeFileSync(join(f.root, 'bigfile.dat'), 'A'.repeat(2048));
+  const rWarn = f.run('hygiene', [], [], { omitPlan: true });
+  assert.match(rWarn.stdout, /File exceeds size budget/);
+
+  // Check with --strict fails when hygiene issues exist
+  const rCheckStrict = f.run('check', ['--strict']);
+  assert.equal(rCheckStrict.status, 1);
+  assert.match(rCheckStrict.stderr, /working tree hygiene failed/);
+
+  // Check without --strict warns but succeeds
+  const rCheckWarn = f.run('check', []);
+  assert.equal(rCheckWarn.status, 0);
+  assert.match(rCheckWarn.stderr, /Hygiene issues detected/);
+});
+
+test('pack with --tier executes specific tier and embeds output', (t) => {
+  const f = fixture(t, '', [], {
+    verify: {
+      fast: 'node -e "console.log(\'fast-pack-verified\')"',
+      test: 'node -e "console.log(\'test-pack-verified\')"',
+    },
+  });
+
+  f.git('init', '-b', 'main');
+  f.git('config', 'user.name', 'Test');
+  f.git('config', 'user.email', 'test@example.invalid');
+  f.git('add', '.');
+  f.git('commit', '-m', 'initial commit');
+
+  const rPack = f.run('pack', ['--test', '--tier', 'fast'], [], {
+    omitPlan: true,
+  });
+  assert.equal(rPack.status, 0, rPack.stderr);
+  assert.match(rPack.stdout, /Verify command: `node -e .*` \(fast\)/);
+  assert.match(rPack.stdout, /## Test Verification/);
+  assert.match(rPack.stdout, /fast-pack-verified/);
+  assert.match(rPack.stdout, /Hygiene check: clean/);
 });

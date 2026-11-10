@@ -9,7 +9,16 @@
   "plansDir": "docs/plans",
   "protectedBranches": ["main", "develop"],
   "captureSources": ["Claude", "Codex", "Gemini", "ChatGPT", "Notion AI", "Other"],
+  "verify": {
+    "fast": "npm run lint",
+    "test": "npm test",
+    "full": "npm run build && npm test"
+  },
   "verifyCommand": "npm test",
+  "hygiene": {
+    "maxFileSizeKB": 1024,
+    "disallowedPatterns": [".tmp", "test-results", "coverage", ".worktrees"]
+  },
   "requireReview": false,
   "knownRepos": [
     "my-backend",

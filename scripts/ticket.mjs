@@ -29,6 +29,7 @@ import {
   renameSync,
   rmSync,
   cpSync,
+  statSync,
 } from 'node:fs';
 import { dirname, join, resolve, relative, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -37,7 +38,7 @@ import { execFileSync, execSync } from 'node:child_process';
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..');
 const config = JSON.parse(
-  readFileSync(join(here, 'ticket.config.json'), 'utf8')
+  readFileSync(join(here, 'ticket.config.json'), 'utf8'),
 );
 const NOTION_VERSION = '2025-09-03';
 const isLocal = config.tracker === 'local' || !config.dataSourceId;
@@ -115,6 +116,7 @@ const BOOLEAN_FLAGS = new Set([
   '--force',
   '--create',
   '--start',
+  '--strict',
 ]);
 for (let i = 0; i < rest.length; i++) {
   const a = rest[i];
@@ -139,6 +141,110 @@ function fail(message) {
   process.exit(1);
 }
 
+function getVerifyTiers(cfg = config) {
+  if (
+    cfg.verify &&
+    typeof cfg.verify === 'object' &&
+    !Array.isArray(cfg.verify)
+  ) {
+    const res = { ...cfg.verify };
+    if (!res.test && cfg.verifyCommand) {
+      res.test = cfg.verifyCommand;
+    }
+    return res;
+  }
+  if (cfg.verifyCommand) {
+    return { test: cfg.verifyCommand };
+  }
+  return {};
+}
+
+function resolveVerifyCommand(cfg = config, tier = 'test') {
+  const tiers = getVerifyTiers(cfg);
+  if (tiers[tier]) return { tier, cmd: tiers[tier] };
+  const keys = Object.keys(tiers);
+  if (keys.length === 1 && (!tier || tier === 'test')) {
+    return { tier: keys[0], cmd: tiers[keys[0]] };
+  }
+  return null;
+}
+
+function checkHygiene(cfg = config) {
+  const issues = [];
+  const warnings = [];
+  const hyg = cfg.hygiene || {};
+  const maxKB = hyg.maxFileSizeKB || 1024;
+  const disallowed = new Set([
+    '.tmp',
+    'test-results',
+    'coverage',
+    '.worktrees',
+    ...(hyg.disallowedPatterns || []),
+  ]);
+
+  let statusLines = [];
+  try {
+    statusLines = git(['status', '--porcelain'], { allowFail: true })
+      .split('\n')
+      .map((l) => l.trim())
+      .filter(Boolean);
+  } catch {}
+
+  for (const line of statusLines) {
+    const code = line.slice(0, 2);
+    const file = line.slice(3).trim().replace(/^"|"$/g, '');
+
+    // Check conflict markers
+    if (code === 'UU' || code === 'AA' || code === 'UD' || code === 'DU') {
+      issues.push(`Unmerged conflict marker in ${file}`);
+    }
+
+    // Check disallowed patterns
+    const cleanFile = file.replace(/[/\\]+$/, '');
+    for (const pat of disallowed) {
+      if (
+        cleanFile === pat ||
+        file.startsWith(pat + '/') ||
+        file.startsWith(pat + '\\') ||
+        (pat.startsWith('*.') &&
+          (file.endsWith(pat.slice(1)) || cleanFile.endsWith(pat.slice(1))))
+      ) {
+        issues.push(`Disallowed temporary or build artifact: ${file}`);
+        break;
+      }
+    }
+
+    // Check oversized files
+    const fullPath = join(repoRoot, file);
+    try {
+      if (existsSync(fullPath)) {
+        const stat = statSync(fullPath);
+        if (stat.isFile() && stat.size > maxKB * 1024) {
+          warnings.push(
+            `File exceeds size budget (${Math.round(stat.size / 1024)} KB > ${maxKB} KB): ${file}`,
+          );
+        }
+      }
+    } catch {}
+  }
+
+  // Check broken or prunable worktrees
+  try {
+    const wtOut = git(['worktree', 'list', '--porcelain'], { allowFail: true });
+    if (/prunable/i.test(wtOut)) {
+      warnings.push(
+        'Prunable/broken worktree detected. Run `node scripts/ticket.mjs wt prune`.',
+      );
+    }
+  } catch {}
+
+  return {
+    clean: issues.length === 0,
+    issues,
+    warnings,
+  };
+}
+
 function hasTicket(value) {
   return isLocal
     ? /^(https|local):\/\//.test(value || '')
@@ -156,7 +262,7 @@ function readPlan(path) {
   const m = norm.match(/^---\n([\s\S]*?)\n---\n/);
   if (!m)
     fail(
-      `${path}: no frontmatter. Start from ${config.plansDir}/_template.plan.md.`
+      `${path}: no frontmatter. Start from ${config.plansDir}/_template.plan.md.`,
     );
   const meta = {};
   for (const line of m[1].split('\n')) {
@@ -180,7 +286,7 @@ function writePlan(plan) {
   const out = `---\n${head}\n---\n${plan.body}`;
   writeFileSync(
     plan.full,
-    plan.eol === '\r\n' ? out.replace(/\n/g, '\r\n') : out
+    plan.eol === '\r\n' ? out.replace(/\n/g, '\r\n') : out,
   );
 }
 
@@ -203,13 +309,13 @@ function problems(plan, { requireTicket = true, ignoreReview = false } = {}) {
     found.push('frontmatter has no title');
   else if (!TITLE.test(plan.meta.title))
     found.push(
-      `title must read "<${MODES.join('|')}> - <Type>: <Title>", e.g. "Plan - Feature: Smart Shortcut Suggestions" (got "${plan.meta.title}")`
+      `title must read "<${MODES.join('|')}> - <Type>: <Title>", e.g. "Plan - Feature: Smart Shortcut Suggestions" (got "${plan.meta.title}")`,
     );
   for (const [key, { values }] of Object.entries(OPTIONAL)) {
     const v = (plan.meta[key] || '').toLowerCase();
     if (v && !Object.hasOwn(values, v))
       found.push(
-        `${key} must be one of ${Object.keys(values).join(', ')}, or empty (got "${plan.meta[key]}")`
+        `${key} must be one of ${Object.keys(values).join(', ')}, or empty (got "${plan.meta[key]}")`,
       );
   }
   if (
@@ -221,7 +327,7 @@ function problems(plan, { requireTicket = true, ignoreReview = false } = {}) {
     found.push(`due must be YYYY-MM-DD, or empty (got "${plan.meta.due}")`);
   if (requireTicket && !hasTicket(plan.meta.ticket))
     found.push(
-      `no ${isLocal ? 'ticket' : 'Notion ticket'} URL (run: node scripts/ticket.mjs create ${plan.rel} --agent <client>)`
+      `no ${isLocal ? 'ticket' : 'Notion ticket'} URL (run: node scripts/ticket.mjs create ${plan.rel} --agent <client>)`,
     );
   if (!/^\s*- \[[ xX]\]/m.test(section(plan.body, 'Steps')))
     found.push('Steps section has no checkboxes');
@@ -234,18 +340,18 @@ function problems(plan, { requireTicket = true, ignoreReview = false } = {}) {
   for (const line of section(plan.body, 'Acceptance criteria').split('\n')) {
     if (/^\s*- \[[xX]\]/.test(line) && !/verified:/i.test(line))
       found.push(
-        `criterion ticked without evidence (append "verified: <how it was checked>"): ${line.trim()}`
+        `criterion ticked without evidence (append "verified: <how it was checked>"): ${line.trim()}`,
       );
   }
   if (!ignoreReview) {
     const verdict = (plan.meta.reviewVerdict || '').toLowerCase();
     if (verdict === 'block')
       found.push(
-        'review verdict is block (resolve findings and re-run review)'
+        'review verdict is block (resolve findings and re-run review)',
       );
     else if (config.requireReview && !['pass', 'warn'].includes(verdict)) {
       found.push(
-        `no passing review recorded (run: node scripts/ticket.mjs pack ${plan.rel}, then node scripts/ticket.mjs review ${plan.rel} --agent <client> --verdict pass --summary "<findings>")`
+        `no passing review recorded (run: node scripts/ticket.mjs pack ${plan.rel}, then node scripts/ticket.mjs review ${plan.rel} --agent <client> --verdict pass --summary "<findings>")`,
       );
     }
   }
@@ -256,7 +362,7 @@ const BOX = /^\s*- \[[ xX]\]/gm;
 const countBoxes = (body) =>
   ['Acceptance criteria', 'Steps'].reduce(
     (n, h) => n + (section(body, h).match(BOX) || []).length,
-    0
+    0,
   );
 const deferredItems = (body) =>
   body
@@ -308,7 +414,7 @@ function originalPlan(file, base, head) {
 function appendToSection(body, heading, entry) {
   const lines = body.split('\n');
   const start = lines.findIndex(
-    (l) => l.trim().toLowerCase() === `## ${heading}`.toLowerCase()
+    (l) => l.trim().toLowerCase() === `## ${heading}`.toLowerCase(),
   );
   if (start === -1)
     return `${body.replace(/\s*$/, '')}\n\n## ${heading}\n\n${entry}\n`;
@@ -333,7 +439,7 @@ function pageId(url) {
 function readEnvToken(envPath) {
   if (!existsSync(envPath)) return '';
   const m = readFileSync(envPath, 'utf8').match(
-    /^\s*NOTION_TOKEN\s*=\s*"?([^"\r\n]+)"?/m
+    /^\s*NOTION_TOKEN\s*=\s*"?([^"\r\n]+)"?/m,
   );
   return m ? m[1].trim() : '';
 }
@@ -353,7 +459,7 @@ function token() {
 async function notion(method, path, body, { soft = false } = {}) {
   if (opts.dryRun) {
     console.log(
-      `[dry-run] ${method} https://api.notion.com/v1/${path}\n${JSON.stringify(body, null, 2)}`
+      `[dry-run] ${method} https://api.notion.com/v1/${path}\n${JSON.stringify(body, null, 2)}`,
     );
     return {
       url: 'https://www.notion.so/dry-run-00000000000000000000000000000000',
@@ -365,7 +471,7 @@ async function notion(method, path, body, { soft = false } = {}) {
   const auth = token();
   if (!auth)
     fail(
-      'NOTION_TOKEN is not set (environment, .env, or main checkout .env). Stop here and tell the user; do not create the ticket another way.'
+      'NOTION_TOKEN is not set (environment, .env, or main checkout .env). Stop here and tell the user; do not create the ticket another way.',
     );
   for (let attempt = 0; attempt < 2; attempt++) {
     const res = await fetch(`https://api.notion.com/v1/${path}`, {
@@ -425,15 +531,15 @@ async function existingTicket(key) {
     {
       filter: { property: 'Dev Ticket Key', rich_text: { equals: key } },
       page_size: 2,
-    }
+    },
   );
   if (!Array.isArray(page.results))
     fail(
-      'Notion returned no query results; stop rather than risk creating a duplicate'
+      'Notion returned no query results; stop rather than risk creating a duplicate',
     );
   if (page.has_more || page.results.length > 1)
     fail(
-      `multiple Tasks have Dev Ticket Key "${key}"; resolve the duplicate before continuing`
+      `multiple Tasks have Dev Ticket Key "${key}"; resolve the duplicate before continuing`,
     );
   return page.results?.[0];
 }
@@ -441,7 +547,7 @@ async function existingTicket(key) {
 function recordTicket(plan, page, key, { recovered = false, agent } = {}) {
   if (!hasTicket(page.url || ''))
     fail(
-      'Notion returned no canonical ticket URL; stop and inspect the Task before retrying'
+      'Notion returned no canonical ticket URL; stop and inspect the Task before retrying',
     );
   plan.meta.ticket = page.url;
   plan.meta.devTicketKey = key;
@@ -451,7 +557,7 @@ function recordTicket(plan, page, key, { recovered = false, agent } = {}) {
   }
   writePlan(plan);
   console.log(
-    `Ticket ${recovered ? 'recovered' : 'created (To Do)'}: ${page.url}\nPlan updated: ${plan.rel}`
+    `Ticket ${recovered ? 'recovered' : 'created (To Do)'}: ${page.url}\nPlan updated: ${plan.rel}`,
   );
 }
 
@@ -490,7 +596,7 @@ function resolveActivePlan() {
   const plans = allPlans();
   if (!plans.length)
     fail(
-      `usage: node scripts/ticket.mjs ${command} <plan-file> (no plans found in ${config.plansDir})`
+      `usage: node scripts/ticket.mjs ${command} <plan-file> (no plans found in ${config.plansDir})`,
     );
   const branch = git(['rev-parse', '--abbrev-ref', 'HEAD'], {
     allowFail: true,
@@ -514,7 +620,7 @@ function resolveActivePlan() {
   if (inProgress.length === 1) return inProgress[0];
   if (plans.length === 1) return plans[0];
   fail(
-    `usage: node scripts/ticket.mjs ${command} <plan-file> (multiple plans present; specify which one)`
+    `usage: node scripts/ticket.mjs ${command} <plan-file> (multiple plans present; specify which one)`,
   );
 }
 
@@ -528,7 +634,7 @@ function changedPlans(args) {
   const out = execFileSync(
     'git',
     ['diff', '--name-only', '--diff-filter=AM', ...args, '--', config.plansDir],
-    { cwd: repoRoot, encoding: 'utf8' }
+    { cwd: repoRoot, encoding: 'utf8' },
   );
   return out
     .split('\n')
@@ -537,7 +643,7 @@ function changedPlans(args) {
     .filter(
       (f) =>
         existsSync(join(repoRoot, f)) &&
-        readFileSync(join(repoRoot, f), 'utf8').startsWith('---')
+        readFileSync(join(repoRoot, f), 'utf8').startsWith('---'),
     );
 }
 
@@ -569,7 +675,7 @@ function isIgnoredDiffPath(filePath, ignorePatterns) {
 
 function formatFilteredDiff(
   rawDiff,
-  { maxFileLines, maxLines, ignorePatterns }
+  { maxFileLines, maxLines, ignorePatterns },
 ) {
   if (!rawDiff.trim()) return '(no code diff against base)';
   const chunks = rawDiff
@@ -597,7 +703,7 @@ function formatFilteredDiff(
         : lines;
     if (totalLines + slice.length > maxLines && out.length > 0) {
       out.push(
-        `... [truncated remaining diff after ${totalLines} lines; inspect specific files directly if needed]`
+        `... [truncated remaining diff after ${totalLines} lines; inspect specific files directly if needed]`,
       );
       break;
     }
@@ -674,7 +780,7 @@ const commands = {
     const rawTopic = opts.files[0] || opts.topic || '';
     if (!rawTopic)
       fail(
-        'usage: node scripts/ticket.mjs new "<Topic>" [--type Feature|Bug|Refactor|Process|Docs] [--priority <p>] [--state <s>] [--due <YYYY-MM-DD>] [--branch]'
+        'usage: node scripts/ticket.mjs new "<Topic>" [--type Feature|Bug|Refactor|Process|Docs] [--priority <p>] [--state <s>] [--due <YYYY-MM-DD>] [--branch]',
       );
     const type = opts.type || 'Feature';
     const topic = rawTopic.replace(/^["']|["']$/g, '').trim();
@@ -733,7 +839,7 @@ const commands = {
       if (summary) {
         content = content.replace(
           /<2-3 sentences: what changes and why\.>/,
-          summary
+          summary,
         );
       }
       if (rawCriteria) {
@@ -826,10 +932,10 @@ const commands = {
     const openCriteria = items.filter(
       (it) =>
         it.openIndex !== null &&
-        it.section.toLowerCase() === 'acceptance criteria'
+        it.section.toLowerCase() === 'acceptance criteria',
     );
     const openSteps = items.filter(
-      (it) => it.openIndex !== null && it.section.toLowerCase() === 'steps'
+      (it) => it.openIndex !== null && it.section.toLowerCase() === 'steps',
     );
 
     const progressLines = progressSection
@@ -846,7 +952,19 @@ const commands = {
       `# Session Context: ${plan.meta.title || plan.rel}`,
       `Plan: ${plan.rel} | Status: ${plan.meta.status || 'unknown'} | Ticket: ${plan.meta.ticket || 'none'}`,
       `Branch: ${branch} | Tree: ${clean ? 'clean' : 'dirty'}${plan.meta.reviewedBy ? ` | Reviewed: ${plan.meta.reviewedBy} (${plan.meta.reviewVerdict})` : ''}`,
-      ...(config.verifyCommand ? [`Verify: \`${config.verifyCommand}\``] : []),
+      ...(() => {
+        const tiers = getVerifyTiers();
+        const entries = Object.entries(tiers);
+        if (entries.length > 1) {
+          return [
+            `Verify: ${entries.map(([t, c]) => `${t}: \`${c}\``).join(' | ')}`,
+          ];
+        }
+        if (entries.length === 1) {
+          return [`Verify: \`${entries[0][1]}\``];
+        }
+        return [];
+      })(),
       '',
       `## Open Acceptance Criteria (${openCriteria.length} remaining)`,
       ...(openCriteria.length
@@ -876,7 +994,7 @@ const commands = {
     const { plan, target } = resolvePlanAndTarget();
     if (!target) {
       fail(
-        'usage: node scripts/ticket.mjs tick [<plan>] <index|substring> [--verified "<evidence>"]'
+        'usage: node scripts/ticket.mjs tick [<plan>] <index|substring> [--verified "<evidence>"]',
       );
     }
     const { lines, items } = findCheckboxes(plan.body);
@@ -892,7 +1010,7 @@ const commands = {
       match = openItems.find((it) => it.openIndex === idx);
       if (!match) {
         fail(
-          `open item [${idx}] not found in ${plan.rel} (available open items: 1..${openItems.length})`
+          `open item [${idx}] not found in ${plan.rel} (available open items: 1..${openItems.length})`,
         );
       }
     } else {
@@ -900,11 +1018,11 @@ const commands = {
       match = openItems.find((it) => it.text.toLowerCase().includes(query));
       if (!match) {
         const alreadyTicked = items.find(
-          (it) => it.isChecked && it.text.toLowerCase().includes(query)
+          (it) => it.isChecked && it.text.toLowerCase().includes(query),
         );
         if (alreadyTicked) {
           return console.log(
-            `Item is already ticked in ${plan.rel}:\n  ${lines[alreadyTicked.lineIndex].trim()}`
+            `Item is already ticked in ${plan.rel}:\n  ${lines[alreadyTicked.lineIndex].trim()}`,
           );
         }
         fail(`no open checkbox found matching "${target}" in ${plan.rel}`);
@@ -915,7 +1033,7 @@ const commands = {
     let verifiedText = opts.verified || opts.v || '';
     if (inCriteria && !verifiedText && !/verified:/i.test(match.text)) {
       fail(
-        `ticking an acceptance criterion requires verified evidence. Pass --verified "<how it was checked and result>".`
+        `ticking an acceptance criterion requires verified evidence. Pass --verified "<how it was checked and result>".`,
       );
     }
 
@@ -924,7 +1042,7 @@ const commands = {
       if (/verified:/i.test(updatedText)) {
         updatedText = updatedText.replace(
           /verified:.*$/i,
-          `verified: ${verifiedText}`
+          `verified: ${verifiedText}`,
         );
       } else {
         updatedText = `${updatedText} verified: ${verifiedText}`;
@@ -938,12 +1056,12 @@ const commands = {
     console.log(`Ticked [${match.openIndex}]: - [x] ${updatedText}`);
 
     const remaining = items.filter(
-      (it) => it.openIndex !== null && it.lineIndex !== match.lineIndex
+      (it) => it.openIndex !== null && it.lineIndex !== match.lineIndex,
     );
     if (remaining.length > 0) {
       const next = remaining[0];
       console.log(
-        `Next open item: - [ ] ${next.text} (section: ${next.section})`
+        `Next open item: - [ ] ${next.text} (section: ${next.section})`,
       );
     } else {
       console.log('All criteria and steps in the plan are now completed!');
@@ -955,7 +1073,7 @@ const commands = {
     const reason = opts.reason || opts.message || '';
     if (!target || !reason) {
       fail(
-        'usage: node scripts/ticket.mjs defer [<plan>] <index|substring> --reason "<why>"'
+        'usage: node scripts/ticket.mjs defer [<plan>] <index|substring> --reason "<why>"',
       );
     }
     const { lines, items } = findCheckboxes(plan.body);
@@ -971,7 +1089,7 @@ const commands = {
       match = openItems.find((it) => it.openIndex === idx);
       if (!match) {
         fail(
-          `open item [${idx}] not found in ${plan.rel} (available open items: 1..${openItems.length})`
+          `open item [${idx}] not found in ${plan.rel} (available open items: 1..${openItems.length})`,
         );
       }
     } else {
@@ -1005,7 +1123,7 @@ const commands = {
       fail(`--agent must be one of: ${config.captureSources.join(', ')}`);
     if (opts.status && opts.status !== 'To Do')
       fail(
-        'development tickets start To Do; use start after creation to begin work'
+        'development tickets start To Do; use start after creation to begin work',
       );
     const key = ticketKey(plan);
     if (isLocal) {
@@ -1052,20 +1170,18 @@ const commands = {
               'Life Area': { relation: [{ id: config.lifeAreaPageId }] },
             },
           },
-          { soft: true }
+          { soft: true },
         );
       } catch (e) {
-        if (
-          !(
-            (e.status === 400 &&
-              e.code === 'validation_error' &&
-              /Life Area/i.test(e.message)) ||
-            (e.status === 404 && e.code === 'object_not_found')
-          )
-        )
+        if (!(
+          (e.status === 400 &&
+            e.code === 'validation_error' &&
+            /Life Area/i.test(e.message)) ||
+          (e.status === 404 && e.code === 'object_not_found')
+        ))
           throw e;
         console.warn(
-          `ticket: creating the Task with Life Area failed (${e.message}); retrying without it. To fix, share the Life Areas database with the Notion connection.`
+          `ticket: creating the Task with Life Area failed (${e.message}); retrying without it. To fix, share the Life Areas database with the Notion connection.`,
         );
       }
     }
@@ -1081,7 +1197,7 @@ const commands = {
         plan = readPlan(plan.full);
       } else {
         fail(
-          `${plan.rel} has no ticket yet; run create first, or pass --create.`
+          `${plan.rel} has no ticket yet; run create first, or pass --create.`,
         );
       }
     }
@@ -1100,7 +1216,7 @@ const commands = {
     if (isLocal && !plan.meta.startedAt) plan.meta.startedAt = today();
     writePlan(plan);
     console.log(
-      `Ticket set to Doing: ${plan.meta.ticket}\nBranch ${branch} recorded in ${plan.rel}`
+      `Ticket set to Doing: ${plan.meta.ticket}\nBranch ${branch} recorded in ${plan.rel}`,
     );
   },
 
@@ -1108,14 +1224,14 @@ const commands = {
     const plan = onePlan();
     if (!opts.message)
       fail(
-        'usage: node scripts/ticket.mjs log [<plan>] --agent <client> --message "<done>; next: <step>; open: <questions>"'
+        'usage: node scripts/ticket.mjs log [<plan>] --agent <client> --message "<done>; next: <step>; open: <questions>"',
       );
     const agent = opts.agent || process.env.AI_CLIENT || 'Unknown';
     const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ');
     plan.body = appendToSection(
       plan.body,
       'Progress log',
-      `- ${stamp} UTC, ${agent}: ${opts.message.replace(/\s+/g, ' ').trim()}`
+      `- ${stamp} UTC, ${agent}: ${opts.message.replace(/\s+/g, ' ').trim()}`,
     );
     writePlan(plan);
     console.log(`Progress logged in ${plan.rel}`);
@@ -1130,7 +1246,7 @@ const commands = {
 
     if (!done && !next) {
       fail(
-        'usage: node scripts/ticket.mjs handoff --agent <agent> --done "<completed>" --next "<next step>" [--open "<questions>"]'
+        'usage: node scripts/ticket.mjs handoff --agent <agent> --done "<completed>" --next "<next step>" [--open "<questions>"]',
       );
     }
 
@@ -1152,7 +1268,7 @@ const commands = {
     console.log(`Next:  ${next || '(see plan)'}`);
     console.log(`Open:  ${open}`);
     console.log(
-      `Tree:  ${dirtyCount ? `${dirtyCount} uncommitted file(s)` : 'clean'}`
+      `Tree:  ${dirtyCount ? `${dirtyCount} uncommitted file(s)` : 'clean'}`,
     );
     console.log(`Logged in: ${plan.rel}\n`);
   },
@@ -1201,14 +1317,20 @@ const commands = {
         `Dirty files:\n${statusShort
           .split('\n')
           .map((l) => `  ${l}`)
-          .join('\n')}`
+          .join('\n')}`,
       );
     }
     console.log(`Last Handoff: ${lastHandoff}`);
     console.log(`Next Action:  ${nextStep}`);
     console.log(`Criteria:     ${openCriteria.length} remaining open`);
-    if (config.verifyCommand) {
-      console.log(`Verify with:  ${config.verifyCommand}`);
+    const tiers = getVerifyTiers();
+    const tierEntries = Object.entries(tiers);
+    if (tierEntries.length > 1) {
+      console.log(
+        `Verify with:  ${tierEntries.map(([t, c]) => `${t}: "${c}"`).join(' | ')}`,
+      );
+    } else if (tierEntries.length === 1) {
+      console.log(`Verify with:  ${tierEntries[0][1]}`);
     }
     console.log(`========================\n`);
   },
@@ -1217,7 +1339,7 @@ const commands = {
     const plan = onePlan();
     const base = resolveDiffBase();
     const maxFileLines = Number(
-      opts['max-file-lines'] || config.packMaxFileLines || 120
+      opts['max-file-lines'] || config.packMaxFileLines || 120,
     );
     const maxLines = Number(opts['max-lines'] || config.packMaxLines || 400);
     const ignorePatterns = [
@@ -1243,7 +1365,7 @@ const commands = {
             '.',
             `:(exclude)${config.plansDir}`,
           ],
-          { allowFail: true }
+          { allowFail: true },
         )
       : '';
     const filteredDiff = formatFilteredDiff(rawDiff, {
@@ -1254,9 +1376,11 @@ const commands = {
 
     let testOutput = '';
     let testPassed = true;
-    if (opts.test && config.verifyCommand) {
+    const requestedTier = opts.tier || 'test';
+    const resolvedTest = resolveVerifyCommand(config, requestedTier);
+    if (opts.test && resolvedTest) {
       try {
-        const out = execSync(config.verifyCommand, {
+        const out = execSync(resolvedTest.cmd, {
           cwd: repoRoot,
           encoding: 'utf8',
           stdio: ['pipe', 'pipe', 'pipe'],
@@ -1272,18 +1396,22 @@ const commands = {
       }
     }
 
+    const hygieneRes = checkHygiene();
+
     const lines = [
       `# Review Packet: ${plan.meta.title || plan.rel}`,
       `Plan: ${plan.rel} | Status: ${plan.meta.status || 'unknown'} | Branch: ${plan.meta.branch || git(['rev-parse', '--abbrev-ref', 'HEAD'], { allowFail: true })}`,
       `Ticket: ${plan.meta.ticket || 'none'} | Reviewed: ${plan.meta.reviewedBy ? `${plan.meta.reviewedBy} (${plan.meta.reviewVerdict || 'unknown'})` : 'not yet'}`,
-      ...(config.verifyCommand
-        ? [`Verify command: \`${config.verifyCommand}\``]
+      ...(resolvedTest
+        ? [
+            `Verify command: \`${resolvedTest.cmd}\`${resolvedTest.tier !== 'test' ? ` (${resolvedTest.tier})` : ''}`,
+          ]
         : []),
       '',
-      ...(opts.test && config.verifyCommand
+      ...(opts.test && resolvedTest
         ? [
             '## Test Verification',
-            `Command: \`${config.verifyCommand}\``,
+            `Command: \`${resolvedTest.cmd}\`${resolvedTest.tier !== 'test' ? ` (${resolvedTest.tier})` : ''}`,
             `Result: ${testPassed ? 'PASS (exit code 0)' : 'FAIL'}`,
             '```',
             testOutput || '(no output)',
@@ -1302,6 +1430,12 @@ const commands = {
       checkIssues.length
         ? `Plan issues:\n- ${checkIssues.join('\n- ')}`
         : 'Plan checkboxes & evidence: OK',
+      ...(hygieneRes.clean
+        ? ['Hygiene check: clean']
+        : ['Hygiene issues:', ...hygieneRes.issues.map((i) => `- ✗ ${i}`)]),
+      ...(hygieneRes.warnings.length
+        ? ['Hygiene warnings:', ...hygieneRes.warnings.map((w) => `- ⚠ ${w}`)]
+        : []),
       statusShort
         ? `Working tree status:\n${statusShort}`
         : 'Working tree: clean',
@@ -1328,7 +1462,7 @@ const commands = {
       .trim();
     if (!summary)
       fail(
-        'usage: node scripts/ticket.mjs review [<plan>] --agent <client> --verdict <pass|warn|block> --summary "<findings>"'
+        'usage: node scripts/ticket.mjs review [<plan>] --agent <client> --verdict <pass|warn|block> --summary "<findings>"',
       );
     const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ');
     plan.meta.reviewedBy = agent;
@@ -1336,7 +1470,7 @@ const commands = {
     plan.body = appendToSection(
       plan.body,
       'Progress log',
-      `- ${stamp} UTC, ${agent} (review: ${verdict}): ${summary}`
+      `- ${stamp} UTC, ${agent} (review: ${verdict}): ${summary}`,
     );
     writePlan(plan);
     console.log(`Review (${verdict}) recorded in ${plan.rel} by ${agent}`);
@@ -1347,6 +1481,14 @@ const commands = {
     const found = problems(plan);
     if (found.length)
       fail(`${plan.rel} is not closed out:\n- ${found.join('\n- ')}`);
+    const hyg = checkHygiene();
+    if (!hyg.clean) {
+      if (opts.strict || config.hygiene?.strict) {
+        fail(`working tree hygiene failed:\n- ${hyg.issues.join('\n- ')}`);
+      } else {
+        console.warn(`Hygiene issues detected:\n- ${hyg.issues.join('\n- ')}`);
+      }
+    }
     console.log(`${plan.rel}: closed out.`);
   },
 
@@ -1367,7 +1509,7 @@ const commands = {
         properties: { URL: { url: opts.pr } },
       });
       console.log(
-        `Copy into the PR's "Deferred" section:\n${deferred.length ? deferred.join('\n') : 'None'}`
+        `Copy into the PR's "Deferred" section:\n${deferred.length ? deferred.join('\n') : 'None'}`,
       );
       try {
         await notion(
@@ -1376,19 +1518,19 @@ const commands = {
           {
             parent: { page_id: id },
             rich_text: text(
-              `Shipped for review: ${opts.pr}\nPlan ${plan.rel} is closed out. The Task moves to Done when the PR merges.\n${deferredText}`
+              `Shipped for review: ${opts.pr}\nPlan ${plan.rel} is closed out. The Task moves to Done when the PR merges.\n${deferredText}`,
             ),
           },
-          { soft: true }
+          { soft: true },
         );
       } catch (e) {
         console.warn(
-          `ticket: could not add a comment (${e.message}); the PR link is set.`
+          `ticket: could not add a comment (${e.message}); the PR link is set.`,
         );
       }
     } else {
       console.log(
-        `Copy into the PR's "Deferred" section:\n${deferred.length ? deferred.join('\n') : 'None'}`
+        `Copy into the PR's "Deferred" section:\n${deferred.length ? deferred.join('\n') : 'None'}`,
       );
     }
     plan.meta.status = 'shipped';
@@ -1410,7 +1552,7 @@ const commands = {
     ];
     if (protectedList.includes(branch)) {
       fail(
-        `cannot open PR directly from protected branch "${branch}". Checkout a feature branch first.`
+        `cannot open PR directly from protected branch "${branch}". Checkout a feature branch first.`,
       );
     }
 
@@ -1422,7 +1564,7 @@ const commands = {
     const prTemplatePath = join(
       repoRoot,
       '.github',
-      'pull_request_template.md'
+      'pull_request_template.md',
     );
     let body = '';
     if (existsSync(prTemplatePath)) {
@@ -1431,16 +1573,16 @@ const commands = {
         .replace(/<!-- 2-3 sentences: what changes and why -->/g, summary)
         .replace(
           /<!-- Paste the acceptance criteria list[\s\S]*?-->/g,
-          criteria
+          criteria,
         )
         .replace(
           /<!-- Explicitly note any unticked acceptance criteria[\s\S]*?-->/g,
-          deferredText
+          deferredText,
         );
       if (plan.meta.ticket) {
         body = body.replace(
           /Ticket:\s*\[Notion Task\]\([^\)]*\)/g,
-          `Ticket: ${plan.meta.ticket}`
+          `Ticket: ${plan.meta.ticket}`,
         );
       }
     } else {
@@ -1459,18 +1601,23 @@ const commands = {
     }
 
     if (opts.verify || opts.test) {
-      if (config.verifyCommand) {
-        console.log(`Running verifyCommand: ${config.verifyCommand}...`);
+      const resolvedVerify =
+        resolveVerifyCommand(config, 'full') ||
+        resolveVerifyCommand(config, 'test');
+      if (resolvedVerify) {
+        console.log(
+          `Running verification (${resolvedVerify.tier}): ${resolvedVerify.cmd}...`,
+        );
         try {
-          execSync(config.verifyCommand, {
+          execSync(resolvedVerify.cmd, {
             cwd: repoRoot,
             encoding: 'utf8',
             stdio: 'inherit',
             env: { ...process.env, CI: '1' },
           });
-          console.log('Verification passed.');
+          console.log(`Verification (${resolvedVerify.tier}) passed.`);
         } catch (err) {
-          fail(`verifyCommand failed before opening PR: ${err.message}`);
+          fail(`verification failed before opening PR: ${err.message}`);
         }
       }
     }
@@ -1488,7 +1635,7 @@ const commands = {
       console.log(`Branch ${branch} pushed to origin.`);
     } catch (err) {
       console.warn(
-        `Could not push branch ${branch} automatically: ${err.message}`
+        `Could not push branch ${branch} automatically: ${err.message}`,
       );
     }
 
@@ -1513,7 +1660,7 @@ const commands = {
       }).trim();
     } catch (err) {
       console.error(
-        'ticket: gh pr create failed. Ensure GitHub CLI (gh) is installed and authenticated (`gh auth login`).'
+        'ticket: gh pr create failed. Ensure GitHub CLI (gh) is installed and authenticated (`gh auth login`).',
       );
       console.log('\n--- Generated PR Title ---');
       console.log(title);
@@ -1533,7 +1680,7 @@ const commands = {
       console.log(`Branch ${branch} updated with shipped ticket state.`);
     } catch (err) {
       console.warn(
-        `Could not commit/push shipped state automatically: ${err.message}`
+        `Could not commit/push shipped state automatically: ${err.message}`,
       );
     }
 
@@ -1546,12 +1693,12 @@ const commands = {
           {
             encoding: 'utf8',
             stdio: ['pipe', 'pipe', 'pipe'],
-          }
+          },
         );
         console.log(`Auto-merge enabled for ${prUrl}.`);
       } catch (err) {
         console.warn(
-          `Could not enable auto-merge: ${err.stderr || err.message}`
+          `Could not enable auto-merge: ${err.stderr || err.message}`,
         );
       }
     }
@@ -1577,7 +1724,7 @@ const commands = {
     if (!plans.length) {
       if (process.env.NO_PLAN !== '1')
         fail(
-          `no plan with a ticket header changed in this PR. Add one under ${config.plansDir}/ (see AGENTS.md), or add the "no-plan" label for a trivial change.`
+          `no plan with a ticket header changed in this PR. Add one under ${config.plansDir}/ (see AGENTS.md), or add the "no-plan" label for a trivial change.`,
         );
       const { maxChangedLines, noNewFilesUnder } = config.noPlan;
       const changedFiles = git(['diff', '--name-only', range])
@@ -1596,7 +1743,7 @@ const commands = {
         }, 0);
       if (isWorkflowSync) {
         return console.log(
-          `No plan in this PR; allowed as workflow infrastructure sync (${changed} changed lines across ${changedFiles.length} workflow files).`
+          `No plan in this PR; allowed as workflow infrastructure sync (${changed} changed lines across ${changedFiles.length} workflow files).`,
         );
       }
       const newFiles = git([
@@ -1611,11 +1758,11 @@ const commands = {
         .filter(Boolean);
       if (changed > maxChangedLines || newFiles.length) {
         fail(
-          `the no-plan label only covers trivial changes (at most ${maxChangedLines} changed lines, no new files under ${noNewFilesUnder.join(', ')}). This PR changes ${changed} lines${newFiles.length ? ` and adds ${newFiles.join(', ')}` : ''}. Add a plan instead.`
+          `the no-plan label only covers trivial changes (at most ${maxChangedLines} changed lines, no new files under ${noNewFilesUnder.join(', ')}). This PR changes ${changed} lines${newFiles.length ? ` and adds ${newFiles.join(', ')}` : ''}. Add a plan instead.`,
         );
       }
       return console.log(
-        `No plan in this PR; allowed by the no-plan label (${changed} changed lines).`
+        `No plan in this PR; allowed by the no-plan label (${changed} changed lines).`,
       );
     }
     let failed = false;
@@ -1628,7 +1775,7 @@ const commands = {
         const now = countBoxes(plan.body);
         if (now < before)
           found.push(
-            `${before - now} checkbox(es) removed since the plan was first committed. Restore them and mark any you won't do "deferred: <reason>".`
+            `${before - now} checkbox(es) removed since the plan was first committed. Restore them and mark any you won't do "deferred: <reason>".`,
           );
       }
       if (found.length) {
@@ -1638,12 +1785,12 @@ const commands = {
       }
       const deferred = deferredItems(plan.body);
       console.log(
-        `${f}: closed out.${deferred.length ? `\n  Deferred:\n  ${deferred.join('\n  ')}` : ''}`
+        `${f}: closed out.${deferred.length ? `\n  Deferred:\n  ${deferred.join('\n  ')}` : ''}`,
       );
     }
     if (failed)
       fail(
-        'close out the plan(s) above: tick every item or mark it "deferred: <reason>".'
+        'close out the plan(s) above: tick every item or mark it "deferred: <reason>".',
       );
   },
 
@@ -1677,7 +1824,7 @@ const commands = {
           {
             encoding: 'utf8',
             stdio: ['pipe', 'pipe', 'ignore'],
-          }
+          },
         ).trim();
       } catch {}
 
@@ -1698,7 +1845,7 @@ const commands = {
       if (existsSync(plansDir)) {
         try {
           const files = readdirSync(plansDir).filter(
-            (f) => f.endsWith('.plan.md') && !f.startsWith('_')
+            (f) => f.endsWith('.plan.md') && !f.startsWith('_'),
           );
           const plans = files.map((f) => {
             const raw = readFileSync(join(plansDir, f), 'utf8');
@@ -1711,7 +1858,7 @@ const commands = {
                     .map((l) => {
                       const idx = l.indexOf(':');
                       return [l.slice(0, idx).trim(), l.slice(idx + 1).trim()];
-                    })
+                    }),
                 )
               : {};
             return { file: f, meta, raw };
@@ -1771,7 +1918,7 @@ const commands = {
           r.plan.padEnd(colWidths.plan),
           r.open.padStart(colWidths.open),
           r.state.padEnd(colWidths.state),
-        ].join('  ')
+        ].join('  '),
       );
     }
   },
@@ -1842,7 +1989,7 @@ const commands = {
       console.log(
         existsSync(hookPath)
           ? `Pre-push hook is installed at ${hookPath}`
-          : `Pre-push hook is NOT installed. Run 'node scripts/ticket.mjs hook install' to install.`
+          : `Pre-push hook is NOT installed. Run 'node scripts/ticket.mjs hook install' to install.`,
       );
     } else {
       fail('usage: node scripts/ticket.mjs hook [install|uninstall|status]');
@@ -1853,7 +2000,7 @@ const commands = {
     const rawTitle = opts.files[0] || opts.title || '';
     if (!rawTitle) {
       fail(
-        'usage: node scripts/ticket.mjs adr "<Decision Title>" [--agent <client>]'
+        'usage: node scripts/ticket.mjs adr "<Decision Title>" [--agent <client>]',
       );
     }
     const title = rawTitle.replace(/^["']|["']$/g, '').trim();
@@ -1867,7 +2014,7 @@ const commands = {
     let nextNum = 1;
     if (existsSync(decisionsDir)) {
       const existing = readdirSync(decisionsDir).filter((f) =>
-        f.endsWith('.md')
+        f.endsWith('.md'),
       );
       for (const f of existing) {
         const m = f.match(/^ADR-(\d+)/i);
@@ -1920,7 +2067,7 @@ const commands = {
     const candidateDirs = getKnownRepoDirs();
 
     console.log(
-      `Running across ${candidateDirs.length} repositories: "${cmd}"\n`
+      `Running across ${candidateDirs.length} repositories: "${cmd}"\n`,
     );
     const results = [];
     for (const dir of candidateDirs) {
@@ -1968,7 +2115,7 @@ const commands = {
           r.repo.padEnd(colWidths.repo),
           r.status.padEnd(colWidths.status),
           r.message.padEnd(colWidths.message),
-        ].join('  ')
+        ].join('  '),
       );
     }
   },
@@ -2008,7 +2155,7 @@ const commands = {
         (opts.name ? `feat/${opts.name}` : null);
       if (!branch) {
         fail(
-          'usage: node scripts/ticket.mjs wt new [<plan>] [--name <dir>] [--branch <branch>]'
+          'usage: node scripts/ticket.mjs wt new [<plan>] [--name <dir>] [--branch <branch>]',
         );
       }
 
@@ -2069,7 +2216,7 @@ const commands = {
           listOut = execFileSync(
             'git',
             ['-C', dir, 'worktree', 'list', '--porcelain'],
-            { encoding: 'utf8', stdio: ['pipe', 'pipe', 'ignore'] }
+            { encoding: 'utf8', stdio: ['pipe', 'pipe', 'ignore'] },
           );
         } catch {
           continue;
@@ -2100,7 +2247,7 @@ const commands = {
               execFileSync(
                 'git',
                 ['-C', dir, 'merge-base', '--is-ancestor', entry.head, 'HEAD'],
-                { stdio: 'ignore' }
+                { stdio: 'ignore' },
               );
               isMerged = true;
             } catch {}
@@ -2109,7 +2256,7 @@ const commands = {
           if (isMerged || opts.all || !existsSync(wtPath)) {
             if (opts.dryRun) {
               console.log(
-                `[dry-run] Would prune worktree in ${repoName}: ${wtPath} (branch: ${entry.branch || 'detached'})`
+                `[dry-run] Would prune worktree in ${repoName}: ${wtPath} (branch: ${entry.branch || 'detached'})`,
               );
               totalPruned++;
               continue;
@@ -2120,7 +2267,7 @@ const commands = {
               execFileSync(
                 'git',
                 ['-C', dir, 'worktree', 'remove', wtPath, '--force'],
-                { stdio: 'ignore' }
+                { stdio: 'ignore' },
               );
               removed = true;
             } catch {}
@@ -2144,7 +2291,7 @@ const commands = {
 
             if (removed) {
               console.log(
-                `Pruned worktree in ${repoName}: ${entry.branch || basename(wtPath)}`
+                `Pruned worktree in ${repoName}: ${entry.branch || basename(wtPath)}`,
               );
               totalPruned++;
             }
@@ -2156,7 +2303,7 @@ const commands = {
     }
 
     fail(
-      'usage: node scripts/ticket.mjs wt [list|new|prune] [--fleet] [--all]'
+      'usage: node scripts/ticket.mjs wt [list|new|prune] [--fleet] [--all]',
     );
   },
 
@@ -2224,11 +2371,11 @@ const commands = {
     }
 
     console.log(
-      `=== Recall: "${query}" (${results.length} match${results.length === 1 ? '' : 'es'}) ===\n`
+      `=== Recall: "${query}" (${results.length} match${results.length === 1 ? '' : 'es'}) ===\n`,
     );
     for (const r of results) {
       console.log(
-        `[${r.type}] ${opts.fleet ? `${r.repo} / ` : ''}${r.file} — ${r.title}`
+        `[${r.type}] ${opts.fleet ? `${r.repo} / ` : ''}${r.file} — ${r.title}`,
       );
       for (const m of r.matches) {
         console.log(`  L${m.line}: ${m.text.slice(0, 100)}`);
@@ -2255,7 +2402,7 @@ const commands = {
 
       if (!isDone && !opts.force) {
         console.warn(
-          `Skipping ${plan.rel}: plan has open items or is not marked done/shipped (use --force to archive anyway).`
+          `Skipping ${plan.rel}: plan has open items or is not marked done/shipped (use --force to archive anyway).`,
         );
         continue;
       }
@@ -2291,7 +2438,7 @@ const commands = {
   async doctor() {
     const dirs = opts.fleet ? getKnownRepoDirs() : [repoRoot];
     console.log(
-      `=== AI-Dev-Workflow Doctor (${dirs.length} repo${dirs.length === 1 ? '' : 's'}) ===\n`
+      `=== AI-Dev-Workflow Doctor (${dirs.length} repo${dirs.length === 1 ? '' : 's'}) ===\n`,
     );
 
     for (const dir of dirs) {
@@ -2319,7 +2466,7 @@ const commands = {
           {
             encoding: 'utf8',
             stdio: ['pipe', 'pipe', 'ignore'],
-          }
+          },
         ).trim();
       } catch {}
 
@@ -2340,7 +2487,7 @@ const commands = {
           {
             encoding: 'utf8',
             stdio: ['pipe', 'pipe', 'ignore'],
-          }
+          },
         );
         wtCount = (wtOut.match(/^worktree /gm) || []).length;
       } catch {}
@@ -2364,11 +2511,11 @@ const commands = {
         try {
           const canonical = readFileSync(canonicalTicket, 'utf8').replace(
             /\r\n/g,
-            '\n'
+            '\n',
           );
           const current = readFileSync(ticketScript, 'utf8').replace(
             /\r\n/g,
-            '\n'
+            '\n',
           );
           if (canonical !== current) syncDrift = 'drift detected';
         } catch {}
@@ -2376,24 +2523,105 @@ const commands = {
 
       console.log(`Repo:      ${name} (${dir})`);
       console.log(
-        `Branch:    ${branch} (${dirty === 0 ? 'clean' : `${dirty} uncommitted file(s)`})`
+        `Branch:    ${branch} (${dirty === 0 ? 'clean' : `${dirty} uncommitted file(s)`})`,
       );
       console.log(`Worktrees: ${wtCount}`);
       console.log(
-        `Tracker:   ${tracker}${tracker === 'notion' ? ` (Token: ${hasToken ? 'present' : 'MISSING'})` : ' (offline mode)'}`
+        `Tracker:   ${tracker}${tracker === 'notion' ? ` (Token: ${hasToken ? 'present' : 'MISSING'})` : ' (offline mode)'}`,
       );
       console.log(`Pre-push:  ${hasHook ? 'installed' : 'not installed'}`);
       console.log(`Workflow:  ${syncDrift}`);
-      if (repoCfg.verifyCommand) {
-        console.log(`Verify:    ${repoCfg.verifyCommand}`);
+      const tiers = getVerifyTiers(repoCfg);
+      const tierEntries = Object.entries(tiers);
+      if (tierEntries.length > 1) {
+        console.log(
+          `Verify:    ${tierEntries.map(([t, c]) => `${t}: "${c}"`).join(' | ')}`,
+        );
+      } else if (tierEntries.length === 1) {
+        console.log(`Verify:    ${tierEntries[0][1]}`);
       }
       console.log('---');
+    }
+  },
+
+  async verify() {
+    const tiers = getVerifyTiers();
+    const tierKeys = Object.keys(tiers);
+    if (tierKeys.length === 0) {
+      fail(
+        'no verification commands configured in ticket.config.json (set "verify" or "verifyCommand")',
+      );
+    }
+
+    if (opts.all) {
+      console.log(`Running all verification tiers: ${tierKeys.join(' -> ')}\n`);
+      for (const t of tierKeys) {
+        console.log(`=== Tier: ${t} (${tiers[t]}) ===`);
+        try {
+          execSync(tiers[t], {
+            cwd: repoRoot,
+            encoding: 'utf8',
+            stdio: 'inherit',
+            env: { ...process.env, CI: '1' },
+          });
+          console.log(`✓ Tier "${t}" passed.\n`);
+        } catch (err) {
+          fail(`verification tier "${t}" failed: ${err.message}`);
+        }
+      }
+      console.log('All verification tiers passed.');
+      return;
+    }
+
+    const requestedTier = opts.tier || 'test';
+    const resolved = resolveVerifyCommand(config, requestedTier);
+    if (!resolved) {
+      fail(
+        `unknown verification tier "${requestedTier}". Available tiers: ${tierKeys.join(', ')}`,
+      );
+    }
+
+    console.log(`Running verification (${resolved.tier}): ${resolved.cmd}...`);
+    try {
+      execSync(resolved.cmd, {
+        cwd: repoRoot,
+        encoding: 'utf8',
+        stdio: 'inherit',
+        env: { ...process.env, CI: '1' },
+      });
+      console.log(`✓ Verification (${resolved.tier}) passed.`);
+    } catch (err) {
+      fail(`verification (${resolved.tier}) failed: ${err.message}`);
+    }
+  },
+
+  async hygiene() {
+    console.log('=== Working-Tree Hygiene Check ===\n');
+    const res = checkHygiene();
+    if (res.issues.length > 0) {
+      console.log('Issues found:');
+      for (const iss of res.issues) {
+        console.log(`  ✗ ${iss}`);
+      }
+    }
+    if (res.warnings.length > 0) {
+      console.log('Warnings:');
+      for (const warn of res.warnings) {
+        console.log(`  ⚠ ${warn}`);
+      }
+    }
+    if (res.clean && res.warnings.length === 0) {
+      console.log('✓ Working tree hygiene clean.');
+    } else if (res.clean) {
+      console.log('\n✓ No critical hygiene issues (see warnings above).');
+    } else {
+      fail('working tree hygiene check failed');
     }
   },
 };
 
 if (!commands[command])
   fail(
-    `unknown command "${command || ''}". Commands: ${Object.keys(commands).join(', ')}`
+    `unknown command "${command || ''}". Commands: ${Object.keys(commands).join(', ')}`,
   );
 await commands[command]();

@@ -5,7 +5,15 @@
   "plansDir": "docs/plans",
   "protectedBranches": ["main"],
   "captureSources": ["Claude", "Codex", "Gemini", "ChatGPT", "Notion AI", "Other"],
+  "verify": {
+    "test": "node --test scripts/ticket.test.mjs",
+    "full": "node --test scripts/ticket.test.mjs"
+  },
   "verifyCommand": "node --test scripts/ticket.test.mjs",
+  "hygiene": {
+    "maxFileSizeKB": 1024,
+    "disallowedPatterns": [".tmp", "test-results", "coverage", ".worktrees"]
+  },
   "requireReview": false,
   "knownRepos": [
     "FluentOverlay",

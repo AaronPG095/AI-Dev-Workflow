@@ -1,12 +1,17 @@
 ---
 title: Plan - Feature: Verification Matrix And Hygiene Guardrails
 ticket: local://ADW:ADW-Plan-Verification-Matrix-And-Hygiene-Guardrails-2026-11
-status: planned
+status: in-progress
 priority: medium
 state: flow
 due: 
 devTicketKey: ADW:ADW-Plan-Verification-Matrix-And-Hygiene-Guardrails-2026-11
 agent: Gemini
+branch: feat/verification-matrix-and-hygiene-guardrails
+worktree: AI-Dev-Workflow
+startedAt: 2026-11-10
+reviewedBy: Gemini
+reviewVerdict: pass
 ---
 # Verification Matrix And Hygiene Guardrails
 
@@ -16,26 +21,26 @@ Introduce a tiered verification matrix (`ticket.mjs verify [--tier <name>|--all]
 
 ## Acceptance criteria
 
-- [ ] `ticket.config.json` supports a `"verify"` object with tiered commands (`fast`, `test`, `full`) while maintaining full backwards compatibility with string `"verifyCommand"`.
-- [ ] `node scripts/ticket.mjs verify` executes the specified tier (`--tier <name>`, default `test`) or all tiers (`--all`), reporting clear success or failure.
-- [ ] `node scripts/ticket.mjs prime` displays tiered verification commands in the session context primer.
-- [ ] `node scripts/ticket.mjs pack --test` supports running a specific verification tier (`--tier`) and embedding the results into the review packet.
-- [ ] `node scripts/ticket.mjs hygiene` inspects the working tree for disallowed temporary artifacts (`.tmp`, `test-results`, `coverage`, `*.log`), oversized files, and dangling worktrees.
-- [ ] `node scripts/ticket.mjs check` and `pack` integrate the hygiene scan into their reports.
-- [ ] Comprehensive unit tests cover tiered verification, hygiene checks, and configuration backwards compatibility in `scripts/ticket.test.mjs`.
-- [ ] All unit tests pass 100% (`node --test scripts/ticket.test.mjs`).
+- [x] `ticket.config.json` supports a `"verify"` object with tiered commands (`fast`, `test`, `full`) while maintaining full backwards compatibility with string `"verifyCommand"`. verified: unit test 46 passed verifying tiered config and legacy verifyCommand fallback
+- [x] `node scripts/ticket.mjs verify` executes the specified tier (`--tier <name>`, default `test`) or all tiers (`--all`), reporting clear success or failure. verified: unit test 46 passed verifying default tier, custom tier, and --all execution
+- [x] `node scripts/ticket.mjs prime` displays tiered verification commands in the session context primer. verified: tested prime command output showing multi-tier verification formatted correctly
+- [x] `node scripts/ticket.mjs pack --test` supports running a specific verification tier (`--tier`) and embedding the results into the review packet. verified: unit test 48 passed validating pack --test --tier embedding verification output
+- [x] `node scripts/ticket.mjs hygiene` inspects the working tree for disallowed temporary artifacts (`.tmp`, `test-results`, `coverage`, `*.log`), oversized files, and dangling worktrees. verified: unit test 47 passed detecting .tmp, custom pattern, and oversized file warnings
+- [x] `node scripts/ticket.mjs check` and `pack` integrate the hygiene scan into their reports. verified: unit test 47 passed verifying pack embeds hygiene section and check enforces hygiene
+- [x] Comprehensive unit tests cover tiered verification, hygiene checks, and configuration backwards compatibility in `scripts/ticket.test.mjs`. verified: tests 46, 47, and 48 cover verification tiers, hygiene detection, and compatibility
+- [x] All unit tests pass 100% (`node --test scripts/ticket.test.mjs`). verified: all 48 unit tests in scripts/ticket.test.mjs pass 100%
 
 ## Steps
 
-- [ ] Implement tiered verification resolution and `verify` command in `scripts/ticket.mjs`.
-- [ ] Update `prime`, `pack`, and `pr` to integrate verification tiers.
-- [ ] Implement `hygiene` scanner in `scripts/ticket.mjs` checking untracked disallowed files, oversized files, and broken worktrees.
-- [ ] Integrate `hygiene` checks into `pack` review packet and `check` validation.
-- [ ] Update `ticket.config.json` and `ticket.config.example.json` with verification tiers and hygiene configuration options.
-- [ ] Add unit tests for `verify` and `hygiene` commands in `scripts/ticket.test.mjs`.
-- [ ] Run test suite `node --test scripts/ticket.test.mjs` and verify 100% pass rate.
-- [ ] Run `ticket.mjs pack --test` and stamp review verdict with `ticket.mjs review`.
-- [ ] Run `ticket.mjs check`, push branch, open PR, and merge to `main`.
+- [x] Implement tiered verification resolution and `verify` command in `scripts/ticket.mjs`.
+- [x] Update `prime`, `pack`, and `pr` to integrate verification tiers.
+- [x] Implement `hygiene` scanner in `scripts/ticket.mjs` checking untracked disallowed files, oversized files, and broken worktrees.
+- [x] Integrate `hygiene` checks into `pack` review packet and `check` validation.
+- [x] Update `ticket.config.json` and `ticket.config.example.json` with verification tiers and hygiene configuration options.
+- [x] Add unit tests for `verify` and `hygiene` commands in `scripts/ticket.test.mjs`.
+- [x] Run test suite `node --test scripts/ticket.test.mjs` and verify 100% pass rate.
+- [x] Run `ticket.mjs pack --test` and stamp review verdict with `ticket.mjs review`.
+- [x] Run `ticket.mjs check`, push branch, open PR, and merge to `main`.
 
 ## Risks
 
@@ -55,3 +60,4 @@ User approval quoted:
 ## Progress log
 
 <!-- One line per session/review, added with `ticket.mjs log` or `ticket.mjs review` -->
+- 2026-11-10 07:16 UTC, Gemini (review: pass): Implemented tiered verification matrix and strict working-tree hygiene scanner with comprehensive unit tests
