@@ -1,12 +1,15 @@
 ---
 title: Plan - Feature: Agentic Workflow Engine
 ticket: local://ADW:ADW-Plan-Agentic-Workflow-Engine-2026-11
-status: planned
+status: in-progress
 priority: high
 state: flow
 due: 
 devTicketKey: ADW:ADW-Plan-Agentic-Workflow-Engine-2026-11
 agent: Gemini
+branch: feat/agentic-workflow-engine
+worktree: AI-Dev-Workflow
+startedAt: 2026-11-10
 ---
 # Agentic Workflow Engine
 
