@@ -28,6 +28,10 @@
   "packMaxFileLines": 120,
   "packMaxLines": 400,
   "packIgnore": [],
+  "agentic": {
+    "maxRetries": 3,
+    "verifyTier": "test"
+  },
   "noPlan": {
     "maxChangedLines": 40,
     "noNewFilesUnder": ["src"]

@@ -90,6 +90,8 @@ const WORKFLOW_FILES = new Set([
   '.claude/skills/quick-review/SKILL.md',
   '.agents/skills/dev-workflow/SKILL.md',
   '.claude/skills/dev-workflow/SKILL.md',
+  '.agents/skills/agentic-workflow/SKILL.md',
+  '.claude/skills/agentic-workflow/SKILL.md',
   '.github/pull_request_template.md',
   '.github/workflows/workflow-sync.yml',
   '.github/workflows/plan-check.yml',
@@ -121,6 +123,11 @@ const BOOLEAN_FLAGS = new Set([
   '--prompt',
   '--no-create',
   '--worktrees',
+  '--json',
+  '--commit',
+  '--status',
+  '--spawn',
+  '--no-verify',
 ]);
 for (let i = 0; i < rest.length; i++) {
   const a = rest[i];
@@ -1112,6 +1119,315 @@ const commands = {
     writePlan(plan);
 
     console.log(`Deferred [${match.openIndex}]: - [ ] ${updatedText}`);
+  },
+
+  async step() {
+    const planArg = opts.files.find((f) => f.endsWith('.plan.md'));
+    const plan = planArg ? readPlan(planArg) : resolveActivePlan();
+    const branch =
+      git(['rev-parse', '--abbrev-ref', 'HEAD'], { allowFail: true }) ||
+      'detached';
+
+    const { items } = findCheckboxes(plan.body);
+    const openCriteria = items.filter(
+      (it) =>
+        it.openIndex !== null &&
+        it.section.toLowerCase() === 'acceptance criteria',
+    );
+    const openSteps = items.filter(
+      (it) => it.openIndex !== null && it.section.toLowerCase() === 'steps',
+    );
+
+    const nextItem = openSteps[0] || openCriteria[0] || null;
+    const cfgAgentic = config.agentic || {};
+    const maxRetries = opts.maxRetries
+      ? parseInt(opts.maxRetries, 10)
+      : (cfgAgentic.maxRetries ?? 3);
+    const requestedTier = opts.tier || cfgAgentic.verifyTier || 'test';
+    const resolvedVerify =
+      resolveVerifyCommand(config, requestedTier) ||
+      resolveVerifyCommand(config, 'test');
+    const verifyCmd = resolvedVerify
+      ? resolvedVerify.cmd
+      : config.verifyCommand || 'npm test';
+    const verifyTier = resolvedVerify ? resolvedVerify.tier : 'test';
+
+    if (opts.json) {
+      const data = {
+        plan: plan.rel,
+        title: plan.meta.title || plan.rel,
+        branch: plan.meta.branch || branch,
+        ticket: plan.meta.ticket || null,
+        nextStep: nextItem
+          ? {
+              index: nextItem.openIndex,
+              text: nextItem.text,
+              section: nextItem.section,
+            }
+          : null,
+        remainingSteps: openSteps.length,
+        remainingCriteria: openCriteria.length,
+        openCriteria: openCriteria.map((c) => ({
+          index: c.openIndex,
+          text: c.text,
+        })),
+        verify: {
+          tier: verifyTier,
+          cmd: verifyCmd,
+        },
+        maxRetries,
+      };
+      console.log(JSON.stringify(data, null, 2));
+      return;
+    }
+
+    const role = (opts.role || '').toLowerCase();
+    if (role) {
+      if (role === 'builder') {
+        const criteriaList = openCriteria.length
+          ? openCriteria.map((c) => `- [${c.openIndex}] ${c.text}`).join('\n')
+          : '(all criteria ticked or none defined)';
+        const summary = section(plan.body, 'Summary') || '(none)';
+
+        const brief = [
+          `# Autonomous Builder Brief: ${plan.meta.title || plan.rel}`,
+          `Plan: ${plan.rel} | Branch: ${plan.meta.branch || branch}`,
+          `Target: ${nextItem ? `[${nextItem.openIndex}] ${nextItem.text} (section: ${nextItem.section})` : 'All items completed!'}`,
+          '',
+          '## Objective & Scope',
+          summary,
+          '',
+          '## Active Criteria to Keep Green',
+          criteriaList,
+          '',
+          '## Execution Protocol',
+          '1. Implement the target step cleanly in the codebase.',
+          `2. Run verification: \`${verifyCmd}\` (tier: ${verifyTier}).`,
+          `3. Retry budget: up to ${maxRetries} self-healing attempts. If still failing after ${maxRetries} tries, STOP, log handoff, and escalate.`,
+          `4. Checkpoint & tick: node scripts/ticket.mjs checkpoint ${nextItem ? nextItem.openIndex : ''} --commit`,
+        ];
+        console.log(brief.join('\n'));
+        return;
+      }
+
+      if (role === 'reviewer') {
+        const criteriaList =
+          section(plan.body, 'Acceptance criteria') || '(none)';
+        const brief = [
+          `# Adversarial Review Brief: ${plan.meta.title || plan.rel}`,
+          `Plan: ${plan.rel} | Branch: ${plan.meta.branch || branch}`,
+          '',
+          '## Review Protocol (Fresh Context Window)',
+          '1. Inspect review packet with embedded test verification:',
+          `   node scripts/ticket.mjs pack --test${verifyTier !== 'test' ? ` --tier ${verifyTier}` : ''}`,
+          '',
+          '## Acceptance Criteria to Verify',
+          criteriaList,
+          '',
+          '## Evaluation Rubric',
+          '- Spec Fidelity: Does the code fulfill every criterion accurately?',
+          '- Verification Honesty: Does every ticked criterion cite verified evidence without fake claims?',
+          '- Test Regressions: Did all tests pass cleanly?',
+          '- Code Hygiene: No temporary files, conflict markers, or debris.',
+          '',
+          '## Verdict Command',
+          `node scripts/ticket.mjs review ${plan.rel} --agent <you> --verdict <pass|warn|block> --summary "<concise findings>"`,
+        ];
+        console.log(brief.join('\n'));
+        return;
+      }
+
+      if (role === 'fixer') {
+        const progressSection = section(plan.body, 'Progress log') || '';
+        const progressLines = progressSection
+          .split('\n')
+          .map((l) => l.trim())
+          .filter((l) => l && !l.startsWith('<!--') && !l.endsWith('-->'));
+        const blockLogs = progressLines.filter((l) =>
+          /review:\s*block/i.test(l),
+        );
+        const latestBlock = blockLogs.length
+          ? blockLogs[blockLogs.length - 1]
+          : '(no block review verdict found)';
+
+        const criteriaList = openCriteria.length
+          ? openCriteria.map((c) => `- [${c.openIndex}] ${c.text}`).join('\n')
+          : section(plan.body, 'Acceptance criteria') || '(none)';
+
+        const brief = [
+          `# Block-Fixer Brief: ${plan.meta.title || plan.rel}`,
+          `Plan: ${plan.rel} | Branch: ${plan.meta.branch || branch}`,
+          '',
+          '## Blocker Findings to Resolve',
+          latestBlock,
+          '',
+          '## Open Acceptance Criteria',
+          criteriaList,
+          '',
+          '## Fix & Re-Verify Protocol',
+          '1. Fix the root cause identified in the blocker findings.',
+          `2. Verify: \`${verifyCmd}\` (tier: ${verifyTier}).`,
+          '3. Run checkpoint or re-review:',
+          `   node scripts/ticket.mjs review ${plan.rel} --agent <you> --verdict pass --summary "Resolved review blocker findings"`,
+        ];
+        console.log(brief.join('\n'));
+        return;
+      }
+
+      fail(
+        `unknown --role "${opts.role}". Allowed roles: builder, reviewer, fixer`,
+      );
+    }
+
+    if (!nextItem) {
+      console.log(`All criteria and steps in ${plan.rel} are completed!`);
+      console.log(
+        `Next: run \`node scripts/ticket.mjs pack --test\` or \`node scripts/ticket.mjs step --role reviewer\``,
+      );
+      return;
+    }
+
+    const linesOut = [
+      `# Next Step Brief: ${plan.meta.title || plan.rel}`,
+      `Plan: ${plan.rel} | Branch: ${plan.meta.branch || branch}`,
+      `Target [${nextItem.openIndex}]: ${nextItem.text}`,
+      `Section: ${nextItem.section}`,
+      `Remaining: ${openSteps.length} step(s), ${openCriteria.length} criterion/criteria`,
+      `Verify: \`${verifyCmd}\` (${verifyTier})`,
+      `Retry Budget: ${maxRetries} attempt(s) before circuit breaker`,
+      `Checkpoint: node scripts/ticket.mjs checkpoint ${nextItem.openIndex} --commit`,
+    ];
+    console.log(linesOut.join('\n'));
+  },
+
+  async checkpoint() {
+    const planArg = opts.files.find((f) => f.endsWith('.plan.md'));
+    const plan = planArg ? readPlan(planArg) : resolveActivePlan();
+
+    const { lines, items } = findCheckboxes(plan.body);
+    const openItems = items.filter((it) => it.openIndex !== null);
+    if (!openItems.length) {
+      fail(`all checkboxes in ${plan.rel} are already completed or deferred.`);
+    }
+
+    const rawTarget =
+      opts.files.find((f) => !f.endsWith('.plan.md')) ||
+      opts.target ||
+      (openItems[0] ? String(openItems[0].openIndex) : '');
+
+    if (!rawTarget) {
+      fail(
+        'usage: node scripts/ticket.mjs checkpoint [<plan>] [<index|substring>] [--verified "<evidence>"] [--commit] [--tier <name>]',
+      );
+    }
+
+    let match = null;
+    const isNum = /^\d+$/.test(rawTarget.trim());
+    if (isNum) {
+      const idx = parseInt(rawTarget.trim(), 10);
+      match = openItems.find((it) => it.openIndex === idx);
+      if (!match) {
+        fail(
+          `open item [${idx}] not found in ${plan.rel} (available open items: 1..${openItems.length})`,
+        );
+      }
+    } else {
+      const query = rawTarget.toLowerCase();
+      match = openItems.find((it) => it.text.toLowerCase().includes(query));
+      if (!match) {
+        fail(`no open checkbox found matching "${rawTarget}" in ${plan.rel}`);
+      }
+    }
+
+    const cfgAgentic = config.agentic || {};
+    const requestedTier = opts.tier || cfgAgentic.verifyTier || 'test';
+    const resolvedVerify =
+      resolveVerifyCommand(config, requestedTier) ||
+      resolveVerifyCommand(config, 'test');
+
+    if (resolvedVerify && !opts['no-verify'] && !opts.noVerify) {
+      console.log(
+        `• Running checkpoint verification (\`${resolvedVerify.cmd}\`)...`,
+      );
+      try {
+        execSync(resolvedVerify.cmd, {
+          cwd: repoRoot,
+          encoding: 'utf8',
+          stdio: 'inherit',
+          env: { ...process.env, CI: '1' },
+        });
+      } catch (err) {
+        fail(
+          `checkpoint verification failed (\`${resolvedVerify.cmd}\`). Resolve issues or test failures before ticking.`,
+        );
+      }
+    }
+
+    const inCriteria = match.section.toLowerCase() === 'acceptance criteria';
+    let verifiedText = opts.verified || opts.v || '';
+    if (inCriteria && !verifiedText && !/verified:/i.test(match.text)) {
+      verifiedText = `verify ${resolvedVerify ? resolvedVerify.tier : 'test'} passed (exit code 0)`;
+    }
+
+    let updatedText = match.text;
+    if (verifiedText) {
+      if (/verified:/i.test(updatedText)) {
+        updatedText = updatedText.replace(
+          /verified:.*$/i,
+          `verified: ${verifiedText}`,
+        );
+      } else {
+        updatedText = `${updatedText} verified: ${verifiedText}`;
+      }
+    }
+
+    lines[match.lineIndex] = `${match.prefix}x${match.delim}${updatedText}`;
+    plan.body = lines.join('\n');
+    writePlan(plan);
+    console.log(`✓ Ticked [${match.openIndex}]: - [x] ${updatedText}`);
+
+    if (opts.commit) {
+      let status = '';
+      try {
+        status = git(['status', '--short'], { allowFail: true }) || '';
+      } catch {}
+      if (status.trim()) {
+        const commitMsg =
+          opts.message ||
+          opts.m ||
+          `feat(checkpoint): complete [${match.openIndex}] - ${match.text.replace(/[:"']/g, '').slice(0, 50)}`;
+        try {
+          git(['add', '-A']);
+          execFileSync('git', ['commit', '-m', commitMsg], {
+            cwd: repoRoot,
+            encoding: 'utf8',
+            stdio: ['pipe', 'pipe', 'pipe'],
+          });
+          const commitHash = git(['rev-parse', '--short', 'HEAD'], {
+            allowFail: true,
+          });
+          console.log(`✓ Git checkpoint committed: ${commitHash} "${commitMsg}"`);
+        } catch (e) {
+          console.warn(`warning: could not create git commit: ${e.message}`);
+        }
+      } else {
+        console.log('Working tree already clean; skipped git commit.');
+      }
+    }
+
+    const remaining = items.filter(
+      (it) => it.openIndex !== null && it.lineIndex !== match.lineIndex,
+    );
+    if (remaining.length > 0) {
+      const next = remaining[0];
+      console.log(
+        `Next open item [${next.openIndex}]: - [ ] ${next.text} (section: ${next.section})`,
+      );
+    } else {
+      console.log(
+        `All criteria and steps in ${plan.rel} are now completed! Ready for review.`,
+      );
+    }
   },
 
   async create() {
@@ -3382,6 +3698,172 @@ const commands = {
     console.log('  node scripts/ticket.mjs fleet verify [--tier <name>|--all]');
     console.log('  node scripts/ticket.mjs fleet --pr');
     console.log('  node scripts/ticket.mjs fleet --worktrees');
+  },
+
+  async wave() {
+    const plans = allPlans();
+    const sub = opts.files[0];
+    const specifiedPlans = opts.files
+      .filter((f) => f.endsWith('.plan.md'))
+      .map((f) => readPlan(f));
+
+    let targetPlans = specifiedPlans.length
+      ? specifiedPlans
+      : plans.filter(
+          (p) => p.meta.status === 'in-progress' || p.meta.status === 'planned',
+        );
+
+    if (opts.spawn || sub === 'spawn') {
+      if (!targetPlans.length) {
+        fail('no active or planned plans found to spawn in wave.');
+      }
+      console.log(
+        `=== Wave Orchestration: Spawning ${targetPlans.length} Worktree(s) ===\n`,
+      );
+      const spawned = [];
+
+      for (const plan of targetPlans) {
+        const branch =
+          plan.meta.branch ||
+          `feat/${plan.rel.replace(/^docs\/plans\/|\.plan\.md$/g, '').toLowerCase().replace(/[^a-z0-9_-]+/g, '-')}`;
+        const name =
+          plan.meta.worktree ||
+          branch.replace(/^[^/]+\//, '').replace(/[^a-zA-Z0-9_-]+/g, '-');
+        const targetDir = resolve(repoRoot, '.worktrees', name);
+        mkdirSync(resolve(repoRoot, '.worktrees'), { recursive: true });
+
+        if (!existsSync(targetDir)) {
+          const branchExists = !!git(['rev-parse', '--verify', branch], {
+            allowFail: true,
+          });
+          const addArgs = ['worktree', 'add'];
+          if (!branchExists) addArgs.push('-b', branch);
+          addArgs.push(targetDir);
+          if (branchExists) addArgs.push(branch);
+
+          try {
+            execFileSync('git', addArgs, {
+              cwd: repoRoot,
+              encoding: 'utf8',
+              stdio: ['pipe', 'pipe', 'pipe'],
+            });
+          } catch (err) {
+            console.warn(
+              `warning: git worktree add failed for ${name}: ${err.stderr || err.message}`,
+            );
+            continue;
+          }
+
+          const envPath = join(repoRoot, '.env');
+          if (existsSync(envPath)) {
+            try {
+              writeFileSync(join(targetDir, '.env'), readFileSync(envPath));
+            } catch {}
+          }
+        }
+
+        plan.meta.worktree = name;
+        plan.meta.branch = branch;
+        if (plan.meta.status === 'planned' || plan.meta.status === 'draft') {
+          plan.meta.status = 'in-progress';
+        }
+        writePlan(plan);
+
+        spawned.push({
+          plan: plan.rel,
+          worktree: `.worktrees/${name}`,
+          branch,
+        });
+
+        console.log(`• Plan: ${plan.rel}`);
+        console.log(`  Branch: ${branch} | Worktree: .worktrees/${name}`);
+        console.log(
+          `  Builder brief: cd .worktrees/${name} && node scripts/ticket.mjs step --role builder\n`,
+        );
+      }
+
+      console.log(`Wave spawn complete: ${spawned.length} worktree(s) active.`);
+      return;
+    }
+
+    console.log(`=== Wave Orchestration Dashboard ===\n`);
+    const activePlans = plans.filter(
+      (p) =>
+        p.meta.worktree ||
+        p.meta.status === 'in-progress' ||
+        p.meta.status === 'planned',
+    );
+
+    if (!activePlans.length) {
+      console.log('No active plans or wave worktrees found.');
+      return;
+    }
+
+    const rows = [];
+    for (const plan of activePlans) {
+      const { items } = findCheckboxes(plan.body);
+      const total = items.length;
+      const open = items.filter((it) => it.openIndex !== null).length;
+      const closed = total - open;
+      const wtDir =
+        plan.meta.worktree && plan.meta.worktree !== basename(repoRoot)
+          ? (plan.meta.worktree.startsWith('.worktrees/')
+              ? plan.meta.worktree
+              : `.worktrees/${plan.meta.worktree}`)
+          : '(main)';
+      const probList = problems(plan);
+      const ready = probList.length === 0 ? 'YES' : 'no';
+      const review =
+        plan.meta.reviewVerdict ||
+        (plan.meta.reviewedBy ? 'reviewed' : 'unreviewed');
+
+      rows.push({
+        plan: plan.rel.replace(/^docs\/plans\/|\.plan\.md$/g, '').slice(0, 36),
+        branch: (plan.meta.branch || '-').slice(0, 24),
+        worktree: wtDir.slice(0, 20),
+        progress: `${closed}/${total}`,
+        review,
+        ready,
+      });
+    }
+
+    const colWidths = {
+      plan: Math.max(4, ...rows.map((r) => r.plan.length)),
+      branch: Math.max(6, ...rows.map((r) => r.branch.length)),
+      worktree: Math.max(8, ...rows.map((r) => r.worktree.length)),
+      progress: Math.max(8, ...rows.map((r) => r.progress.length)),
+      review: Math.max(6, ...rows.map((r) => r.review.length)),
+      ready: Math.max(5, ...rows.map((r) => r.ready.length)),
+    };
+
+    const header = [
+      'Plan'.padEnd(colWidths.plan),
+      'Branch'.padEnd(colWidths.branch),
+      'Worktree'.padEnd(colWidths.worktree),
+      'Progress'.padStart(colWidths.progress),
+      'Review'.padEnd(colWidths.review),
+      'Ready'.padEnd(colWidths.ready),
+    ].join('  ');
+
+    console.log(header);
+    console.log('-'.repeat(header.length));
+    for (const r of rows) {
+      console.log(
+        [
+          r.plan.padEnd(colWidths.plan),
+          r.branch.padEnd(colWidths.branch),
+          r.worktree.padEnd(colWidths.worktree),
+          r.progress.padStart(colWidths.progress),
+          r.review.padEnd(colWidths.review),
+          r.ready.padEnd(colWidths.ready),
+        ].join('  '),
+      );
+    }
+
+    console.log('\nCommands:');
+    console.log('  node scripts/ticket.mjs wave --spawn');
+    console.log('  node scripts/ticket.mjs wave --status');
+    console.log('  node scripts/ticket.mjs step --role builder');
   },
 };
 

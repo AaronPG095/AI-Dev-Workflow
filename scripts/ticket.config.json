@@ -24,6 +24,10 @@
     "AI-Cortex",
     "AI-Dev-Workflow"
   ],
+  "agentic": {
+    "maxRetries": 3,
+    "verifyTier": "test"
+  },
   "noPlan": {
     "maxChangedLines": 40,
     "noNewFilesUnder": ["scripts"]
