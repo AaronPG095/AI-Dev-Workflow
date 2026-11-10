@@ -15,8 +15,11 @@ Most AI coding workflows fail in one of two ways:
 `AI-Dev-Workflow` sits in the sweet spot:
 - **One canonical process in `AGENTS.md`** (loaded natively by Codex, Antigravity/Gemini, Cursor, and via `@AGENTS.md` in Claude Code).
 - **One zero-dependency CLI (`scripts/ticket.mjs`)** for plan scaffolding, session ignition, local or Notion ticket tracking, handoff logs, deterministic review packets, git guardrails, and GitHub Actions CI gates.
-- **Zero-token session ignition (`ticket.mjs prime`)** that prints a compact ~20-line context primer for fresh agent chat sessions (active plan, branch, open criteria, next steps, verifyCommand).
+- **Zero-token session ignition (`ticket.mjs prime`)** that prints a compact ~20-line context primer for fresh agent chat sessions (active plan, branch, open criteria, next steps, tiered verify commands).
 - **Zero-token review preparation (`ticket.mjs pack`)** that replaces 6+ exploratory tool calls with a single compact digest (plan criteria + working-tree hygiene + lockfile-filtered git diff + optional test verification proof via `--test`).
+- **Instant context switching & worktrees (`ticket.mjs switch`)** to jump between main and isolated worktrees on-demand with automatic `.env` inheritance.
+- **Automated plan splitting (`ticket.mjs split`)** to partition oversized plans into consecutive PR milestones without deleting checkboxes.
+- **Tiered verification matrix & working-tree hygiene guardrails (`ticket.mjs verify`, `ticket.mjs hygiene`)** to detect unmerged conflicts, build debris, and oversized files before reviews and PR merges.
 - **Drift-proof cross-machine portability (`scripts/sync.mjs --remote`)** to sync or check the workflow from GitHub anywhere with zero local folder dependencies.
 
 ---
@@ -52,17 +55,23 @@ irm https://raw.githubusercontent.com/AaronPG095/AI-Dev-Workflow/main/scripts/in
 Trivial changes (`<= 40` changed lines and no new files in the main source folder) can skip the process using the `no-plan` PR label. All non-trivial changes follow six steps:
 
 1. **Plan** — Investigate read-only, propose the approach, and wait for human approval.
-2. **Plan Doc** — Scaffold automatically with `node scripts/ticket.mjs new "<Topic>" [--type Feature] [--branch]` or copy `docs/plans/_template.plan.md` to `docs/plans/<PREFIX>-Plan-<Topic>-<YYYY-MM>.plan.md` with `- [ ]` checkboxes for Acceptance Criteria and Steps.
+2. **Plan Doc** — Scaffold automatically with `node scripts/ticket.mjs new "<Topic>" [--type Feature] [--branch]` or copy `docs/plans/_template.plan.md` to `docs/plans/<PREFIX>-Plan-<Topic>-<YYYY-MM>.plan.md` with `- [ ]` checkboxes for Acceptance Criteria and Steps. Plans bigger than one PR are split into sequential plans via `node scripts/ticket.mjs split <plan> --after <#|query>`.
 3. **Ticket (`create`)** — Run `node scripts/ticket.mjs create <plan> --agent <Claude|Codex|Gemini|Other>`. Supports **Local mode** (`local://<key>`, zero external setup) and **Notion mode** (deduplicated via `Dev Ticket Key`).
 4. **Implement (`start`, `prime` & `log`)** — Branch, run `node scripts/ticket.mjs start`, and tick each checkbox as it is completed.
+   - Switch or isolate worktrees on-demand with `node scripts/ticket.mjs switch [<plan|branch>]`.
    - Cold starts: run `node scripts/ticket.mjs prime` for an instant 20-line session primer, or `node scripts/ticket.mjs overview` for multi-repo status.
    - Every ticked acceptance criterion must end with concise `verified: <how and result>` evidence. Uncompleted items are never deleted—mark them `deferred: <reason>`.
-   - When pausing or switching AI clients, run `node scripts/ticket.mjs log --agent <client> --message "<done>; next: <step>; open: <questions>"`.
-5. **Review (`pack` & `review`)** — Run `node scripts/ticket.mjs pack [--test]` (0 LLM tokens, embeds test results with `--test`) to produce a compact review packet. Run a single-pass review (via the `quick-review` skill, a fresh session, or a second AI client) and stamp the result:
+   - When pausing or switching AI clients, run `node scripts/ticket.mjs handoff --agent <client> --done "<done>" --next "<step>" [--open "<questions>"]` (or `log`).
+5. **Review (`pack` & `review`)** — Run `node scripts/ticket.mjs pack [--test]` (0 LLM tokens, embeds test results with `--test`) to produce a compact review packet.
+   - Verify specific tiers with `node scripts/ticket.mjs verify [--tier <name>|--all]`.
+   - Generate structured subagent prompts with `node scripts/ticket.mjs review --prompt`.
+   - Run a single-pass or dual-pass review (via `quick-review`, fresh session, or second AI) and stamp the result:
    ```powershell
    node scripts/ticket.mjs review --agent <client> --verdict <pass|warn|block> --summary "<findings>"
+   # Or dual-pass review:
+   node scripts/ticket.mjs review --agent <client> --standards pass --spec pass --summary "<findings>"
    ```
-6. **Finish (`check` & `ship`)** — Verify close-out with `node scripts/ticket.mjs check`, open the PR, and link it via `node scripts/ticket.mjs ship --pr <url>`. GitHub Actions (`plan-check.yml`) blocks PRs with open items, unverified criteria, deleted checkboxes, or a `block` review verdict.
+6. **Finish (`check` & `ship`)** — Verify close-out and working-tree hygiene with `node scripts/ticket.mjs check [--strict]`, open the PR, and link it via `node scripts/ticket.mjs ship --pr <url>` (or run `node scripts/ticket.mjs pr [--verify] [--auto]`). GitHub Actions (`plan-check.yml`) blocks PRs with open items, unverified criteria, deleted checkboxes, hygiene violations, or a `block` review verdict.
 
 *(Optional safety guardrail: run `node scripts/ticket.mjs hook install` to block accidental direct pushes to protected branches like `main`.)*
 
@@ -108,12 +117,15 @@ AI-Dev-Workflow/
 Requires **Node.js 22+**. When `<plan>` is omitted on a feature branch, `ticket.mjs` automatically resolves the active plan for the current branch.
 
 ```powershell
-# 1. Plan Scaffolding & Single-Command Ignition
+# 1. Plan Scaffolding, Splitting & Ignition
 # Automatically creates docs/plans/<PREFIX>-Plan-<Topic>-<YYYY-MM>.plan.md
 node scripts/ticket.mjs new "Smart Shortcut Suggestions" --type Feature [--branch]
 
 # Fast one-command ignition: scaffold, set criteria, checkout branch, ticket, and start Doing
 node scripts/ticket.mjs new "Fast Feature" --summary "..." --criteria "c1|c2" --steps "s1|s2" --branch --create --start --agent Gemini
+
+# Split an oversized plan into Part 1 and Part 2 without deleting checkboxes (defers moved items)
+node scripts/ticket.mjs split docs/plans/ADW-Plan-Big-Feature.plan.md --after 3 [--title "Part 2 Title"]
 
 # 2. Ticket Lifecycle
 # Create ticket (Notion Task or local:// key)
@@ -122,9 +134,14 @@ node scripts/ticket.mjs create docs/plans/ADW-Plan-Example-2026-11.plan.md --age
 # Start work on a feature branch (records branch + worktree; optionally creates ticket if missing)
 node scripts/ticket.mjs start [--create]
 
-# 3. Agent Session Ignition, Zero-Token Ticking & Handoff
+# 3. Agent Session Ignition, Worktree Switching & Handoff
 # Prints a compact ~20-line context primer with numbered [1], [2] checkboxes for fresh chat sessions
 node scripts/ticket.mjs prime
+
+# Instant context switching into an isolated worktree with .env setup (or return to main)
+node scripts/ticket.mjs switch [<plan|branch>] [--path]
+# Shell navigation alias helper:
+cd $(node scripts/ticket.mjs switch <branch> --path)
 
 # Tick checkboxes by index or substring without editing markdown files (enforces --verified on criteria)
 node scripts/ticket.mjs tick 1 --verified "tests pass"
@@ -139,16 +156,26 @@ node scripts/ticket.mjs resume
 # View active plans and branch status across all known repositories
 node scripts/ticket.mjs overview
 
-# 4. Review & Verification
-# Generate a 0-token review packet; optionally embed verifyCommand results
-node scripts/ticket.mjs pack [--test]
+# 4. Review, Tiered Verification & Hygiene
+# Run configured verification tiers (e.g. fast, test, full) or all tiers
+node scripts/ticket.mjs verify [--tier <name>|--all]
 
-# Record a single-pass code review verdict (pass | warn | block)
-node scripts/ticket.mjs review --agent Codex --verdict pass --summary "Criteria verified, no scope creep"
+# Inspect working tree for disallowed artifacts (.tmp, test-results, coverage, *.log), oversized files, and dangling worktrees
+node scripts/ticket.mjs hygiene
+
+# Generate a 0-token review packet; optionally embed test results for a specific tier
+node scripts/ticket.mjs pack [--test] [--tier <name>]
+
+# Generate a structured review prompt for sub-agents or secondary models
+node scripts/ticket.mjs review --prompt
+
+# Record a single-pass or dual-pass code review verdict (pass | warn | block)
+node scripts/ticket.mjs review --agent Codex --verdict pass --summary "Criteria verified, clean hygiene"
+node scripts/ticket.mjs review --agent Gemini --standards pass --spec pass --summary "Dual-pass pass"
 
 # 5. Finish & Gatekeeper
-# Verify all checkboxes are ticked/deferred and criteria carry verified: evidence
-node scripts/ticket.mjs check
+# Verify all checkboxes are closed and working tree hygiene is clean (--strict to fail on warnings)
+node scripts/ticket.mjs check [--strict]
 
 # Automated PR creation & ticket shipping in one command (pushes branch, verifies, opens PR, auto-merges)
 node scripts/ticket.mjs pr [--verify] [--auto] [--draft]
@@ -180,7 +207,7 @@ node scripts/ticket.mjs exec "git status --short"
 # Install pure shell pre-push hook to prevent direct push to protected branches
 node scripts/ticket.mjs hook install
 
-# Run the 44-test hermetic test suite
+# Run the 51-test hermetic test suite
 node --test scripts/ticket.test.mjs
 ```
 
