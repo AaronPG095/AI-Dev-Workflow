@@ -117,6 +117,9 @@ const BOOLEAN_FLAGS = new Set([
   '--create',
   '--start',
   '--strict',
+  '--path',
+  '--prompt',
+  '--no-create',
 ]);
 for (let i = 0; i < rest.length; i++) {
   const a = rest[i];
@@ -1451,29 +1454,122 @@ const commands = {
 
   async review() {
     const plan = onePlan();
+
+    if (opts.prompt) {
+      const branch =
+        plan.meta.branch ||
+        git(['rev-parse', '--abbrev-ref', 'HEAD'], { allowFail: true }) ||
+        'main';
+      const resolvedVerify =
+        resolveVerifyCommand(config, 'full') ||
+        resolveVerifyCommand(config, 'test');
+      const verifyCmd = resolvedVerify
+        ? resolvedVerify.cmd
+        : config.verifyCommand || 'npm test';
+      const criteria = section(plan.body, 'Acceptance criteria') || '(none)';
+
+      const promptText = [
+        `# Single-Pass Review Request: ${plan.meta.title || plan.rel}`,
+        `Plan: ${plan.rel} | Branch: ${branch}`,
+        `Verify Command: \`${verifyCmd}\``,
+        '',
+        '## Acceptance Criteria to Verify',
+        criteria,
+        '',
+        '## Review Rubric',
+        '1. Spec Fidelity: Does the implementation satisfy every acceptance criterion above?',
+        '2. Test & Regressions: Does the verify command pass without test failures or regressions?',
+        '3. Verification Honesty: Is every ticked criterion backed by genuine evidence?',
+        '4. Code Quality & Standards: Does the change conform to repository standards with clean hygiene?',
+        '',
+        '## Verdict Stamp Instructions',
+        `Run: node scripts/ticket.mjs review ${plan.rel} --agent <you> --verdict <pass|warn|block> --summary "<concise findings>"`,
+        'Or dual-pass: --standards <pass|warn|block> --spec <pass|warn|block>',
+      ].join('\n');
+
+      console.log(promptText);
+      return;
+    }
+
     const agent = opts.agent || process.env.AI_CLIENT || '';
     if (!config.captureSources.includes(agent))
       fail(`--agent must be one of: ${config.captureSources.join(', ')}`);
-    const verdict = (opts.verdict || 'pass').toLowerCase();
+
+    let verdict = (opts.verdict || '').toLowerCase();
+    let dualPassMeta = '';
+
+    if (opts.standards || opts.spec) {
+      const standards = (opts.standards || 'pass').toLowerCase();
+      const spec = (opts.spec || 'pass').toLowerCase();
+      if (!VERDICTS.includes(standards))
+        fail(`--standards must be one of: ${VERDICTS.join(', ')}`);
+      if (!VERDICTS.includes(spec))
+        fail(`--spec must be one of: ${VERDICTS.join(', ')}`);
+
+      dualPassMeta = ` [standards: ${standards}, spec: ${spec}]`;
+      if (standards === 'block' || spec === 'block') {
+        verdict = 'block';
+      } else if (standards === 'warn' || spec === 'warn') {
+        verdict = 'warn';
+      } else {
+        verdict = 'pass';
+      }
+    }
+
+    if (!verdict) verdict = 'pass';
     if (!VERDICTS.includes(verdict))
       fail(`--verdict must be one of: ${VERDICTS.join(', ')}`);
-    const summary = (opts.summary || opts.message || '')
+
+    const summary = (
+      opts.summary ||
+      opts.message ||
+      (dualPassMeta ? `Dual-pass review${dualPassMeta}` : '')
+    )
       .replace(/\s+/g, ' ')
       .trim();
     if (!summary)
       fail(
         'usage: node scripts/ticket.mjs review [<plan>] --agent <client> --verdict <pass|warn|block> --summary "<findings>"',
       );
+
+    // Guardrail: if stamping "pass", verify criteria & hygiene
+    if (verdict === 'pass' && !opts.force) {
+      const openCriteria = section(plan.body, 'Acceptance criteria')
+        .split('\n')
+        .filter((l) => /^\s*- \[ \]/.test(l) && !/deferred:/i.test(l));
+      if (openCriteria.length > 0) {
+        fail(
+          `cannot stamp review verdict "pass": ${openCriteria.length} acceptance criteria remain unticked. Complete criteria first or pass --force.`,
+        );
+      }
+      const unverified = section(plan.body, 'Acceptance criteria')
+        .split('\n')
+        .filter((l) => /^\s*- \[[xX]\]/.test(l) && !/verified:/i.test(l));
+      if (unverified.length > 0) {
+        fail(
+          `cannot stamp review verdict "pass": ${unverified.length} criterion ticked without verified evidence. Pass --force to override.`,
+        );
+      }
+      const hyg = checkHygiene();
+      if (!hyg.clean) {
+        fail(
+          `cannot stamp review verdict "pass": working tree has hygiene issues:\n- ${hyg.issues.join('\n- ')}\nPass --force to override.`,
+        );
+      }
+    }
+
     const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ');
     plan.meta.reviewedBy = agent;
     plan.meta.reviewVerdict = verdict;
     plan.body = appendToSection(
       plan.body,
       'Progress log',
-      `- ${stamp} UTC, ${agent} (review: ${verdict}): ${summary}`,
+      `- ${stamp} UTC, ${agent} (review: ${verdict}${dualPassMeta}): ${summary}`,
     );
     writePlan(plan);
-    console.log(`Review (${verdict}) recorded in ${plan.rel} by ${agent}`);
+    console.log(
+      `Review (${verdict}${dualPassMeta}) recorded in ${plan.rel} by ${agent}`,
+    );
   },
 
   async check() {
@@ -2617,6 +2713,345 @@ const commands = {
     } else {
       fail('working tree hygiene check failed');
     }
+  },
+
+  async switch() {
+    const rawArg = opts.files[0] || opts.branch || opts.plan || '';
+    let targetBranch = null;
+    let targetPlan = null;
+
+    if (rawArg === 'main' || rawArg === 'master') {
+      if (opts.path) {
+        console.log(repoRoot);
+        return;
+      }
+      if (process.cwd() === repoRoot) {
+        console.log(`Already on main repository checkout: ${repoRoot}`);
+      } else {
+        console.log(`Main repository checkout: ${repoRoot}`);
+        console.log(`Run: cd "${repoRoot}"`);
+      }
+      return;
+    }
+
+    if (
+      rawArg.endsWith('.plan.md') ||
+      (rawArg && existsSync(resolve(rawArg)))
+    ) {
+      targetPlan = readPlan(rawArg);
+    } else if (rawArg) {
+      const all = allPlans();
+      const byName = all.find(
+        (p) =>
+          basename(p.rel, '.plan.md')
+            .toLowerCase()
+            .includes(rawArg.toLowerCase()) ||
+          (p.meta.branch &&
+            p.meta.branch.toLowerCase().includes(rawArg.toLowerCase())),
+      );
+      if (byName) {
+        targetPlan = byName;
+      } else {
+        targetBranch = rawArg;
+      }
+    } else {
+      try {
+        targetPlan = resolveActivePlan();
+      } catch {
+        targetBranch = 'main';
+      }
+    }
+
+    if (targetPlan) {
+      targetBranch =
+        targetPlan.meta.branch ||
+        `feat/${basename(targetPlan.rel, '.plan.md')
+          .replace(/^[^/]+-Plan-/, '')
+          .toLowerCase()}`;
+    }
+
+    if (!targetBranch || targetBranch === 'main' || targetBranch === 'master') {
+      if (opts.path) {
+        console.log(repoRoot);
+        return;
+      }
+      console.log(`Main repository checkout: ${repoRoot}`);
+      console.log(`Run: cd "${repoRoot}"`);
+      return;
+    }
+
+    const name =
+      (targetPlan && targetPlan.meta.worktree) ||
+      targetBranch.replace(/^[^/]+\//, '').replace(/[^a-zA-Z0-9_-]+/g, '-');
+    const targetDir = resolve(repoRoot, '.worktrees', name);
+
+    if (existsSync(targetDir)) {
+      if (opts.path) {
+        console.log(targetDir);
+        return;
+      }
+      console.log(`Worktree exists at: ${targetDir} (branch: ${targetBranch})`);
+      console.log(`Run: cd "${targetDir}"`);
+      return;
+    }
+
+    if (opts.noCreate) {
+      fail(`worktree does not exist: ${targetDir}`);
+    }
+
+    // Create worktree on-demand
+    mkdirSync(resolve(repoRoot, '.worktrees'), { recursive: true });
+    const branchExists = !!git(['rev-parse', '--verify', targetBranch], {
+      allowFail: true,
+    });
+    const addArgs = ['worktree', 'add'];
+    if (!branchExists) addArgs.push('-b', targetBranch);
+    addArgs.push(targetDir);
+    if (branchExists) addArgs.push(targetBranch);
+
+    try {
+      execFileSync('git', addArgs, {
+        cwd: repoRoot,
+        encoding: 'utf8',
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+    } catch (err) {
+      fail(`git worktree add failed: ${err.stderr || err.message}`);
+    }
+
+    const envPath = join(repoRoot, '.env');
+    if (existsSync(envPath)) {
+      try {
+        writeFileSync(join(targetDir, '.env'), readFileSync(envPath));
+      } catch {}
+    }
+
+    if (targetPlan) {
+      targetPlan.meta.worktree = name;
+      targetPlan.meta.branch = targetBranch;
+      writePlan(targetPlan);
+    }
+
+    if (opts.path) {
+      console.log(targetDir);
+      return;
+    }
+    console.log(`Created worktree at: ${targetDir} (branch: ${targetBranch})`);
+    console.log(`Run: cd "${targetDir}"`);
+  },
+
+  async split() {
+    const planArg = opts.files.find((f) => f.endsWith('.plan.md')) || opts.plan;
+    let plan = null;
+    try {
+      plan = planArg ? readPlan(planArg) : resolveActivePlan();
+    } catch {
+      fail(
+        'usage: node scripts/ticket.mjs split [<plan>] --after <#|query> [--title "<Part 2 Title>"]',
+      );
+    }
+
+    const after = opts.after || opts.at;
+    if (!after) {
+      fail(
+        'split requires --after <#|query> specifying the last item of Part 1. Example: node scripts/ticket.mjs split --after 3',
+      );
+    }
+
+    const { lines, items } = findCheckboxes(plan.body);
+    const criteriaItems = items.filter(
+      (it) => it.section.toLowerCase() === 'acceptance criteria',
+    );
+    const stepItems = items.filter(
+      (it) => it.section.toLowerCase() === 'steps',
+    );
+
+    let splitCriteriaIndex = -1;
+    let splitStepIndex = -1;
+
+    const isNum = /^\d+$/.test(String(after).trim());
+    if (isNum) {
+      const idx = parseInt(String(after).trim(), 10);
+      if (idx >= 1 && idx <= criteriaItems.length) {
+        splitCriteriaIndex = idx - 1;
+        splitStepIndex = Math.min(idx - 1, stepItems.length - 1);
+      } else {
+        const match = items.find((it) => it.openIndex === idx);
+        if (match) {
+          if (match.section.toLowerCase() === 'acceptance criteria') {
+            splitCriteriaIndex = criteriaItems.indexOf(match);
+            splitStepIndex = Math.floor(stepItems.length / 2);
+          } else {
+            splitStepIndex = stepItems.indexOf(match);
+            splitCriteriaIndex = Math.floor(criteriaItems.length / 2);
+          }
+        } else {
+          splitCriteriaIndex = Math.min(idx - 1, criteriaItems.length - 1);
+          splitStepIndex = Math.floor(stepItems.length / 2);
+        }
+      }
+    } else {
+      const query = String(after).toLowerCase();
+      const match = items.find((it) => it.text.toLowerCase().includes(query));
+      if (!match) {
+        fail(`split target "${after}" not found in ${plan.rel}`);
+      }
+      if (match.section.toLowerCase() === 'acceptance criteria') {
+        splitCriteriaIndex = criteriaItems.indexOf(match);
+        splitStepIndex = Math.floor(stepItems.length / 2);
+      } else {
+        splitStepIndex = stepItems.indexOf(match);
+        splitCriteriaIndex = Math.floor(criteriaItems.length / 2);
+      }
+    }
+
+    if (splitCriteriaIndex < 0 && criteriaItems.length > 1) {
+      splitCriteriaIndex = Math.floor(criteriaItems.length / 2) - 1;
+    }
+    if (splitStepIndex < 0 && stepItems.length > 1) {
+      splitStepIndex = Math.floor(stepItems.length / 2) - 1;
+    }
+
+    const part1Criteria = criteriaItems.slice(0, splitCriteriaIndex + 1);
+    const part2Criteria = criteriaItems.slice(splitCriteriaIndex + 1);
+    const part1Steps = stepItems.slice(0, splitStepIndex + 1);
+    const part2Steps = stepItems.slice(splitStepIndex + 1);
+
+    if (part2Criteria.length === 0 && part2Steps.length === 0) {
+      fail(
+        'cannot split plan: no items remain for Part 2 after the split point.',
+      );
+    }
+
+    const baseName = basename(plan.rel, '.plan.md');
+    const month = today().slice(0, 7);
+    let part2File = '';
+    if (/-Part-\d+/.test(baseName)) {
+      part2File =
+        baseName.replace(
+          /-Part-(\d+)/,
+          (_, n) => `-Part-${parseInt(n, 10) + 1}`,
+        ) + '.plan.md';
+    } else if (new RegExp(`-${month}$`).test(baseName)) {
+      part2File = baseName.replace(
+        new RegExp(`-${month}$`),
+        `-Part-2-${month}.plan.md`,
+      );
+    } else {
+      part2File = `${baseName}-Part-2.plan.md`;
+    }
+    const part2Rel = join(config.plansDir, part2File).replace(/\\/g, '/');
+    const part2Full = join(repoRoot, part2Rel);
+
+    if (existsSync(part2Full)) {
+      fail(`target Part 2 plan already exists: ${part2Rel}`);
+    }
+
+    const part1Title = plan.meta.title || baseName;
+    let part2Title = opts.title || '';
+    if (!part2Title) {
+      if (/\(Part \d+\)/.test(part1Title)) {
+        part2Title = part1Title.replace(
+          /\(Part (\d+)\)/,
+          (_, n) => `(Part ${parseInt(n, 10) + 1})`,
+        );
+      } else {
+        part2Title = `${part1Title} (Part 2)`;
+      }
+    }
+
+    if (!/\(Part \d+\)/.test(plan.meta.title)) {
+      plan.meta.title = `${plan.meta.title} (Part 1)`;
+    }
+
+    const movedSet = new Set([
+      ...part2Criteria.map((it) => it.lineIndex),
+      ...part2Steps.map((it) => it.lineIndex),
+    ]);
+
+    for (const lineIdx of movedSet) {
+      const it = items.find((item) => item.lineIndex === lineIdx);
+      if (it && !it.isDeferred) {
+        lines[lineIdx] =
+          `${it.prefix} ${it.delim}${it.text} deferred: moved to Part 2 (${part2Rel})`;
+      }
+    }
+
+    plan.body = lines.join('\n');
+    plan.body = appendToSection(
+      plan.body,
+      'Notes',
+      `Split into Part 2: [Part 2](${part2Rel})`,
+    );
+    writePlan(plan);
+
+    const part2CriteriaText = part2Criteria.length
+      ? part2Criteria
+          .map((it) => `- [ ] ${it.text.replace(/\s*deferred:.*$/i, '')}`)
+          .join('\n')
+      : '- [ ] <Checkable outcome>';
+
+    const part2StepsText = part2Steps.length
+      ? part2Steps
+          .map((it) => `- [ ] ${it.text.replace(/\s*deferred:.*$/i, '')}`)
+          .join('\n')
+      : '- [ ] <Step>';
+
+    const part2Summary = `Part 2 continuation of ${plan.rel}.\nCovers subsequent milestones and remaining acceptance criteria.`;
+
+    const part2Content = [
+      '---',
+      `title: ${part2Title}`,
+      'ticket:',
+      'status: draft',
+      `priority: ${plan.meta.priority || 'medium'}`,
+      `state: ${plan.meta.state || 'flow'}`,
+      `due: ${plan.meta.due || ''}`,
+      '---',
+      `# ${part2Title.replace(/^[^:]+:\s*/, '')}`,
+      '',
+      '## Summary',
+      '',
+      part2Summary,
+      '',
+      '## Acceptance criteria',
+      '',
+      part2CriteriaText,
+      '',
+      '## Steps',
+      '',
+      part2StepsText,
+      '',
+      '## Risks',
+      '',
+      'Inherited risks from Part 1; consult parent plan for architectural context.',
+      '',
+      '## Out of scope',
+      '',
+      `Scope completed in Part 1 (${plan.rel}).`,
+      '',
+      '## Notes',
+      '',
+      `Part 1 plan: [Part 1](${plan.rel})`,
+      '',
+      '## Progress log',
+      '',
+      '<!-- One line per session/review, added with `ticket.mjs log` or `ticket.mjs review` -->',
+      '',
+    ].join('\n');
+
+    writeFileSync(part2Full, part2Content);
+
+    console.log(`Plan split successfully.`);
+    console.log(
+      `Part 1: ${plan.rel} (${part1Criteria.length} criteria, ${part1Steps.length} steps remaining; ${movedSet.size} deferred to Part 2)`,
+    );
+    console.log(
+      `Part 2: ${part2Rel} (${part2Criteria.length} criteria, ${part2Steps.length} steps)`,
+    );
+    console.log(
+      `To ticket Part 2: node scripts/ticket.mjs create ${part2Rel} --agent <client>`,
+    );
   },
 };
 

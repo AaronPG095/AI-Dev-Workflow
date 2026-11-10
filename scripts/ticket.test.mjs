@@ -1158,3 +1158,226 @@ test('pack with --tier executes specific tier and embeds output', (t) => {
   assert.match(rPack.stdout, /fast-pack-verified/);
   assert.match(rPack.stdout, /Hygiene check: clean/);
 });
+
+test('switch command navigates to main checkout, creates worktrees, and supports --path', (t) => {
+  const f = fixture(t);
+  f.git('init', '-b', 'main');
+  f.git('config', 'user.name', 'Test');
+  f.git('config', 'user.email', 'test@example.invalid');
+  f.git('add', '.');
+  f.git('commit', '-m', 'initial commit');
+
+  // Switch to main
+  const rMain = f.run('switch', ['main'], [], { omitPlan: true });
+  assert.equal(rMain.status, 0, rMain.stderr);
+  assert.match(rMain.stdout, /Already on main repository checkout/);
+
+  // Switch to main with --path outputs raw repoRoot
+  const rMainPath = f.run('switch', ['main', '--path'], [], { omitPlan: true });
+  assert.equal(rMainPath.status, 0, rMainPath.stderr);
+  assert.equal(rMainPath.stdout.trim(), f.root);
+
+  // Create .env in root
+  writeFileSync(join(f.root, '.env'), 'SECRET_TOKEN=xyz123\n');
+
+  // Switch to plan creates worktree on-demand and propagates .env
+  const rPlanSwitch = f.run('switch', [f.plan], [], { omitPlan: true });
+  assert.equal(rPlanSwitch.status, 0, rPlanSwitch.stderr);
+  assert.match(rPlanSwitch.stdout, /Created worktree at/);
+
+  const wtDir = join(f.root, '.worktrees', 'test');
+  assert.equal(existsSync(wtDir), true, 'worktree directory should exist');
+  assert.equal(
+    existsSync(join(wtDir, '.env')),
+    true,
+    'worktree should inherit .env',
+  );
+
+  // Switching again detects existing worktree
+  const rPlanExisting = f.run('switch', [f.plan], [], { omitPlan: true });
+  assert.equal(rPlanExisting.status, 0, rPlanExisting.stderr);
+  assert.match(rPlanExisting.stdout, /Worktree exists at:/);
+
+  // Switching with --path returns path
+  const rPlanPath = f.run('switch', [f.plan, '--path'], [], { omitPlan: true });
+  assert.equal(rPlanPath.status, 0, rPlanPath.stderr);
+  assert.equal(rPlanPath.stdout.trim(), wtDir);
+
+  // Switch with --no-create on non-existent branch fails
+  const rNoCreate = f.run(
+    'switch',
+    ['non-existent-branch', '--no-create'],
+    [],
+    {
+      omitPlan: true,
+    },
+  );
+  assert.equal(rNoCreate.status, 1);
+  assert.match(rNoCreate.stderr, /worktree does not exist/);
+});
+
+test('split command partitions plan into Part 1 and Part 2 with deferred items and traceability', (t) => {
+  const f = fixture(t);
+  const planPath = f.plan;
+  const multiPlanContent = `---
+title: Plan - Feature: Mega Refactor
+ticket: local://FO:Mega-Refactor
+status: in-progress
+priority: high
+state: flow
+due: 2026-12-01
+---
+# Mega Refactor
+
+## Summary
+
+Mega refactor across multiple areas.
+
+## Acceptance criteria
+
+- [x] Phase 1 core model verified: manual
+- [ ] Phase 2 API endpoints
+- [ ] Phase 3 Frontend view
+
+## Steps
+
+- [x] Implement core model
+- [ ] Implement API endpoints
+- [ ] Implement frontend view
+
+## Notes
+
+Initial scope.
+`;
+  writeFileSync(planPath, multiPlanContent);
+
+  // Split after item 1
+  const rSplit = f.run('split', [planPath, '--after', '1'], [], {
+    omitPlan: true,
+  });
+  assert.equal(rSplit.status, 0, rSplit.stderr);
+  assert.match(rSplit.stdout, /Plan split successfully/);
+
+  // Verify Part 1 contents
+  const part1Updated = readFileSync(planPath, 'utf8');
+  assert.match(part1Updated, /title: Plan - Feature: Mega Refactor \(Part 1\)/);
+  assert.match(
+    part1Updated,
+    /- \[ \] Phase 2 API endpoints deferred: moved to Part 2/,
+  );
+  assert.match(
+    part1Updated,
+    /- \[ \] Phase 3 Frontend view deferred: moved to Part 2/,
+  );
+  assert.match(
+    part1Updated,
+    /Split into Part 2: \[Part 2\]\(docs\/plans\/FO-Plan-Test-Part-2\.plan\.md\)/,
+  );
+
+  // Verify Part 2 was created
+  const part2Path = join(f.root, 'docs/plans/FO-Plan-Test-Part-2.plan.md');
+  assert.equal(existsSync(part2Path), true, 'Part 2 plan should exist');
+
+  const part2Content = readFileSync(part2Path, 'utf8');
+  assert.match(part2Content, /title: Plan - Feature: Mega Refactor \(Part 2\)/);
+  assert.match(part2Content, /status: draft/);
+  assert.match(part2Content, /priority: high/);
+  assert.match(part2Content, /- \[ \] Phase 2 API endpoints/);
+  assert.match(part2Content, /- \[ \] Phase 3 Frontend view/);
+  assert.match(part2Content, /- \[ \] Implement API endpoints/);
+  assert.match(part2Content, /- \[ \] Implement frontend view/);
+  assert.match(
+    part2Content,
+    /Part 1 plan: \[Part 1\]\(docs\/plans\/FO-Plan-Test\.plan\.md\)/,
+  );
+});
+
+test('review enhancements: --prompt, dual-pass metadata, and verdict guardrails', (t) => {
+  const f = fixture(
+    t,
+    'ticket: https://www.notion.so/40a0b9c6786f817fab0ff2059ad410e3\n',
+    [],
+    { verifyCommand: 'npm test' },
+  );
+
+  f.git('init', '-b', 'main');
+  f.git('config', 'user.name', 'Test');
+  f.git('config', 'user.email', 'test@example.invalid');
+  f.git('add', '.');
+  f.git('commit', '-m', 'initial commit');
+
+  // 1. review --prompt emits formatted review request
+  const rPrompt = f.run('review', ['--prompt'], [], { omitPlan: true });
+  assert.equal(rPrompt.status, 0, rPrompt.stderr);
+  assert.match(rPrompt.stdout, /# Single-Pass Review Request/);
+  assert.match(rPrompt.stdout, /## Acceptance Criteria to Verify/);
+  assert.match(rPrompt.stdout, /## Review Rubric/);
+
+  // 2. review guardrail: unticked criteria rejects pass verdict without --force
+  writeFileSync(
+    f.plan,
+    readFileSync(f.plan, 'utf8').replace(
+      '- [x] Works verified: fixture',
+      '- [ ] Works to be done',
+    ),
+  );
+
+  const rGuardFail = f.run('review', [
+    '--agent',
+    'Codex',
+    '--verdict',
+    'pass',
+    '--summary',
+    'premature pass',
+  ]);
+  assert.equal(rGuardFail.status, 1);
+  assert.match(
+    rGuardFail.stderr,
+    /cannot stamp review verdict "pass": 1 acceptance criteria remain unticked/,
+  );
+
+  // Passing --force overrides the guardrail
+  const rGuardForce = f.run('review', [
+    '--agent',
+    'Codex',
+    '--verdict',
+    'pass',
+    '--summary',
+    'forced pass',
+    '--force',
+  ]);
+  assert.equal(rGuardForce.status, 0, rGuardForce.stderr);
+
+  // 3. dual-pass review flags
+  const rDualWarn = f.run('review', [
+    '--agent',
+    'Gemini',
+    '--standards',
+    'warn',
+    '--spec',
+    'pass',
+    '--summary',
+    'minor standards warning',
+  ]);
+  assert.equal(rDualWarn.status, 0, rDualWarn.stderr);
+  assert.match(
+    rDualWarn.stdout,
+    /Review \(warn \[standards: warn, spec: pass\]\) recorded/,
+  );
+
+  const rDualBlock = f.run('review', [
+    '--agent',
+    'Gemini',
+    '--standards',
+    'pass',
+    '--spec',
+    'block',
+    '--summary',
+    'spec regression found',
+  ]);
+  assert.equal(rDualBlock.status, 0, rDualBlock.stderr);
+  assert.match(
+    rDualBlock.stdout,
+    /Review \(block \[standards: pass, spec: block\]\) recorded/,
+  );
+});
