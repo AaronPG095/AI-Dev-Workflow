@@ -1,7 +1,7 @@
 ---
 title: Plan - Bug: Versioned Workflow Distribution
 ticket: local://ADW:ADW-Plan-Versioned-Workflow-Distribution-2026-11
-status: in-progress
+status: shipped
 priority: high
 devTicketKey: ADW:ADW-Plan-Versioned-Workflow-Distribution-2026-11
 agent: Codex
@@ -11,6 +11,7 @@ startedAt: 2026-11-11
 reviewedBy: Codex
 reviewVerdict: pass
 reviewFingerprint: ace7715f3951f43672fb567805d39a0de1330b5037f4cc96443533af6b5bcb2f
+pr: https://github.com/AaronPG095/AI-Dev-Workflow/pull/22
 ---
 
 # Versioned Workflow Distribution
@@ -37,4 +38,5 @@ Aaron approved the repair sequence: “Plan approved.” Aaron directed executio
 
 ## Progress log
 - 2026-11-11 11:16 UTC, Codex (review: pass): Verified one pinned manifest across installers, sync and doctor. Upgrade, missing-download, config preservation and the full suite pass.
+- 2026-11-11 11:16 UTC, Codex (handoff): Done: Use one versioned manifest for installers, sync, and doctor. Pin downloads to one release, preserve repo config, and make the scheduled job report drift for planned updates.; Next: Pilot the pinned release in TokenHUD, then roll it out to the remaining fleet.; Open: none; Tree: 1 dirty file(s)
 
