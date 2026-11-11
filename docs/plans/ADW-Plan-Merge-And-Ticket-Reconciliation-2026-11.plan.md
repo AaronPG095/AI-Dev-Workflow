@@ -1,7 +1,7 @@
 ---
 title: Plan - Bug: Merge and Ticket Reconciliation
 ticket: local://ADW:ADW-Plan-Merge-And-Ticket-Reconciliation-2026-11
-status: in-progress
+status: shipped
 priority: high
 devTicketKey: ADW:ADW-Plan-Merge-And-Ticket-Reconciliation-2026-11
 agent: Codex
@@ -11,6 +11,7 @@ startedAt: 2026-11-11
 reviewedBy: Codex
 reviewVerdict: pass
 reviewFingerprint: c4b15cabe4c625b0b8a9ce6e4252df1bbf52e52cb3b06139ac586702be3bc241
+pr: https://github.com/AaronPG095/AI-Dev-Workflow/pull/21
 ---
 
 # Merge and Ticket Reconciliation
@@ -37,4 +38,5 @@ Aaron approved the repair sequence: “Plan approved.” Aaron directed executio
 
 ## Progress log
 - 2026-11-11 11:12 UTC, Codex (review: pass): Reviewed full PR file inventory, idempotent completion, and protected-ref local state. Git and mocked Notion fixtures pass.
+- 2026-11-11 11:13 UTC, Codex (handoff): Done: Reconcile merge tickets from the full committed PR file list, preserve the original completion date on retries, and derive local completion from protected branches.; Next: Start the versioned workflow distribution repair.; Open: none; Tree: 1 dirty file(s)
 
