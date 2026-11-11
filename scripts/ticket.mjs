@@ -27,7 +27,8 @@ import {
   unlinkSync,
   mkdirSync,
   renameSync,
-  rmSync,
+  lstatSync,
+  realpathSync,
   cpSync,
   statSync,
 } from 'node:fs';
@@ -134,7 +135,7 @@ const BOOLEAN_FLAGS = new Set([
 for (let i = 0; i < rest.length; i++) {
   const a = rest[i];
   const isFleetPr = command === 'fleet' && a === '--pr';
-  if (BOOLEAN_FLAGS.has(a) || isFleetPr) {
+  if ((BOOLEAN_FLAGS.has(a) && !(a === '--branch' && command === 'wt' && rest[0] === 'new')) || isFleetPr) {
     const rawKey = a.slice(2);
     const camel = rawKey.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
     opts[rawKey] = true;
@@ -602,14 +603,164 @@ const text = (content) => [{ text: { content: content.slice(0, 1990) } }];
 
 // ---------- plan resolution & diff helpers ----------
 
-function allPlans() {
-  const dir = join(repoRoot, config.plansDir);
+function allPlans(root = repoRoot) {
+  const dir = join(root, config.plansDir);
   if (!existsSync(dir)) return [];
-  return readdirSync(dir)
-    .filter((f) => f.endsWith('.plan.md') && !f.startsWith('_'))
-    .map((f) => join(dir, f))
+  return readdirSync(dir, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith('.plan.md') && !entry.name.startsWith('_'))
+    .map((entry) => join(dir, entry.name))
     .filter((full) => readFileSync(full, 'utf8').startsWith('---'))
-    .map((full) => readPlan(full));
+    .map((full) => worktreePlan(full, root));
+}
+
+function worktreeGit(dir, args) {
+  return execFileSync('git', ['-C', dir, ...args], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+}
+
+function registeredWorktrees(dir = repoRoot) {
+  return worktreeGit(dir, ['worktree', 'list', '--porcelain', '-z'])
+    .split('\0\0').filter(Boolean).map((record) => {
+      const fields = new Map(record.split('\0').map((field) => {
+        const space = field.indexOf(' ');
+        return space < 0 ? [field, ''] : [field.slice(0, space), field.slice(space + 1)];
+      }));
+      return {
+        path: resolve(fields.get('worktree')),
+        head: fields.get('HEAD'),
+        branch: fields.get('branch')?.replace(/^refs\/heads\//, ''),
+        locked: fields.has('locked'),
+        bare: fields.has('bare'),
+      };
+    });
+}
+
+function comparablePath(path) {
+  const full = resolve(path).replace(/\\/g, '/');
+  return process.platform === 'win32' ? full.toLowerCase() : full;
+}
+
+function containsPath(root, path) {
+  const parent = comparablePath(root);
+  const child = comparablePath(path);
+  return child === parent || child.startsWith(`${parent}/`);
+}
+
+function assertWorktreePath(root, path) {
+  if (!containsPath(root, path)) fail(`path is outside the checkout: ${path}`);
+  for (let entry = path; comparablePath(entry) !== comparablePath(root); entry = dirname(entry)) {
+    if (lstatSync(entry, { throwIfNoEntry: false })?.isSymbolicLink())
+      fail(`worktree path contains a symbolic link: ${entry}`);
+  }
+}
+
+function worktreeIsMerged(root, head) {
+  const branches = config.protectedBranches || ['main', 'master', 'develop'];
+  return branches.flatMap((branch) => [`refs/remotes/origin/${branch}`, `refs/heads/${branch}`])
+    .some((ref) => {
+      try {
+        worktreeGit(root, ['merge-base', '--is-ancestor', head, ref]);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+}
+
+function worktreePlan(full, root) {
+  if (!containsPath(join(root, config.plansDir), full))
+    fail(`plan is outside ${config.plansDir}: ${full}`);
+  assertWorktreePath(root, full);
+  const plan = readPlan(full);
+  plan.rel = relative(root, full).replace(/\\/g, '/');
+  return plan;
+}
+
+function planWorktreeBranch(plan) {
+  return plan.meta.branch || `feat/${basename(plan.rel, '.plan.md')
+    .replace(/^[^/]+-Plan-/, '').toLowerCase()}`;
+}
+
+function worktreePlanClosed(plan) {
+  if (['done', 'shipped'].includes(plan.meta.status)) return true;
+  const { items } = findCheckboxes(plan.body);
+  return items.length > 0 && items.every((item) => item.openIndex === null);
+}
+
+function worktreeCatalog(entries) {
+  const [main, ...linked] = entries;
+  const plans = new Map(allPlans(main.path).map((plan) => [plan.rel, { plan, entry: main }]));
+  for (const entry of linked) {
+    if (!entry.branch || !existsSync(entry.path)) continue;
+    for (const plan of allPlans(entry.path)) {
+      if (planWorktreeBranch(plan) === entry.branch)
+        plans.set(plan.rel, { plan, entry });
+    }
+  }
+  return [...plans.values()];
+}
+
+function ensurePlanWorktree(entries, branch, plan, { name, noCreate = false } = {}) {
+  const [main] = entries;
+  if (main.bare) fail('worktree commands require a non-bare primary checkout');
+  if (typeof branch !== 'string' || !branch || branch.startsWith('-'))
+    fail('a valid worktree branch is required');
+  if (plan && worktreeCatalog(entries).some(({ plan: other }) =>
+    other.rel !== plan.rel && !worktreePlanClosed(other) && planWorktreeBranch(other) === branch))
+    fail(`multiple active plans claim worktree branch: ${branch}`);
+  const existing = entries.find((entry) => entry.branch === branch);
+  if (existing) {
+    if (!existsSync(existing.path)) fail(`registered worktree is missing: ${existing.path}`);
+    if (plan && !existsSync(join(existing.path, plan.rel)))
+      fail(`branch ${branch} is already checked out without ${plan.rel}: ${existing.path}`);
+    return { path: existing.path, created: false };
+  }
+
+  const leaf = name || branch.replace(/^[^/]+\//, '').replace(/[^a-zA-Z0-9_-]+/g, '-');
+  if (!/^[a-zA-Z0-9_-]+$/.test(leaf)) fail(`invalid worktree directory name: ${leaf}`);
+  const parent = join(main.path, '.worktrees');
+  let path = join(parent, leaf);
+  if (!name && entries.some((entry) => comparablePath(entry.path) === comparablePath(path))) {
+    const suffix = createHash('sha256').update(branch).digest('hex').slice(0, 8);
+    path = join(parent, `${leaf}-${suffix}`);
+  }
+  if (noCreate) fail(`worktree does not exist: ${path}`);
+  if (existsSync(path) || entries.some((entry) => comparablePath(entry.path) === comparablePath(path)))
+    fail(`worktree path is already occupied: ${path}`);
+  assertWorktreePath(main.path, parent);
+  if (opts.dryRun) return { path, created: false };
+  if (existsSync(parent) && !containsPath(realpathSync(main.path), realpathSync(parent)))
+    fail(`worktree directory resolves outside the primary checkout: ${parent}`);
+  mkdirSync(parent, { recursive: true });
+  const branchExists = Boolean(git(['show-ref', '--verify', `refs/heads/${branch}`], { allowFail: true }));
+  try {
+    const checkout = branchExists ? branch : worktreeGit(repoRoot, ['rev-parse', 'HEAD']).trim();
+    worktreeGit(main.path, ['worktree', 'add', ...(branchExists ? [] : ['-b', branch]), '--', path, checkout]);
+  } catch (error) {
+    fail(`git worktree add failed: ${error.stderr?.trim() || error.message}`);
+  }
+  const envPath = join(main.path, '.env');
+  const workerEnv = join(path, '.env');
+  if (existsSync(envPath) && !lstatSync(workerEnv, { throwIfNoEntry: false }))
+    cpSync(envPath, workerEnv, { force: false });
+  if (plan) {
+    const full = join(path, plan.rel);
+    assertWorktreePath(path, full);
+    if (existsSync(full) && !containsPath(realpathSync(path), realpathSync(full)))
+      fail(`worktree plan resolves outside its checkout: ${full}`);
+    const workerPlan = branchExists && existsSync(full)
+      ? worktreePlan(full, path)
+      : { ...plan, full, meta: { ...plan.meta } };
+    workerPlan.meta.worktree = basename(path);
+    workerPlan.meta.branch = branch;
+    if (['planned', 'draft'].includes(workerPlan.meta.status))
+      workerPlan.meta.status = 'in-progress';
+    mkdirSync(dirname(full), { recursive: true });
+    writePlan(workerPlan);
+  }
+  return { path, created: true };
 }
 
 function resolvePlanAndTarget() {
@@ -2685,161 +2836,54 @@ const commands = {
     }
 
     if (sub === 'new') {
+      const entries = registeredWorktrees();
       const planArg = opts.files.slice(1).find((f) => f.endsWith('.plan.md'));
-      let plan = null;
-      try {
-        plan = planArg ? readPlan(planArg) : resolveActivePlan();
-      } catch {}
-
-      const branch =
-        opts.branch ||
-        (plan && plan.meta.branch ? plan.meta.branch : null) ||
+      const plan = planArg ? worktreePlan(resolve(planArg), repoRoot)
+        : opts.branch || opts.name ? undefined : resolveActivePlan();
+      const branch = opts.branch || (plan && planWorktreeBranch(plan)) ||
         (opts.name ? `feat/${opts.name}` : null);
-      if (!branch) {
-        fail(
-          'usage: node scripts/ticket.mjs wt new [<plan>] [--name <dir>] [--branch <branch>]',
-        );
-      }
-
-      const name =
-        opts.name ||
-        branch.replace(/^[^/]+\//, '').replace(/[^a-zA-Z0-9_-]+/g, '-');
-      const targetDir = resolve(repoRoot, '.worktrees', name);
-      mkdirSync(resolve(repoRoot, '.worktrees'), { recursive: true });
-
-      if (existsSync(targetDir)) {
-        fail(`target worktree directory already exists: ${targetDir}`);
-      }
-
-      const branchExists = !!git(['rev-parse', '--verify', branch], {
-        allowFail: true,
-      });
-      const addArgs = ['worktree', 'add'];
-      if (!branchExists) addArgs.push('-b', branch);
-      addArgs.push(targetDir);
-      if (branchExists) addArgs.push(branch);
-
-      try {
-        execFileSync('git', addArgs, {
-          cwd: repoRoot,
-          encoding: 'utf8',
-          stdio: ['pipe', 'pipe', 'pipe'],
-        });
-      } catch (err) {
-        fail(`git worktree add failed: ${err.stderr || err.message}`);
-      }
-
-      const envPath = join(repoRoot, '.env');
-      if (existsSync(envPath)) {
-        try {
-          writeFileSync(join(targetDir, '.env'), readFileSync(envPath));
-        } catch {}
-      }
-
-      if (plan) {
-        plan.meta.worktree = name;
-        plan.meta.branch = branch;
-        writePlan(plan);
-      }
-
-      console.log(`Created worktree at .worktrees/${name} (branch: ${branch})`);
-      console.log(`To switch: cd .worktrees/${name}`);
+      if (!branch) fail('usage: node scripts/ticket.mjs wt new [<plan>] [--name <dir>] [--branch <branch>]');
+      const worktree = ensurePlanWorktree(entries, branch, plan, { name: opts.name });
+      const action = opts.dryRun ? '[dry-run] Worktree target:' :
+        worktree.created ? 'Created worktree at' : 'Worktree exists at';
+      console.log(`${action} ${worktree.path} (branch: ${branch})`);
+      console.log(`To switch: cd "${worktree.path}"`);
       return;
     }
 
     if (sub === 'prune') {
       const dirs = opts.fleet ? getKnownRepoDirs() : [repoRoot];
       let totalPruned = 0;
-
+      let candidates = 0;
       for (const dir of dirs) {
-        const repoName = basename(dir);
-        let listOut = '';
-        try {
-          listOut = execFileSync(
-            'git',
-            ['-C', dir, 'worktree', 'list', '--porcelain'],
-            { encoding: 'utf8', stdio: ['pipe', 'pipe', 'ignore'] },
-          );
-        } catch {
-          continue;
-        }
-
-        const entries = [];
-        let cur = {};
-        for (const line of listOut.split('\n')) {
-          const l = line.trim();
-          if (!l) {
-            if (cur.worktree) entries.push(cur);
-            cur = {};
-          } else if (l.startsWith('worktree ')) cur.worktree = l.slice(9);
-          else if (l.startsWith('HEAD ')) cur.head = l.slice(5);
-          else if (l.startsWith('branch '))
-            cur.branch = l.slice(7).replace('refs/heads/', '');
-        }
-        if (cur.worktree) entries.push(cur);
-
-        const nonMain = entries.slice(1);
-        if (!nonMain.length) continue;
-
-        for (const entry of nonMain) {
-          const wtPath = resolve(entry.worktree);
-          let isMerged = false;
-          if (entry.head) {
-            try {
-              execFileSync(
-                'git',
-                ['-C', dir, 'merge-base', '--is-ancestor', entry.head, 'HEAD'],
-                { stdio: 'ignore' },
-              );
-              isMerged = true;
-            } catch {}
+        const [main, ...linked] = registeredWorktrees(dir);
+        if (main.bare) continue;
+        for (const entry of linked) {
+          const path = entry.path;
+          if (entry.locked || !existsSync(path) ||
+            containsPath(path, repoRoot) || containsPath(path, process.cwd()) ||
+            !containsPath(join(realpathSync(main.path), '.worktrees'), realpathSync(path))) continue;
+          try {
+            if (worktreeGit(path, ['status', '--porcelain=v1', '-z', '--untracked-files=all'])) continue;
+            if ((!opts.all || !entry.branch) && !worktreeIsMerged(main.path, entry.head)) continue;
+          } catch {
+            continue;
           }
-
-          if (isMerged || opts.all || !existsSync(wtPath)) {
-            if (opts.dryRun) {
-              console.log(
-                `[dry-run] Would prune worktree in ${repoName}: ${wtPath} (branch: ${entry.branch || 'detached'})`,
-              );
-              totalPruned++;
-              continue;
-            }
-
-            let removed = false;
-            try {
-              execFileSync(
-                'git',
-                ['-C', dir, 'worktree', 'remove', wtPath, '--force'],
-                { stdio: 'ignore' },
-              );
-              removed = true;
-            } catch {}
-
-            if (existsSync(wtPath)) {
-              try {
-                const extended =
-                  process.platform === 'win32' && !wtPath.startsWith('\\\\?\\')
-                    ? `\\\\?\\${wtPath.replace(/\//g, '\\')}`
-                    : wtPath;
-                rmSync(extended, { recursive: true, force: true });
-                removed = true;
-              } catch {}
-            }
-
-            try {
-              execFileSync('git', ['-C', dir, 'worktree', 'prune'], {
-                stdio: 'ignore',
-              });
-            } catch {}
-
-            if (removed) {
-              console.log(
-                `Pruned worktree in ${repoName}: ${entry.branch || basename(wtPath)}`,
-              );
-              totalPruned++;
-            }
+          candidates++;
+          if (opts.dryRun) {
+            console.log(`[dry-run] Would prune worktree in ${basename(main.path)}: ${path}`);
+            continue;
+          }
+          try {
+            worktreeGit(main.path, ['worktree', 'remove', '--', path]);
+            console.log(`Pruned worktree in ${basename(main.path)}: ${entry.branch || basename(path)}`);
+            totalPruned++;
+          } catch (error) {
+            console.warn(`Could not prune ${path}: ${error.stderr?.trim() || error.message}`);
           }
         }
       }
+      if (opts.dryRun) console.log(`[dry-run] ${candidates} worktree(s) eligible.`);
       console.log(`Prune complete: ${totalPruned} worktree(s) pruned.`);
       return;
     }
@@ -3174,128 +3218,35 @@ const commands = {
   },
 
   async switch() {
+    const entries = registeredWorktrees();
+    const [main] = entries;
     const rawArg = opts.files[0] || opts.branch || opts.plan || '';
-    let targetBranch = null;
-    let targetPlan = null;
-
-    if (rawArg === 'main' || rawArg === 'master') {
-      if (opts.path) {
-        console.log(repoRoot);
-        return;
-      }
-      if (process.cwd() === repoRoot) {
-        console.log(`Already on main repository checkout: ${repoRoot}`);
-      } else {
-        console.log(`Main repository checkout: ${repoRoot}`);
-        console.log(`Run: cd "${repoRoot}"`);
-      }
-      return;
+    const catalog = worktreeCatalog(entries);
+    const explicit = rawArg.endsWith('.plan.md');
+    const full = explicit ? resolve(rawArg) : null;
+    const owner = explicit && entries.find((entry) => containsPath(join(entry.path, config.plansDir), full));
+    if (explicit && !owner) fail(`plan is outside the registered checkouts: ${full}`);
+    const targetPlan = explicit
+      ? worktreePlan(full, owner.path)
+      : rawArg
+        ? catalog.find(({ plan }) => planWorktreeBranch(plan) === rawArg ||
+          basename(plan.rel, '.plan.md').toLowerCase().includes(rawArg.toLowerCase()))?.plan
+        : resolveActivePlan();
+    const branch = targetPlan ? planWorktreeBranch(targetPlan) : rawArg;
+    if (['main', 'master'].includes(rawArg) || !branch || ['main', 'master'].includes(branch)) {
+      if (opts.path) return console.log(main.path);
+      if (comparablePath(process.cwd()) === comparablePath(main.path))
+        return console.log(`Already on main repository checkout: ${main.path}`);
+      console.log(`Main repository checkout: ${main.path}`);
+      return console.log(`Run: cd "${main.path}"`);
     }
 
-    if (
-      rawArg.endsWith('.plan.md') ||
-      (rawArg && existsSync(resolve(rawArg)))
-    ) {
-      targetPlan = readPlan(rawArg);
-    } else if (rawArg) {
-      const all = allPlans();
-      const byName = all.find(
-        (p) =>
-          basename(p.rel, '.plan.md')
-            .toLowerCase()
-            .includes(rawArg.toLowerCase()) ||
-          (p.meta.branch &&
-            p.meta.branch.toLowerCase().includes(rawArg.toLowerCase())),
-      );
-      if (byName) {
-        targetPlan = byName;
-      } else {
-        targetBranch = rawArg;
-      }
-    } else {
-      try {
-        targetPlan = resolveActivePlan();
-      } catch {
-        targetBranch = 'main';
-      }
-    }
-
-    if (targetPlan) {
-      targetBranch =
-        targetPlan.meta.branch ||
-        `feat/${basename(targetPlan.rel, '.plan.md')
-          .replace(/^[^/]+-Plan-/, '')
-          .toLowerCase()}`;
-    }
-
-    if (!targetBranch || targetBranch === 'main' || targetBranch === 'master') {
-      if (opts.path) {
-        console.log(repoRoot);
-        return;
-      }
-      console.log(`Main repository checkout: ${repoRoot}`);
-      console.log(`Run: cd "${repoRoot}"`);
-      return;
-    }
-
-    const name =
-      (targetPlan && targetPlan.meta.worktree) ||
-      targetBranch.replace(/^[^/]+\//, '').replace(/[^a-zA-Z0-9_-]+/g, '-');
-    const targetDir = resolve(repoRoot, '.worktrees', name);
-
-    if (existsSync(targetDir)) {
-      if (opts.path) {
-        console.log(targetDir);
-        return;
-      }
-      console.log(`Worktree exists at: ${targetDir} (branch: ${targetBranch})`);
-      console.log(`Run: cd "${targetDir}"`);
-      return;
-    }
-
-    if (opts.noCreate) {
-      fail(`worktree does not exist: ${targetDir}`);
-    }
-
-    // Create worktree on-demand
-    mkdirSync(resolve(repoRoot, '.worktrees'), { recursive: true });
-    const branchExists = !!git(['rev-parse', '--verify', targetBranch], {
-      allowFail: true,
-    });
-    const addArgs = ['worktree', 'add'];
-    if (!branchExists) addArgs.push('-b', targetBranch);
-    addArgs.push(targetDir);
-    if (branchExists) addArgs.push(targetBranch);
-
-    try {
-      execFileSync('git', addArgs, {
-        cwd: repoRoot,
-        encoding: 'utf8',
-        stdio: ['pipe', 'pipe', 'pipe'],
-      });
-    } catch (err) {
-      fail(`git worktree add failed: ${err.stderr || err.message}`);
-    }
-
-    const envPath = join(repoRoot, '.env');
-    if (existsSync(envPath)) {
-      try {
-        writeFileSync(join(targetDir, '.env'), readFileSync(envPath));
-      } catch {}
-    }
-
-    if (targetPlan) {
-      targetPlan.meta.worktree = name;
-      targetPlan.meta.branch = targetBranch;
-      writePlan(targetPlan);
-    }
-
-    if (opts.path) {
-      console.log(targetDir);
-      return;
-    }
-    console.log(`Created worktree at: ${targetDir} (branch: ${targetBranch})`);
-    console.log(`Run: cd "${targetDir}"`);
+    const worktree = ensurePlanWorktree(entries, branch, targetPlan, { noCreate: opts.noCreate });
+    if (opts.path) return console.log(worktree.path);
+    const action = opts.dryRun ? '[dry-run] Worktree target:' :
+      worktree.created ? 'Created worktree at:' : 'Worktree exists at:';
+    console.log(`${action} ${worktree.path} (branch: ${branch})`);
+    console.log(`Run: cd "${worktree.path}"`);
   },
 
   async split() {
@@ -3829,172 +3780,70 @@ const commands = {
   },
 
   async wave() {
-    const plans = allPlans();
-    const sub = opts.files[0];
-    const specifiedPlans = opts.files
-      .filter((f) => f.endsWith('.plan.md'))
-      .map((f) => readPlan(f));
+    const entries = registeredWorktrees();
+    const [main] = entries;
+    const catalog = worktreeCatalog(entries);
+    const specifiedPlans = opts.files.filter((f) => f.endsWith('.plan.md'));
+    const active = ({ plan }) => ['in-progress', 'planned'].includes(plan.meta.status)
+      && !worktreePlanClosed(plan);
 
-    let targetPlans = specifiedPlans.length
-      ? specifiedPlans
-      : plans.filter(
-          (p) => p.meta.status === 'in-progress' || p.meta.status === 'planned',
-        );
-
-    if (opts.spawn || sub === 'spawn') {
-      if (!targetPlans.length) {
-        fail('no active or planned plans found to spawn in wave.');
-      }
-      console.log(
-        `=== Wave Orchestration: Spawning ${targetPlans.length} Worktree(s) ===\n`,
-      );
-      const spawned = [];
-
+    if (opts.spawn || opts.files[0] === 'spawn') {
+      const targetPlans = specifiedPlans.length
+        ? specifiedPlans.map((path) => {
+          const full = resolve(path);
+          const owner = entries.find((entry) => containsPath(join(entry.path, config.plansDir), full));
+          if (!owner) fail(`plan is outside the registered checkouts: ${full}`);
+          const requested = worktreePlan(full, owner.path);
+          return catalog.find(({ plan }) => plan.rel === requested.rel)?.plan || requested;
+        })
+        : catalog.filter(active).map(({ plan }) => plan);
+      if (!targetPlans.length) fail('no active or planned plans found to spawn in wave.');
+      console.log(`=== Wave Orchestration: Spawning ${targetPlans.length} Worktree(s) ===\n`);
+      const claimed = new Set();
       for (const plan of targetPlans) {
-        const branch =
-          plan.meta.branch ||
-          `feat/${plan.rel.replace(/^docs\/plans\/|\.plan\.md$/g, '').toLowerCase().replace(/[^a-z0-9_-]+/g, '-')}`;
-        const name =
-          plan.meta.worktree ||
-          branch.replace(/^[^/]+\//, '').replace(/[^a-zA-Z0-9_-]+/g, '-');
-        const targetDir = resolve(repoRoot, '.worktrees', name);
-        mkdirSync(resolve(repoRoot, '.worktrees'), { recursive: true });
-
-        if (!existsSync(targetDir)) {
-          const branchExists = !!git(['rev-parse', '--verify', branch], {
-            allowFail: true,
-          });
-          const addArgs = ['worktree', 'add'];
-          if (!branchExists) addArgs.push('-b', branch);
-          addArgs.push(targetDir);
-          if (branchExists) addArgs.push(branch);
-
-          try {
-            execFileSync('git', addArgs, {
-              cwd: repoRoot,
-              encoding: 'utf8',
-              stdio: ['pipe', 'pipe', 'pipe'],
-            });
-          } catch (err) {
-            console.warn(
-              `warning: git worktree add failed for ${name}: ${err.stderr || err.message}`,
-            );
-            continue;
-          }
-
-          const envPath = join(repoRoot, '.env');
-          if (existsSync(envPath)) {
-            try {
-              writeFileSync(join(targetDir, '.env'), readFileSync(envPath));
-            } catch {}
-          }
-        }
-
-        plan.meta.worktree = name;
-        plan.meta.branch = branch;
-        if (plan.meta.status === 'planned' || plan.meta.status === 'draft') {
-          plan.meta.status = 'in-progress';
-        }
-        writePlan(plan);
-
-        const wtPlanPath = join(targetDir, plan.rel);
-        try {
-          mkdirSync(dirname(wtPlanPath), { recursive: true });
-          writeFileSync(wtPlanPath, readFileSync(plan.full, 'utf8'), 'utf8');
-        } catch {}
-
-        spawned.push({
-          plan: plan.rel,
-          worktree: `.worktrees/${name}`,
-          branch,
-        });
-
+        if (worktreePlanClosed(plan)) fail(`cannot spawn a closed plan: ${plan.rel}`);
+        const branch = planWorktreeBranch(plan);
+        if (claimed.has(branch)) fail(`multiple plans claim worktree branch: ${branch}`);
+        claimed.add(branch);
+      }
+      const allocations = [...entries];
+      for (const plan of targetPlans) {
+        const branch = planWorktreeBranch(plan);
+        const worktree = ensurePlanWorktree(allocations, branch, plan);
+        if (!allocations.some((entry) => entry.branch === branch))
+          allocations.push({ branch, path: worktree.path });
+        const path = relative(main.path, worktree.path).replace(/\\/g, '/');
         console.log(`• Plan: ${plan.rel}`);
-        console.log(`  Branch: ${branch} | Worktree: .worktrees/${name}`);
-        console.log(
-          `  Builder brief: cd .worktrees/${name} && node scripts/ticket.mjs step --role builder\n`,
-        );
+        console.log(`  Branch: ${branch} | Worktree: ${path || '(main)'}`);
+        if (!opts.dryRun)
+          console.log(`  Builder brief: cd "${worktree.path}" && node scripts/ticket.mjs step --role builder\n`);
       }
-
-      console.log(`Wave spawn complete: ${spawned.length} worktree(s) active.`);
-      return;
+      if (opts.dryRun) return console.log(`[dry-run] ${targetPlans.length} worktree target(s).`);
+      return console.log(`Wave spawn complete: ${targetPlans.length} worktree(s) active.`);
     }
 
-    console.log(`=== Wave Orchestration Dashboard ===\n`);
-    const commonDir = git(['rev-parse', '--git-common-dir'], {
-      allowFail: true,
-    });
-    const mainRoot = commonDir
-      ? resolve(repoRoot, commonDir, '..')
-      : repoRoot;
-    const mainName = basename(mainRoot);
+    console.log('=== Wave Orchestration Dashboard ===\n');
+    const activePlans = catalog.filter((item) => opts.all || active(item) ||
+      (item.entry !== main && item.plan.meta.status === 'in-progress'));
+    if (!activePlans.length) return console.log('No active plans or wave worktrees found.');
 
-    const activePlans = plans.filter((p) => {
-      if (
-        !opts.all &&
-        (p.meta.status === 'done' || p.meta.status === 'shipped')
-      ) {
-        return false;
-      }
-      const hasIsolatedWt =
-        p.meta.worktree &&
-        p.meta.worktree !== basename(repoRoot) &&
-        p.meta.worktree !== mainName;
-      return (
-        hasIsolatedWt ||
-        p.meta.status === 'in-progress' ||
-        p.meta.status === 'planned' ||
-        opts.all
-      );
-    });
-
-    if (!activePlans.length) {
-      console.log('No active plans or wave worktrees found.');
-      return;
-    }
-
-    const rows = [];
-    for (const rawPlan of activePlans) {
-      let plan = rawPlan;
-      const isIsolated =
-        rawPlan.meta.worktree &&
-        rawPlan.meta.worktree !== basename(repoRoot) &&
-        rawPlan.meta.worktree !== mainName;
-      if (isIsolated) {
-        const wtClean = rawPlan.meta.worktree.replace(/^\.worktrees[\\/]/, '');
-        const wtPlanFile = join(mainRoot, '.worktrees', wtClean, rawPlan.rel);
-        if (existsSync(wtPlanFile)) {
-          try {
-            plan = readPlan(wtPlanFile);
-            plan.rel = rawPlan.rel;
-          } catch {}
-        }
-      }
-
+    const rows = activePlans.map(({ plan, entry }) => {
       const { items } = findCheckboxes(plan.body);
-      const total = items.length;
-      const open = items.filter((it) => it.openIndex !== null).length;
-      const closed = total - open;
-      const wtDir = isIsolated
-        ? (rawPlan.meta.worktree.startsWith('.worktrees/')
-            ? rawPlan.meta.worktree
-            : `.worktrees/${rawPlan.meta.worktree}`)
-        : '(main)';
-      const probList = problems(plan);
-      const ready = probList.length === 0 ? 'YES' : 'no';
-      const review =
-        plan.meta.reviewVerdict ||
-        (plan.meta.reviewedBy ? 'reviewed' : 'unreviewed');
-
-      rows.push({
+      const closed = items.filter((item) => item.openIndex === null).length;
+      const workerPath = relative(main.path, entry.path).replace(/\\/g, '/');
+      const review = plan.meta.reviewVerdict || (plan.meta.reviewedBy ? 'reviewed' : 'unreviewed');
+      const ownCheckout = comparablePath(entry.path) === comparablePath(repoRoot);
+      const issues = problems(plan, { ignoreReview: !ownCheckout });
+      const ready = issues.length || review === 'block' ? 'no' : ownCheckout ? 'YES' : 'check there';
+      return {
         plan: plan.rel.replace(/^docs\/plans\/|\.plan\.md$/g, '').slice(0, 36),
-        branch: (plan.meta.branch || '-').slice(0, 24),
-        worktree: wtDir.slice(0, 30),
-        progress: `${closed}/${total}`,
+        branch: (plan.meta.branch || entry.branch || '-').slice(0, 24),
+        worktree: (workerPath || '(main)').slice(0, 30),
+        progress: `${closed}/${items.length}`,
         review,
         ready,
-      });
-    }
+      };
+    });
 
     const colWidths = {
       plan: Math.max(4, ...rows.map((r) => r.plan.length)),

@@ -11,7 +11,7 @@ import {
   readdirSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, dirname } from 'node:path';
+import { join, dirname, basename } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync, execFileSync } from 'node:child_process';
 
@@ -1812,4 +1812,79 @@ test('wave command renders dashboard status and spawns worktrees', (t) => {
 
   const rAll = f.run('wave', ['--status', '--all'], [], { omitPlan: true });
   assert.match(rAll.stdout, /FO-Plan-Closed/);
+});
+
+test("wave uses registered branches and keeps sibling worktree progress", (t) => {
+  const f = fixture(t);
+  f.git('init', '-b', 'main');
+  f.git('config', 'user.name', 'Test');
+  f.git('config', 'user.email', 'test@example.invalid');
+  f.git('add', '.');
+  f.git('commit', '-m', 'initial commit');
+
+  const planContent = (branch, complete = false) =>
+    `---\ntitle: Plan - Feature: Worker\nstatus: in-progress\nbranch: ${branch}\nworktree: ${basename(f.root)}\n---\n` +
+    `## Acceptance criteria\n- [${complete ? 'x' : ' '}] Criterion${complete ? ' verified: pass' : ''}\n\n` +
+    `## Steps\n- [${complete ? 'x' : ' '}] Implement\n`;
+  for (let i = 0; i < 6; i++)
+    writeFileSync(join(f.root, `docs/plans/FO-Plan-Historical-${i}.plan.md`), planContent(`old/${i}`, true));
+  const first = 'docs/plans/FO-Plan-One.plan.md';
+  const second = 'docs/plans/FO-Plan-Two.plan.md';
+  writeFileSync(join(f.root, first), planContent('feat/shared'));
+  writeFileSync(join(f.root, second), planContent('fix/shared'));
+
+  const dry = f.run('wave', ['--spawn', '--dry-run'], [], { omitPlan: true });
+  assert.equal(dry.status, 0, dry.stderr);
+  assert.match(dry.stdout, /\[dry-run\] 2 worktree target\(s\)/);
+  assert.doesNotMatch(dry.stdout, /Historical/);
+  assert.equal(existsSync(join(f.root, '.worktrees')), false);
+
+  const spawned = f.run('wave', ['--spawn'], [], { omitPlan: true });
+  assert.equal(spawned.status, 0, spawned.stderr);
+  const switched = (branch) => f.run('switch', [branch, '--path'], [], { omitPlan: true }).stdout.trim();
+  const one = switched('feat/shared');
+  const two = switched('fix/shared');
+  assert.notEqual(one, two);
+  assert.equal(readFileSync(join(f.root, first), 'utf8'), planContent('feat/shared'));
+  const live = join(two, second);
+  const progress = readFileSync(live, 'utf8').replace('- [ ] Implement', '- [x] Implement');
+  writeFileSync(live, progress);
+  const rerun = f.run('wave', [second, '--spawn'], [], { omitPlan: true });
+  assert.equal(rerun.status, 0, rerun.stderr);
+  assert.equal(readFileSync(live, 'utf8'), progress);
+
+  const worker = [join(one, 'scripts/ticket.mjs')];
+  const fromSibling = execFileSync(process.execPath, [...worker, 'wave', '--status'], {
+    cwd: one, encoding: 'utf8',
+  });
+  assert.match(fromSibling, /FO-Plan-Two\s+fix\/shared\s+\.worktrees\/shared-\w+\s+1\/2/);
+  const main = execFileSync(process.execPath, [...worker, 'switch', 'main', '--path'], {
+    cwd: one, encoding: 'utf8',
+  });
+  assert.equal(main.trim(), f.root);
+});
+
+test("wt prune preserves dirty, locked, and invoking worktrees", (t) => {
+  const f = fixture(t);
+  f.git('init', '-b', 'main');
+  f.git('config', 'user.name', 'Test');
+  f.git('config', 'user.email', 'test@example.invalid');
+  f.git('add', '.');
+  f.git('commit', '-m', 'initial commit');
+
+  const parent = join(f.root, '.worktrees');
+  for (const name of ['current', 'dirty', 'locked', 'clean']) {
+    f.git('worktree', 'add', '-b', `feat/${name}`, join(parent, name));
+  }
+  f.git('worktree', 'lock', join(parent, 'locked'));
+  writeFileSync(join(parent, 'dirty', 'untracked.txt'), 'preserve');
+  const current = join(parent, 'current');
+  const worker = [join(current, 'scripts/ticket.mjs'), 'wt', 'prune', '--all'];
+  const dry = execFileSync(process.execPath, [...worker, '--dry-run'], { cwd: current, encoding: 'utf8' });
+  assert.match(dry, /\[dry-run\] 1 worktree\(s\) eligible/);
+  assert.equal(existsSync(join(parent, 'clean')), true);
+  const result = execFileSync(process.execPath, worker, { cwd: current, encoding: 'utf8' });
+  assert.match(result, /Prune complete: 1 worktree\(s\) pruned/);
+  for (const name of ['current', 'dirty', 'locked']) assert.ok(existsSync(join(parent, name)));
+  assert.equal(existsSync(join(parent, 'clean')), false);
 });
