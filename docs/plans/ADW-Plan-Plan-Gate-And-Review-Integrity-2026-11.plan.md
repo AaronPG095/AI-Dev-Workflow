@@ -1,7 +1,7 @@
 ---
 title: Plan - Bug: Plan Gate and Review Integrity
 ticket: local://ADW:ADW-Plan-Plan-Gate-And-Review-Integrity-2026-11
-status: in-progress
+status: shipped
 priority: high
 devTicketKey: ADW:ADW-Plan-Plan-Gate-And-Review-Integrity-2026-11
 agent: Codex
@@ -11,6 +11,7 @@ startedAt: 2026-11-11
 reviewedBy: Codex
 reviewVerdict: pass
 reviewFingerprint: 54b8fdb7561baca87620f44f17e6fa16cd1d323f1f1499ea550e3e0d1033ff4a
+pr: https://github.com/AaronPG095/AI-Dev-Workflow/pull/17
 ---
 
 # Plan Gate and Review Integrity
@@ -51,3 +52,4 @@ Aaron approved the repair sequence: “Plan approved.”
 
 <!-- One line per session/review, added with ticket.mjs log or review -->
 - 2026-11-11 08:16 UTC, Codex (review: pass): Verified base policy, committed plan validation, review freshness, hygiene, and no-plan regressions. All 58 tests pass. Workflow changes await maintainer review.
+- 2026-11-11 08:17 UTC, Codex (handoff): Done: Activated main protection and opened PR 17 with 58 passing tests, a pass verdict, and a passing committed-plan check.; Next: After maintainer review and merge, start the approved checkpoint repair on a fresh branch.; Open: none; Tree: 1 dirty file(s)
