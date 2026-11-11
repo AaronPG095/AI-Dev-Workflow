@@ -1,7 +1,7 @@
 ---
 title: Plan - Bug: Safe Checkpoints
 ticket: local://ADW:ADW-Plan-Safe-Checkpoints-2026-11
-status: in-progress
+status: shipped
 priority: high
 devTicketKey: ADW:ADW-Plan-Safe-Checkpoints-2026-11
 agent: Codex
@@ -11,6 +11,7 @@ startedAt: 2026-11-11
 reviewedBy: Codex
 reviewVerdict: pass
 reviewFingerprint: c327d02fcf6932d532ce712c34401858fa89b547e00507a2ee6a1ed4af8ae298
+pr: https://github.com/AaronPG095/AI-Dev-Workflow/pull/18
 ---
 
 # Safe Checkpoints
@@ -37,3 +38,4 @@ Aaron approved the repair sequence: “Plan approved.” Aaron directed executio
 
 ## Progress log
 - 2026-11-11 10:58 UTC, Codex (review: pass): Verification cannot be skipped or rerun at the retry limit. Scoped commits and rejected-hook recovery passed the Git fixtures.
+- 2026-11-11 10:59 UTC, Codex (handoff): Done: Make checkpoints require verification, stop before running past the retry limit, and commit only staged changes plus the plan. Rejected commits restore the plan and preserve the index.; Next: Start the worktree ownership and cleanup repair.; Open: none; Tree: 1 dirty file(s)
