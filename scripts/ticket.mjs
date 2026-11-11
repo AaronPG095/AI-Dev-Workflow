@@ -1400,45 +1400,64 @@ const commands = {
 
     const cfgAgentic = config.agentic || {};
     const maxRetries = opts.maxRetries
-      ? parseInt(opts.maxRetries, 10)
+      ? Number(opts.maxRetries)
       : (cfgAgentic.maxRetries ?? 3);
     const requestedTier = opts.tier || cfgAgentic.verifyTier || 'test';
-    const resolvedVerify =
-      resolveVerifyCommand(config, requestedTier) ||
-      resolveVerifyCommand(config, 'test');
+    const resolvedVerify = resolveVerifyCommand(config, requestedTier);
+    if (!resolvedVerify || opts.noVerify)
+      fail(`checkpoint requires verification for tier "${requestedTier}"`);
+    if (!Number.isSafeInteger(maxRetries) || maxRetries < 1)
+      fail('checkpoint retry limit must be a positive integer');
+    if (opts.dryRun && opts.commit)
+      fail('checkpoint --commit cannot be used with --dry-run');
 
-    if (resolvedVerify && !opts['no-verify'] && !opts.noVerify) {
-      console.log(
-        `• Running checkpoint verification (\`${resolvedVerify.cmd}\`)...`,
-      );
-      try {
-        execSync(resolvedVerify.cmd, {
-          cwd: repoRoot,
-          encoding: 'utf8',
-          stdio: 'inherit',
-          env: { ...process.env, CI: '1' },
-        });
-        if (plan.meta.retryCount) {
-          delete plan.meta.retryCount;
-        }
-      } catch (err) {
-        const currentRetries =
-          (parseInt(plan.meta.retryCount || '0', 10) || 0) + 1;
-        plan.meta.retryCount = String(currentRetries);
-        writePlan(plan);
-        if (currentRetries >= maxRetries) {
-          fail(
-            `CIRCUIT BREAKER TRIPPED (${currentRetries}/${maxRetries} failed verification attempts on \`${resolvedVerify.cmd}\`). Stop retrying, run 'node scripts/ticket.mjs handoff', and escalate to human.`,
-          );
-        } else {
-          fail(
-            `checkpoint verification failed (attempt ${currentRetries}/${maxRetries}: \`${resolvedVerify.cmd}\`). Resolve issues or test failures before ticking.`,
-          );
-        }
-      }
-    }
+    const previousRetries = parseInt(plan.meta.retryCount || '0', 10) || 0;
+    const stopAtLimit = (attempts) => fail(
+      `CIRCUIT BREAKER TRIPPED (${attempts}/${maxRetries} failed verification attempts on \`${resolvedVerify.cmd}\`). Record a handoff before continuing.`,
+    );
+    if (previousRetries >= maxRetries) stopAtLimit(previousRetries);
+
+    const originalPlanContents = readFileSync(plan.full);
+    const stagedChanges = () => git(['diff', '--cached', '--binary', '--no-ext-diff']);
+    const stagedPaths = () => git(['diff', '--cached', '--name-only', '--no-renames', '-z'])
+      .split('\0').filter(Boolean);
+    const originalIndexDiff = opts.commit ? stagedChanges() : '';
+    const checkpointPaths = opts.commit ? [...new Set([...stagedPaths(), plan.rel])] : [];
 
     if (opts.commit) {
+      const unstagedPaths = git(['diff', '--name-only', '--no-renames', '-z'])
+        .split('\0').filter(Boolean);
+      if (unstagedPaths.some((path) => path !== plan.rel && checkpointPaths.includes(path)))
+        fail('checkpoint has files with both staged and unstaged edits; stage the intended version first');
+    }
+
+    console.log(`• Running checkpoint verification (\`${resolvedVerify.cmd}\`)...`);
+    try {
+      execSync(resolvedVerify.cmd, {
+        cwd: repoRoot,
+        encoding: 'utf8',
+        stdio: 'inherit',
+        env: { ...process.env, CI: '1' },
+      });
+    } catch {
+      const currentRetries = previousRetries + 1;
+      if (!readFileSync(plan.full).equals(originalPlanContents))
+        fail('checkpoint verification changed the plan; inspect the change before retrying');
+      plan.meta.retryCount = String(currentRetries);
+      writePlan(plan);
+      if (currentRetries >= maxRetries) stopAtLimit(currentRetries);
+      fail(`checkpoint verification failed (attempt ${currentRetries}/${maxRetries}: \`${resolvedVerify.cmd}\`).`);
+    }
+    if (!readFileSync(plan.full).equals(originalPlanContents))
+      fail('checkpoint verification changed the plan; inspect the change before retrying');
+    delete plan.meta.retryCount;
+
+    if (opts.commit) {
+      const unstagedPaths = git(['diff', '--name-only', '--no-renames', '-z'])
+        .split('\0').filter(Boolean);
+      if (stagedChanges() !== originalIndexDiff ||
+          unstagedPaths.some((path) => path !== plan.rel && checkpointPaths.includes(path)))
+        fail('checkpoint changes moved during verification; inspect the index before retrying');
       const hyg = checkHygiene();
       if (!hyg.clean && !opts.force) {
         fail(
@@ -1449,8 +1468,8 @@ const commands = {
 
     const inCriteria = match.section.toLowerCase() === 'acceptance criteria';
     let verifiedText = opts.verified || opts.v || '';
-    if (inCriteria && !verifiedText && !/verified:/i.test(match.text)) {
-      verifiedText = `verify ${resolvedVerify ? resolvedVerify.tier : 'test'} passed (exit code 0)`;
+    if (inCriteria && !verifiedText && !/\sverified:\s*\S/i.test(match.text)) {
+      verifiedText = `verify ${resolvedVerify.tier} passed (exit code 0)`;
     }
 
     let updatedText = match.text;
@@ -1468,36 +1487,24 @@ const commands = {
     lines[match.lineIndex] = `${match.prefix}x${match.delim}${updatedText}`;
     plan.body = lines.join('\n');
     writePlan(plan);
-    console.log(`✓ Ticked [${match.openIndex}]: - [x] ${updatedText}`);
 
     if (opts.commit) {
-      let status = '';
+      const commitMsg =
+        opts.message ||
+        opts.m ||
+        `feat(checkpoint): complete [${match.openIndex}] - ${match.text.replace(/[:"']/g, '').slice(0, 50)}`;
       try {
-        status = git(['status', '--short'], { allowFail: true }) || '';
-      } catch {}
-      if (status.trim()) {
-        const commitMsg =
-          opts.message ||
-          opts.m ||
-          `feat(checkpoint): complete [${match.openIndex}] - ${match.text.replace(/[:"']/g, '').slice(0, 50)}`;
-        try {
-          git(['add', '-A']);
-          execFileSync('git', ['commit', '-m', commitMsg], {
-            cwd: repoRoot,
-            encoding: 'utf8',
-            stdio: ['pipe', 'pipe', 'pipe'],
-          });
-          const commitHash = git(['rev-parse', '--short', 'HEAD'], {
-            allowFail: true,
-          });
-          console.log(`✓ Git checkpoint committed: ${commitHash} "${commitMsg}"`);
-        } catch (e) {
-          console.warn(`warning: could not create git commit: ${e.message}`);
-        }
-      } else {
-        console.log('Working tree already clean; skipped git commit.');
+        execFileSync('git', [
+          '--literal-pathspecs', 'commit', '--only', '-m', commitMsg, '--', ...checkpointPaths,
+        ], { cwd: repoRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+      } catch (error) {
+        writeFileSync(plan.full, originalPlanContents);
+        fail(`checkpoint commit rejected; plan restored: ${error.stderr?.trim() || error.message}`);
       }
+      const commitHash = git(['rev-parse', '--short', 'HEAD']);
+      console.log(`✓ Git checkpoint committed: ${commitHash} "${commitMsg}"`);
     }
+    console.log(`✓ Ticked [${match.openIndex}]: - [x] ${updatedText}`);
 
     const afterItems = findCheckboxes(plan.body).items.filter(
       (it) => it.openIndex !== null,

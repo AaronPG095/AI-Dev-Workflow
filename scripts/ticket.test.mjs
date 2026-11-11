@@ -1626,6 +1626,13 @@ test('checkpoint command verifies, ticks checkbox, and creates git commit', (t) 
     `---\ntitle: Plan - Feature: Checkpoint Test\nstatus: in-progress\nbranch: main\n---\n# Checkpoint Test\n\n## Acceptance criteria\n- [ ] First criterion\n\n## Steps\n- [ ] First step\n`,
   );
   f.git('commit', '-am', 'add test plan');
+  const skipped = f.run('checkpoint', ['--no-verify']);
+  assert.equal(skipped.status, 1);
+  assert.match(skipped.stderr, /checkpoint requires verification/);
+  assert.doesNotMatch(skipped.plan, /- \[x\]/);
+  const unknownTier = f.run('checkpoint', ['--tier', 'typo']);
+  assert.equal(unknownTier.status, 1);
+  assert.match(unknownTier.stderr, /checkpoint requires verification/);
 
   // Checkpoint criterion 1 (runs verify, adds verified stamp, and reports accurately re-indexed next item [1])
   const rChk1 = f.run(
@@ -1683,6 +1690,11 @@ test('checkpoint command verifies, ticks checkbox, and creates git commit', (t) 
   );
   assert.equal(rChkFail2.status, 1);
   assert.match(rChkFail2.stderr, /CIRCUIT BREAKER TRIPPED \(2\/2 failed verification attempts/);
+  const exhausted = f.run('checkpoint');
+  assert.equal(exhausted.status, 1);
+  assert.match(exhausted.stderr, /CIRCUIT BREAKER TRIPPED \(2\/2/);
+  assert.doesNotMatch(exhausted.stdout, /Running checkpoint verification/);
+  assert.match(exhausted.plan, /retryCount: 2/);
 
   // Hygiene guardrail prevents checkpoint --commit with junk files
   writeFileSync(
@@ -1712,6 +1724,19 @@ test('checkpoint command verifies, ticks checkbox, and creates git commit', (t) 
 
   // Clean hygiene allows checkpoint (with no target index argument) to default to First step [1], pass, and clear retryCount
   rmSync(join(f.root, '.tmp'), { recursive: true, force: true });
+  writeFileSync(join(f.root, 'scoped.mjs'), 'export const scoped = true;\n');
+  writeFileSync(join(f.root, 'unrelated.txt'), 'Unrelated work.\n');
+  f.git('add', 'scoped.mjs');
+  const originalIndex = f.git('diff', '--cached');
+  const beforeRejection = readFileSync(planPath, 'utf8');
+  const hookPath = join(f.root, '.git', 'hooks', 'pre-commit');
+  writeFileSync(hookPath, '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+  const rejected = f.run('checkpoint', ['--commit']);
+  assert.equal(rejected.status, 1);
+  assert.match(rejected.stderr, /checkpoint commit rejected; plan restored/);
+  assert.equal(readFileSync(planPath, 'utf8'), beforeRejection);
+  assert.equal(f.git('diff', '--cached'), originalIndex);
+  rmSync(hookPath);
   const rPass = f.run(
     'checkpoint',
     ['docs/plans/FO-Plan-Test.plan.md', '--commit'],
@@ -1722,6 +1747,11 @@ test('checkpoint command verifies, ticks checkbox, and creates git commit', (t) 
   assert.match(rPass.stdout, /All criteria and steps in docs\/plans\/FO-Plan-Test\.plan\.md are now completed!/);
   const planAfterPass = readFileSync(planPath, 'utf8');
   assert.doesNotMatch(planAfterPass, /retryCount:/);
+  assert.deepEqual(f.git('diff-tree', '--no-commit-id', '--name-only', '-r', 'HEAD').split(/\r?\n/), [
+    'docs/plans/FO-Plan-Test.plan.md',
+    'scoped.mjs',
+  ]);
+  assert.equal(readFileSync(join(f.root, 'unrelated.txt'), 'utf8'), 'Unrelated work.\n');
 });
 
 test('wave command renders dashboard status and spawns worktrees', (t) => {
