@@ -1,7 +1,7 @@
 ---
 title: Plan - Bug: Worktree Ownership and Cleanup
 ticket: local://ADW:ADW-Plan-Worktree-Ownership-And-Cleanup-2026-11
-status: in-progress
+status: shipped
 priority: high
 devTicketKey: ADW:ADW-Plan-Worktree-Ownership-And-Cleanup-2026-11
 agent: Codex
@@ -11,6 +11,7 @@ startedAt: 2026-11-11
 reviewedBy: Codex
 reviewVerdict: pass
 reviewFingerprint: 46704bb5832fa45ae9c1682889c09b1efd02a0f9c86eb3e004cd18aada5e9927
+pr: https://github.com/AaronPG095/AI-Dev-Workflow/pull/19
 ---
 
 # Worktree Ownership and Cleanup
@@ -37,4 +38,5 @@ Aaron approved the repair sequence: “Plan approved.” Aaron directed executio
 
 ## Progress log
 - 2026-11-11 11:06 UTC, Codex (review: pass): Worktree branch and checkout identity match Git inventory. Full suite and Windows safety fixtures pass.
+- 2026-11-11 11:06 UTC, Codex (handoff): Done: Use Git worktree registrations for ownership and dashboards, preserve live plans on reruns, and avoid unsafe cleanup. Dry runs do not write.; Next: Start the verified PR shipping repair.; Open: none; Tree: 1 dirty file(s)
 
