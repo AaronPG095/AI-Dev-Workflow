@@ -103,6 +103,8 @@ Trivial changes (`<= 40` changed lines, no new files in the main source folder, 
 
 Stage new files before preparing a review. The review records a fingerprint of the diff and plan requirements. Code or requirement edits require a new review. PR linking and progress log updates preserve the fingerprint. Set `requireReview: true` to require a passing or warning review before close-out.
 
+`pr` requires a clean committed working tree. With `--verify`, it runs the configured verification on the commit it will push and stops if verification changes the checkout. If shipping fails after opening the PR, retry the command to reuse the open PR on that branch. The link commit contains only the selected plan.
+
 *(Optional safety guardrail: run `node scripts/ticket.mjs hook install` to block accidental direct pushes to protected branches like `main`.)*
 
 ---
