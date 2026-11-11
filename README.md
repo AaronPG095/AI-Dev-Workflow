@@ -251,7 +251,7 @@ node scripts/ticket.mjs hook install
 node scripts/ticket.mjs step
 node scripts/ticket.mjs step --json
 
-# Level A: Verify, tick step/criterion, and commit atomic git checkpoint in one shot
+# Level A: Stage the intended changes, then verify and commit them with the plan
 node scripts/ticket.mjs checkpoint <#> --commit [--message "<msg>"] [--tier <name>]
 
 # Level B: Generate role-isolated sub-agent briefs (Builder, Adversarial Reviewer, Block-Fixer)
