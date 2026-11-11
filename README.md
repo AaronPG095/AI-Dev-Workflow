@@ -260,13 +260,16 @@ node scripts/ticket.mjs step --role reviewer
 node scripts/ticket.mjs step --role fixer
 
 # Level C: Parallel Worktree Wave Swarm (provision isolated worktrees & live dashboard)
-node scripts/ticket.mjs wave --spawn
+node scripts/ticket.mjs wave --spawn [--dry-run]
 node scripts/ticket.mjs wave docs/plans/Plan-A.plan.md docs/plans/Plan-B.plan.md --spawn
 node scripts/ticket.mjs wave --status
 
 # Run the 57-test hermetic test suite
 node --test scripts/ticket.test.mjs
 ```
+
+Wave uses Git's registered worktrees. A worker owns its plan after creation, and rerunning spawn preserves its progress. Dry runs leave the repository and worktrees untouched. Prune considers clean, unlocked, inactive worktrees under the primary checkout's `.worktrees` directory.
+
 
 ---
 
