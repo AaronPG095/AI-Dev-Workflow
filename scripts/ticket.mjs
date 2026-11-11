@@ -13,7 +13,7 @@
 //   node scripts/ticket.mjs done   [<plan>]                                       Task -> Done (normally run by CI on merge)
 //   node scripts/ticket.mjs ci-check --base <sha> --head <sha>                    CI: changed plans must pass check and keep every
 //                                                                                 checkbox; "no-plan" PRs must stay small
-//   node scripts/ticket.mjs ci-done  --head <merge sha>                           CI: set merged plans' Tasks to Done
+//   node scripts/ticket.mjs ci-done  --head <merge sha> --pr-files <file>         CI: set merged plans' Tasks to Done
 //
 // Options: --dry-run prints Notion requests instead of sending them and does not modify the plan.
 // Tracker: "notion" (default when dataSourceId is set) or "local" (offline/public markdown-only mode).
@@ -43,6 +43,11 @@ const config = JSON.parse(
   readFileSync(join(here, 'ticket.config.json'), 'utf8'),
 );
 const NOTION_VERSION = '2025-09-03';
+if (config.tracker !== undefined && !['local', 'notion'].includes(config.tracker))
+  fail('tracker must be "local" or "notion" in scripts/ticket.config.json');
+if (config.tracker === 'notion' &&
+    (typeof config.dataSourceId !== 'string' || !config.dataSourceId.trim()))
+  fail('Notion tracker requires dataSourceId in scripts/ticket.config.json');
 const isLocal = config.tracker === 'local' || !config.dataSourceId;
 
 // Title format from .cursor/rules/notion-workspaces.mdc: {PROJECT} - {MODE} - {TYPE}: {Title}. The script adds the project prefix.
@@ -590,15 +595,22 @@ function recordTicket(plan, page, key, { recovered = false, agent } = {}) {
   );
 }
 
-const closeTicket = (url) => {
-  if (isLocal || /^local:\/\//.test(url || '')) return Promise.resolve();
-  return notion('PATCH', `pages/${pageId(url)}`, {
+async function closeTicket(url, date = today()) {
+  if (isLocal || /^local:\/\//.test(url || '')) return;
+  const path = `pages/${pageId(url)}`;
+  const page = await notion('GET', path);
+  const status = page.properties?.Status?.status?.name;
+  const completed = page.properties?.['Completed At'];
+  if (!opts.dryRun && (!status || !completed || !Object.hasOwn(completed, 'date')))
+    fail('Notion Task is missing Status or Completed At; cannot safely close it');
+  if (status === 'Done' && completed?.date?.start) return;
+  await notion('PATCH', path, {
     properties: {
       Status: { status: { name: 'Done' } },
-      'Completed At': { date: { start: today() } },
+      ...(completed?.date?.start ? {} : { 'Completed At': { date: { start: date } } }),
     },
   });
-};
+}
 const text = (content) => [{ text: { content: content.slice(0, 1990) } }];
 
 // ---------- plan resolution & diff helpers ----------
@@ -763,6 +775,26 @@ function ensurePlanWorktree(entries, branch, plan, { name, noCreate = false } = 
   return { path, created: true };
 }
 
+function localPlanStatus(plan) {
+  const status = plan.meta.status;
+  const ticket = plan.meta.ticket || '';
+  if (!isLocal || !ticket.startsWith('local://') ||
+      !['in-progress', 'shipped'].includes(status)) return status;
+  const branches = config.protectedBranches || ['main', 'master', 'develop'];
+  for (const branch of branches) {
+    for (const ref of [`refs/remotes/origin/${branch}`, `refs/heads/${branch}`]) {
+      const merged = git(['show', `${ref}:${plan.rel}`], { allowFail: true });
+      if (!merged.startsWith('---\n')) continue;
+      const committed = readPlanText(merged, plan.rel);
+      if (committed.meta.ticket !== ticket) continue;
+      const { items } = findCheckboxes(committed.body);
+      if (items.length && items.every((item) =>
+        item.isChecked || /\sdeferred:\s*\S/i.test(item.text))) return 'done';
+    }
+  }
+  return status;
+}
+
 function resolvePlanAndTarget() {
   const planArg = opts.files.find((f) => f.endsWith('.plan.md'));
   const plan = planArg ? readPlan(planArg) : resolveActivePlan();
@@ -795,7 +827,7 @@ function resolveActivePlan() {
         return readPlan(join(repoRoot, branchPlans[0]));
     }
   }
-  const inProgress = plans.filter((p) => p.meta.status === 'in-progress');
+  const inProgress = plans.filter((p) => localPlanStatus(p) === 'in-progress');
   if (inProgress.length === 1) return inProgress[0];
   if (plans.length === 1) return plans[0];
   fail(
@@ -1241,7 +1273,7 @@ const commands = {
 
     const lines = [
       `# Session Context: ${plan.meta.title || plan.rel}`,
-      `Plan: ${plan.rel} | Status: ${plan.meta.status || 'unknown'} | Ticket: ${plan.meta.ticket || 'none'}`,
+      `Plan: ${plan.rel} | Status: ${localPlanStatus(plan) || 'unknown'} | Ticket: ${plan.meta.ticket || 'none'}`,
       `Branch: ${branch} | Tree: ${clean ? 'clean' : 'dirty'}${plan.meta.reviewedBy ? ` | Reviewed: ${plan.meta.reviewedBy} (${plan.meta.reviewVerdict})` : ''}`,
       ...(() => {
         const tiers = getVerifyTiers();
@@ -1975,7 +2007,7 @@ const commands = {
       .filter((l) => l.startsWith('- [ ]'));
 
     console.log(`\n=== Resuming Session ===`);
-    console.log(`Plan:         ${plan.rel} (${plan.meta.status || 'unknown'})`);
+    console.log(`Plan:         ${plan.rel} (${localPlanStatus(plan) || 'unknown'})`);
     console.log(`Branch:       ${branch} (${clean ? 'clean' : 'dirty'})`);
     if (statusShort) {
       console.log(
@@ -2068,7 +2100,7 @@ const commands = {
 
     const lines = [
       `# Review Packet: ${plan.meta.title || plan.rel}`,
-      `Plan: ${plan.rel} | Status: ${plan.meta.status || 'unknown'} | Branch: ${plan.meta.branch || git(['rev-parse', '--abbrev-ref', 'HEAD'], { allowFail: true })}`,
+      `Plan: ${plan.rel} | Status: ${localPlanStatus(plan) || 'unknown'} | Branch: ${plan.meta.branch || git(['rev-parse', '--abbrev-ref', 'HEAD'], { allowFail: true })}`,
       `Ticket: ${plan.meta.ticket || 'none'} | Reviewed: ${plan.meta.reviewedBy ? `${plan.meta.reviewedBy} (${plan.meta.reviewVerdict || 'unknown'})` : 'not yet'}`,
       ...(resolvedTest
         ? [
@@ -2467,14 +2499,36 @@ const commands = {
 
   async 'ci-done'() {
     if (!opts.head) fail('usage: ci-done --head <merge sha>');
-    if (!isLocal && !token() && !opts.dryRun)
-      return console.log('NOTION_TOKEN secret not set; skipping ticket close.');
-    for (const f of changedPlans([`${opts.head}^1`, opts.head])) {
-      const plan = readPlan(join(repoRoot, f));
-      if (hasTicket(plan.meta.ticket)) {
-        await closeTicket(plan.meta.ticket);
-        console.log(`${f}: ticket set to Done.`);
-      }
+    if (isLocal) return console.log('Local tracker: plan completion is derived from the protected branch.');
+    const mergedAt = opts.mergedAt ? new Date(opts.mergedAt) : new Date();
+    if (!Number.isFinite(mergedAt.valueOf())) fail('invalid --merged-at timestamp');
+    const date = mergedAt.toLocaleDateString('sv-SE', {
+      timeZone: config.timeZone || 'Europe/Berlin',
+    });
+    let files;
+    if (opts.prFiles) {
+      const pages = JSON.parse(readFileSync(opts.prFiles, 'utf8'));
+      if (!Array.isArray(pages) || !pages.every(Array.isArray))
+        fail('invalid GitHub PR file list');
+      files = pages.flat();
+      const expected = Number(opts.changedFiles);
+      if (!opts.pr || !opts.mergedAt || !/^\d+$/.test(opts.changedFiles || '') ||
+          !Number.isSafeInteger(expected) || expected < 0 || files.length !== expected)
+        fail('incomplete GitHub PR file list or missing --pr');
+    } else {
+      const base = opts.base || `${opts.head}^1`;
+      files = git(['diff', '--name-only', '--diff-filter=AMR', '-z', base, opts.head, '--', config.plansDir])
+        .split('\0').filter(Boolean).map((filename) => ({ filename, status: 'added' }));
+    }
+    for (const { filename, status } of files) {
+      if (typeof filename !== 'string' || !['added', 'modified', 'renamed'].includes(status) ||
+          !filename.startsWith(`${config.plansDir}/`) || !filename.endsWith('.plan.md') ||
+          basename(filename).startsWith('_') || filename.startsWith(`${config.plansDir}/archive/`)) continue;
+      const plan = readPlanText(git(['show', `${opts.head}:${filename}`]), filename);
+      if (opts.pr && plan.meta.pr !== opts.pr && (plan.meta.pr || status !== 'added')) continue;
+      if (!hasTicket(plan.meta.ticket)) continue;
+      await closeTicket(plan.meta.ticket, date);
+      console.log(`${filename}: ticket is Done.`);
     }
   },
 

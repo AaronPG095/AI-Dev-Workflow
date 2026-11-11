@@ -294,18 +294,43 @@ for (const started of [null, '2026-10-31'])
       );
   });
 
+const completionState = (status = 'Doing', start = null) => ({
+  body: {
+    properties: {
+      Status: { status: { name: status } },
+      'Completed At': { date: start ? { start } : null },
+    },
+  },
+});
+
 test('done writes Done and Completed At together', (t) => {
-  const r = fixture(t, `ticket: ${url}\n`, [{ body: {} }]).run('done');
+  const r = fixture(t, `ticket: ${url}\n`, [completionState(), { body: {} }]).run('done');
   assert.equal(r.status, 0, r.stderr);
-  assert.equal(r.calls[0].body.properties.Status.status.name, 'Done');
+  assert.equal(r.calls[0].method, 'GET');
+  assert.equal(r.calls[1].body.properties.Status.status.name, 'Done');
   assert.match(
-    r.calls[0].body.properties['Completed At'].date.start,
+    r.calls[1].body.properties['Completed At'].date.start,
     /^\d{4}-\d{2}-\d{2}$/,
   );
 });
 
-test('ci-done closes the merged plan with Completed At', (t) => {
-  const f = fixture(t, `ticket: ${url}\n`, [{ body: {} }]);
+test('done preserves existing completion and skips a redundant update', (t) => {
+  const open = fixture(t, `ticket: ${url}\n`, [
+    completionState('Doing', '2025-10-20'),
+    { body: {} },
+  ]).run('done');
+  assert.equal(open.status, 0, open.stderr);
+  assert.deepEqual(open.calls[1].body.properties, { Status: { status: { name: 'Done' } } });
+  const closed = fixture(t, `ticket: ${url}\n`, [
+    completionState('Done', '2025-10-20'),
+  ]).run('done');
+  assert.equal(closed.status, 0, closed.stderr);
+  assert.deepEqual(closed.calls.map((call) => call.method), ['GET']);
+});
+
+test('ci-done reads the full PR file list and the committed plan after a linear merge', (t) => {
+  const pr = 'https://github.com/example/repo/pull/1';
+  const f = fixture(t, `ticket: ${url}\npr: ${pr}\n`, [completionState(), { body: {} }]);
   f.git('init', '-b', 'test-ticket');
   f.git(
     '-c',
@@ -327,13 +352,91 @@ test('ci-done closes the merged plan with Completed At', (t) => {
     '-m',
     'plan',
   );
-  const r = f.run('ci-done', ['--head', f.git('rev-parse', 'HEAD')]);
+  f.git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid',
+    'commit', '--allow-empty', '-m', 'last rebased commit does not touch plan');
+  writeFileSync(f.plan, 'This dirty checkout is not the merged plan.');
+  const list = join(f.root, 'pr-files.json');
+  writeFileSync(list, JSON.stringify([
+    [{ filename: 'docs/plans/FO-Plan-Test.plan.md', status: 'added' }],
+    [{ filename: 'README.md', status: 'modified' }],
+  ]));
+  const args = [
+    '--head', f.git('rev-parse', 'HEAD'), '--pr-files', list, '--pr', pr,
+    '--changed-files', '2', '--merged-at', '2025-10-20T22:30:00Z',
+  ];
+  const r = f.run('ci-done', args, undefined, { omitPlan: true });
   assert.equal(r.status, 0, r.stderr);
-  assert.equal(r.calls[0].body.properties.Status.status.name, 'Done');
-  assert.match(
-    r.calls[0].body.properties['Completed At'].date.start,
-    /^\d{4}-\d{2}-\d{2}$/,
-  );
+  assert.equal(r.calls[1].body.properties.Status.status.name, 'Done');
+  assert.equal(r.calls[1].body.properties['Completed At'].date.start, '2025-10-21');
+  const truncated = f.run('ci-done', [...args, '--changed-files', '3'], undefined, { omitPlan: true });
+  assert.notEqual(truncated.status, 0);
+  assert.match(truncated.stderr, /incomplete GitHub PR file list/);
+  assert.equal(truncated.calls.length, r.calls.length);
+  const missingSecret = f.run('ci-done', args, undefined, {
+    omitPlan: true,
+    envOverrides: { NOTION_TOKEN: '' },
+  });
+  assert.notEqual(missingSecret.status, 0);
+  assert.match(missingSecret.stderr, /NOTION_TOKEN is not set/);
+});
+
+test('explicit Notion mode fails before making a local ticket without a data source', (t) => {
+  const f = fixture(t, '', [], { tracker: 'notion', dataSourceId: '' });
+  const r = f.run('create', ['--agent', 'Codex']);
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /Notion tracker requires dataSourceId/);
+  assert.equal(r.calls.length, 0);
+  assert.doesNotMatch(r.plan, /local:\/\//);
+});
+
+for (const method of ['merge commit', 'squash']) {
+  test(`ci-done reads the committed plan after a ${method} merge`, (t) => {
+    const pr = 'https://github.com/example/repo/pull/2';
+    const f = fixture(t, `ticket: ${url}\npr: ${pr}\n`, [
+      completionState(),
+      { body: {} },
+    ]);
+    f.git('init', '-b', 'main');
+    f.git('config', 'user.name', 'Test');
+    f.git('config', 'user.email', 'test@example.invalid');
+    f.git('commit', '--allow-empty', '-m', 'base');
+    f.git('switch', '-c', 'feature');
+    f.git('add', 'docs/plans');
+    f.git('commit', '-m', 'plan');
+    f.git('commit', '--allow-empty', '-m', 'follow-up');
+    f.git('switch', 'main');
+    if (method === 'squash') {
+      f.git('merge', '--squash', 'feature');
+      f.git('commit', '-m', 'squash merge');
+    } else {
+      f.git('merge', '--no-ff', '-m', 'merge commit', 'feature');
+    }
+    const list = join(f.root, 'pr-files.json');
+    writeFileSync(list, JSON.stringify([
+      [{ filename: 'docs/plans/FO-Plan-Test.plan.md', status: 'added' }],
+    ]));
+    const r = f.run('ci-done', [
+      '--head', f.git('rev-parse', 'HEAD'), '--pr-files', list, '--pr', pr,
+      '--changed-files', '1', '--merged-at', '2025-10-20T12:30:00Z',
+    ], undefined, { omitPlan: true });
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(r.calls[1].body.properties['Completed At'].date.start, '2025-10-20');
+  });
+}
+
+test('local plan status is derived from the protected branch without rewriting the plan', (t) => {
+  const f = fixture(t, 'status: in-progress\nticket: local://FO:FO-Plan-Test\n', [], {
+    tracker: 'local',
+  });
+  f.git('init', '-b', 'main');
+  f.git('add', '.');
+  f.git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid',
+    'commit', '-m', 'merged plan');
+  const r = f.run('prime');
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /Status: done/);
+  assert.match(r.plan, /status: in-progress/);
+  assert.equal(r.calls.length, 0);
 });
 
 test('malformed lookup response fails closed before creating a Task', (t) => {
@@ -506,7 +609,7 @@ test('pack outputs compact review packet, filters lockfiles, and truncates large
 });
 
 test('worktree .env fallback reads NOTION_TOKEN from main checkout', (t) => {
-  const f = fixture(t, `ticket: ${url}\n`, [{ body: {} }]);
+  const f = fixture(t, `ticket: ${url}\n`, [completionState(), { body: {} }]);
   f.git('init', '-b', 'main');
   f.git('add', '.');
   f.git(
@@ -525,12 +628,12 @@ test('worktree .env fallback reads NOTION_TOKEN from main checkout', (t) => {
 
   const wt = join(f.root, '.worktrees/wt-test');
   f.git('worktree', 'add', wt, '-b', 'feat/wt');
-  const r = f.run('done', [], [{ body: {} }], {
+  const r = f.run('done', [], undefined, {
     envOverrides: { NOTION_TOKEN: '' },
     cwd: wt,
   });
   assert.equal(r.status, 0, r.stderr);
-  assert.equal(r.calls.length, 1);
+  assert.deepEqual(r.calls.map((call) => call.method), ['GET', 'PATCH']);
 });
 
 test('sync.mjs patches AGENTS.md Development process section while preserving surrounding blocks', async (t) => {
