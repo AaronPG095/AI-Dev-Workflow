@@ -739,6 +739,11 @@ test('pr command validates plan closeout and outputs PR body in dry-run mode', (
     t,
     'status: in-progress\nticket: https://www.notion.so/test\nbranch: feat/pr-test\nreviewedBy: Gemini\nreviewVerdict: pass\n',
   );
+  mkdirSync(join(f.root, '.github'));
+  copyFileSync(
+    join(scripts, '../.github/pull_request_template.md'),
+    join(f.root, '.github/pull_request_template.md'),
+  );
   f.git('init', '-b', 'feat/pr-test');
   f.git('add', '.');
   f.git(
@@ -757,6 +762,92 @@ test('pr command validates plan closeout and outputs PR body in dry-run mode', (
   assert.match(r.stdout, /--- Dry Run: PR Body ---/);
   assert.match(r.stdout, /Test fixture/);
   assert.match(r.stdout, /Works verified: fixture/);
+  assert.match(r.stdout, /Plan: docs\/plans\/FO-Plan-Test.plan.md/);
+  assert.match(r.stdout, /Ticket: https:\/\/www.notion.so\/test/);
+  assert.match(r.stdout, /Review: pass/);
+  assert.match(r.stdout, /## What changed\s+Test fixture/);
+  assert.match(r.stdout, /## Deferred\s+None\./);
+});
+
+test('pr pins verified commits and resumes an open PR after a failed link commit', (t) => {
+  const f = fixture(t, 'ticket: local://FO:FO-Plan-Test\n', [], {
+    tracker: 'local',
+    verifyCommand: 'node -e "console.log(\'verified fixture\')"',
+  });
+  const remote = mkdtempSync(join(tmpdir(), 'ticket-pr-remote-'));
+  const mock = mkdtempSync(join(tmpdir(), 'ticket-pr-mock-'));
+  t.after(() => rmSync(remote, { recursive: true, force: true }));
+  t.after(() => rmSync(mock, { recursive: true, force: true }));
+  const preload = join(mock, 'mock.cjs');
+  const log = join(mock, 'calls.jsonl');
+  const url = 'https://github.com/example/repo/pull/1';
+  writeFileSync(preload, `
+    const child = require('node:child_process');
+    const fs = require('node:fs');
+    const real = child.execFileSync;
+    child.execFileSync = (bin, args, options) => {
+      if (bin !== 'gh') return real(bin, args, options);
+      const calls = fs.existsSync(process.env.PR_MOCK_LOG)
+        ? fs.readFileSync(process.env.PR_MOCK_LOG, 'utf8') : '';
+      fs.appendFileSync(process.env.PR_MOCK_LOG, JSON.stringify({args, body: options.input}) + '\\n');
+      if (args[1] === 'list') return calls.includes('"create"')
+        ? '[{"url":"${url}","isCrossRepository":false}]' : '[]';
+      if (args[1] === 'create') return '${url}';
+      throw Error('unexpected gh command');
+    };
+    require('node:module').syncBuiltinESMExports();
+  `);
+  const runPr = () => f.run('pr', ['--verify'], [], {
+    omitPlan: true,
+    envOverrides: { NODE_OPTIONS: `--import=${pathToFileURL(preload).href}`, PR_MOCK_LOG: log },
+  });
+  f.git('init', '-b', 'feat/pr-test');
+  f.git('config', 'user.name', 'Test');
+  f.git('config', 'user.email', 'test@example.invalid');
+  f.git('add', '.');
+  f.git('commit', '-m', 'baseline');
+
+  writeFileSync(join(f.root, 'staged.txt'), 'staged\n');
+  f.git('add', 'staged.txt');
+  const dirty = runPr();
+  assert.notEqual(dirty.status, 0);
+  assert.match(dirty.stderr, /requires a clean committed snapshot/);
+  assert.equal(existsSync(log), false);
+  f.git('commit', '-m', 'include staged work deliberately');
+  const verifiedHead = f.git('rev-parse', 'HEAD');
+
+  const failedPush = runPr();
+  assert.notEqual(failedPush.status, 0);
+  assert.match(failedPush.stderr, /could not push PR commit/);
+  assert.equal(existsSync(log), false);
+
+  f.git('init', '--bare', remote);
+  f.git('remote', 'add', 'origin', remote);
+  writeFileSync(join(mock, 'pre-commit'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+  f.git('config', 'core.hooksPath', mock);
+  const original = readFileSync(f.plan, 'utf8');
+  const rejectedLink = runPr();
+  assert.notEqual(rejectedLink.status, 0);
+  assert.match(rejectedLink.stderr, /could not commit PR link; retry to reuse/);
+  assert.equal(f.git('rev-parse', 'HEAD'), verifiedHead);
+  assert.match(f.git('ls-remote', 'origin', 'refs/heads/feat/pr-test'), new RegExp(verifiedHead));
+  assert.equal(readFileSync(f.plan, 'utf8'), original);
+  assert.equal(f.git('status', '--porcelain'), '');
+
+  f.git('config', '--unset', 'core.hooksPath');
+  const retry = runPr();
+  assert.equal(retry.status, 0, retry.stderr);
+  assert.match(retry.stdout, /Reusing pull request/);
+  assert.match(retry.plan, /status: shipped/);
+  assert.equal(f.git('diff-tree', '--no-commit-id', '--name-only', '-r', 'HEAD'),
+    'docs/plans/FO-Plan-Test.plan.md');
+  const linkedHead = f.git('rev-parse', 'HEAD');
+  assert.match(f.git('ls-remote', 'origin', 'refs/heads/feat/pr-test'), new RegExp(linkedHead));
+  assert.equal(f.git('rev-parse', '--abbrev-ref', '@{upstream}'), 'origin/feat/pr-test');
+  const calls = readFileSync(log, 'utf8').trim().split('\n').map(JSON.parse);
+  assert.deepEqual(calls.map(({ args }) => args[1]), ['list', 'create', 'list']);
+  assert.match(calls[1].body, /passed on commit/);
+  assert.match(calls[1].body, new RegExp(verifiedHead.slice(0, 10)));
 });
 
 test('ci-check requires a plan for workflow policy changes', (t) => {

@@ -966,6 +966,106 @@ function findCheckboxes(body) {
 
 // ---------- commands ----------
 
+function pullRequestBody(plan, verification) {
+  const summary = section(plan.body, 'Summary') || 'See plan.';
+  const criteria = section(plan.body, 'Acceptance criteria');
+  const deferred = deferredItems(plan.body).join('\n') || 'None.';
+  const tests = [verification, criteria].filter(Boolean).join('\n\n');
+  const templatePath = join(repoRoot, '.github', 'pull_request_template.md');
+  if (!existsSync(templatePath)) {
+    return [
+      '## Summary', summary, '', '## Acceptance criteria', tests, '',
+      '## Deferred', deferred, '', `Ticket: ${plan.meta.ticket}`,
+    ].join('\n');
+  }
+  const template = readFileSync(templatePath, 'utf8').replace(/\r\n/g, '\n');
+  return template
+    .replace(/^Plan: .*<file>.*$/m, () => `Plan: ${plan.rel}`)
+    .replace(/^Ticket: .*<.*>.*$/m, () => `Ticket: ${plan.meta.ticket}`)
+    .replace(/^Ticket:\s*\[Notion Task\]\([^)]*\)$/m, () => `Ticket: ${plan.meta.ticket}`)
+    .replace(/^Review: .*<.*>.*$/m, () => `Review: ${plan.meta.reviewVerdict || 'n/a'}`)
+    .replace(/<!-- 2-3 sentences: what changes and why -->/g, () => summary)
+    .replace(/<!-- Paste the acceptance criteria list[\s\S]*?-->/g, () => tests)
+    .replace(/<!-- Explicitly note any unticked acceptance criteria[\s\S]*?-->/g, () => deferred)
+    .replace(/^(## What changed)\n\n(?=## |$)/m, (_, heading) => `${heading}\n\n${summary}\n\n`)
+    .replace(/^(## How it was tested)\n\n(?=## |$)/m, (_, heading) => `${heading}\n\n${tests}\n\n`)
+    .replace(/^<Plan items marked "deferred:"[^\n]*>$/m, () => deferred);
+}
+
+function assertPrSnapshot(branch, head) {
+  if (git(['rev-parse', '--abbrev-ref', 'HEAD']) !== branch ||
+      git(['rev-parse', 'HEAD']) !== head ||
+      git(['status', '--porcelain=v1', '--untracked-files=normal'])) {
+    fail('pr requires a clean committed snapshot; commit or stash staged, unstaged, and untracked changes before retrying');
+  }
+}
+
+function prCommand(command, args, failure, input) {
+  try {
+    return execFileSync(command, args, {
+      cwd: repoRoot, encoding: 'utf8', input, stdio: ['pipe', 'pipe', 'pipe'],
+    }).trim();
+  } catch (error) {
+    fail(`${failure}: ${error.stderr?.trim() || error.message}`);
+  }
+}
+
+function pushPrCommit(branch, head) {
+  prCommand('git', ['push', 'origin', `${head}:refs/heads/${branch}`], 'could not push PR commit');
+  console.log(`Pushed ${head.slice(0, 10)} to origin/${branch}.`);
+}
+
+async function linkPullRequest(plan, prUrl, snapshot) {
+  if (plan.meta.pr === prUrl && plan.meta.status === 'shipped') return snapshot?.head;
+
+  const id = !isLocal && /^https:\/\//.test(plan.meta.ticket || '')
+    ? pageId(plan.meta.ticket)
+    : null;
+  if (id) {
+    await notion('PATCH', `pages/${id}`, { properties: { URL: { url: prUrl } } });
+  }
+  if (snapshot) assertPrSnapshot(snapshot.branch, snapshot.head);
+  const original = readFileSync(plan.full);
+  plan.meta.status = 'shipped';
+  plan.meta.pr = prUrl;
+  writePlan(plan);
+  let linkedHead;
+  if (snapshot) {
+    const linkedPlan = readFileSync(plan.full);
+    try {
+      git(['--literal-pathspecs', 'commit', '--only', '-m', `chore: link pr ${prUrl}`, '--', plan.rel]);
+    } catch (error) {
+      if (git(['rev-parse', 'HEAD']) === snapshot.head && readFileSync(plan.full).equals(linkedPlan)) {
+        writeFileSync(plan.full, original);
+      }
+      fail(`could not commit PR link; retry to reuse ${prUrl}: ${error.message}`);
+    }
+    linkedHead = git(['rev-parse', 'HEAD']);
+    const parent = git(['rev-parse', 'HEAD^']);
+    const linkedPaths = git([
+      'diff-tree', '--no-commit-id', '--name-only', '-r', '-z', linkedHead,
+    ]).split('\0').filter(Boolean);
+    if (parent !== snapshot.head || linkedPaths.length !== 1 || linkedPaths[0] !== plan.rel)
+      fail('the PR link commit contains unexpected changes; inspect the local commit before pushing');
+    assertPrSnapshot(snapshot.branch, linkedHead);
+  }
+
+  const deferred = deferredItems(plan.body).join('\n') || 'None';
+  console.log(`Copy into the PR's "Deferred" section:\n${deferred}`);
+  if (id) {
+    try {
+      await notion('POST', 'comments', {
+        parent: { page_id: id },
+        rich_text: text(`Shipped for review: ${prUrl}\nPlan ${plan.rel} is closed out. The Task moves to Done when the PR merges.\nDeferred: ${deferred}`),
+      }, { soft: true });
+    } catch (error) {
+      console.warn(`ticket: could not add a comment (${error.message}).`);
+    }
+  }
+  console.log(`Ticket linked to ${prUrl}`);
+  return linkedHead;
+}
+
 const commands = {
   async new() {
     const rawTopic = opts.files[0] || opts.topic || '';
@@ -2168,208 +2268,86 @@ const commands = {
       fail(`${plan.rel} is not closed out:\n- ${found.join('\n- ')}`);
     if (!/^https:\/\//.test(opts.pr || ''))
       fail('ship needs --pr <pull request URL>; open the PR first.');
-    const deferred = deferredItems(plan.body);
-    const deferredText = deferred.length
-      ? `Deferred (${deferred.length}):\n${deferred.join('\n')}`
-      : 'Deferred: none';
-    if (!isLocal && /^https:\/\//.test(plan.meta.ticket || '')) {
-      const id = pageId(plan.meta.ticket);
-      await notion('PATCH', `pages/${id}`, {
-        properties: { URL: { url: opts.pr } },
-      });
-      console.log(
-        `Copy into the PR's "Deferred" section:\n${deferred.length ? deferred.join('\n') : 'None'}`,
-      );
-      try {
-        await notion(
-          'POST',
-          'comments',
-          {
-            parent: { page_id: id },
-            rich_text: text(
-              `Shipped for review: ${opts.pr}\nPlan ${plan.rel} is closed out. The Task moves to Done when the PR merges.\n${deferredText}`,
-            ),
-          },
-          { soft: true },
-        );
-      } catch (e) {
-        console.warn(
-          `ticket: could not add a comment (${e.message}); the PR link is set.`,
-        );
-      }
-    } else {
-      console.log(
-        `Copy into the PR's "Deferred" section:\n${deferred.length ? deferred.join('\n') : 'None'}`,
-      );
-    }
-    plan.meta.status = 'shipped';
-    plan.meta.pr = opts.pr;
-    writePlan(plan);
-    console.log(`Ticket linked to ${opts.pr}`);
+    await linkPullRequest(plan, opts.pr);
   },
 
   async pr() {
     const plan = onePlan();
+    const branch = git(['rev-parse', '--abbrev-ref', 'HEAD']);
+    const protectedList = config.protectedBranches || ['main', 'master', 'develop'];
+    if (!branch || branch === 'HEAD' || protectedList.includes(branch))
+      fail(`cannot open PR directly from protected branch "${branch}". Checkout a feature branch first.`);
+
+    const head = git(['rev-parse', 'HEAD']);
+    const shouldVerify = opts.verify || opts.test;
+    if (!opts.dryRun || shouldVerify) {
+      assertPrSnapshot(branch, head);
+      if (!git(['--literal-pathspecs', 'ls-files', '--error-unmatch', '--', plan.rel], { allowFail: true }))
+        fail('pr needs a plan committed in this repository');
+    }
     const found = problems(plan);
     if (found.length) fail(`plan is not closed out:\n- ${found.join('\n- ')}`);
 
-    const branch = git(['rev-parse', '--abbrev-ref', 'HEAD']);
-    const protectedList = [
-      ...(config.protectedBranches || ['main', 'master', 'develop']),
-      'HEAD',
-      '',
-    ];
-    if (protectedList.includes(branch)) {
-      fail(
-        `cannot open PR directly from protected branch "${branch}". Checkout a feature branch first.`,
-      );
-    }
-
-    const summary = section(plan.body, 'Summary') || '';
-    const criteria = section(plan.body, 'Acceptance criteria') || '';
-    const deferred = deferredItems(plan.body);
-    const deferredText = deferred.length ? deferred.join('\n') : 'None';
-
-    const prTemplatePath = join(
-      repoRoot,
-      '.github',
-      'pull_request_template.md',
-    );
-    let body = '';
-    if (existsSync(prTemplatePath)) {
-      const template = readFileSync(prTemplatePath, 'utf8');
-      body = template
-        .replace(/<!-- 2-3 sentences: what changes and why -->/g, summary)
-        .replace(
-          /<!-- Paste the acceptance criteria list[\s\S]*?-->/g,
-          criteria,
-        )
-        .replace(
-          /<!-- Explicitly note any unticked acceptance criteria[\s\S]*?-->/g,
-          deferredText,
-        );
-      if (plan.meta.ticket) {
-        body = body.replace(
-          /Ticket:\s*\[Notion Task\]\([^\)]*\)/g,
-          `Ticket: ${plan.meta.ticket}`,
-        );
+    let verification = '';
+    if (shouldVerify) {
+      const tier = resolveVerifyCommand(config, 'full') || resolveVerifyCommand(config, 'test');
+      if (!tier) fail('pr --verify needs a configured full or test verification command');
+      console.log(`Running verification on ${head.slice(0, 10)} (${tier.tier}): ${tier.cmd}`);
+      try {
+        execSync(tier.cmd, {
+          cwd: repoRoot,
+          stdio: 'inherit',
+          env: { ...process.env, CI: '1' },
+        });
+      } catch (error) {
+        fail(`verification failed before opening PR: ${error.message}`);
       }
-    } else {
-      body = [
-        '## Summary',
-        summary,
-        '',
-        '## Acceptance criteria',
-        criteria,
-        '',
-        '## Deferred',
-        deferredText,
-        '',
-        `Ticket: ${plan.meta.ticket || 'none'}`,
-      ].join('\n');
+      assertPrSnapshot(branch, head);
+      verification = `- \`${tier.cmd}\` passed on commit \`${head.slice(0, 10)}\`.`;
     }
 
-    if (opts.verify || opts.test) {
-      const resolvedVerify =
-        resolveVerifyCommand(config, 'full') ||
-        resolveVerifyCommand(config, 'test');
-      if (resolvedVerify) {
-        console.log(
-          `Running verification (${resolvedVerify.tier}): ${resolvedVerify.cmd}...`,
-        );
-        try {
-          execSync(resolvedVerify.cmd, {
-            cwd: repoRoot,
-            encoding: 'utf8',
-            stdio: 'inherit',
-            env: { ...process.env, CI: '1' },
-          });
-          console.log(`Verification (${resolvedVerify.tier}) passed.`);
-        } catch (err) {
-          fail(`verification failed before opening PR: ${err.message}`);
-        }
-      }
-    }
-
-    if (opts.dryRun || opts['dry-run']) {
+    const title = plan.meta.title || plan.rel;
+    const body = pullRequestBody(plan, verification);
+    if (opts.dryRun) {
       console.log('--- Dry Run: PR Title ---');
-      console.log(plan.meta.title || plan.rel);
+      console.log(title);
       console.log('--- Dry Run: PR Body ---');
       console.log(body);
       return;
     }
 
-    try {
-      git(['push', '-u', 'origin', branch]);
-      console.log(`Branch ${branch} pushed to origin.`);
-    } catch (err) {
-      console.warn(
-        `Could not push branch ${branch} automatically: ${err.message}`,
-      );
+    pushPrCommit(branch, head);
+    prCommand('git', ['branch', `--set-upstream-to=origin/${branch}`, branch],
+      'could not configure the pushed branch as upstream');
+    const existing = JSON.parse(prCommand('gh', [
+      'pr', 'list', '--state', 'open', '--head', branch,
+      '--json', 'url,isCrossRepository',
+    ], 'could not look up existing pull request')).filter((pr) => !pr.isCrossRepository);
+    if (existing.length > 1)
+      fail(`multiple open pull requests use branch "${branch}"; link the intended PR manually`);
+
+    let prUrl = existing[0]?.url;
+    if (prUrl) {
+      console.log(`Reusing pull request: ${prUrl}`);
+    } else {
+      const args = ['pr', 'create', '--title', title, '--body-file', '-', '--head', branch];
+      if (opts.draft) args.push('--draft');
+      prUrl = prCommand('gh', args, 'could not create pull request', body);
+      console.log(`Pull request created: ${prUrl}`);
     }
+    if (!/^https:\/\//.test(prUrl || ''))
+      fail('GitHub CLI did not return a pull request URL; retry to look up the existing PR');
 
-    const title = plan.meta.title || plan.rel;
-    const ghArgs = [
-      'pr',
-      'create',
-      '--title',
-      title,
-      '--body',
-      body,
-      '--head',
-      branch,
-    ];
-    if (opts.draft) ghArgs.push('--draft');
-
-    let prUrl = '';
-    try {
-      prUrl = execFileSync('gh', ghArgs, {
-        encoding: 'utf8',
-        stdio: ['pipe', 'pipe', 'pipe'],
-      }).trim();
-    } catch (err) {
-      console.error(
-        'ticket: gh pr create failed. Ensure GitHub CLI (gh) is installed and authenticated (`gh auth login`).',
-      );
-      console.log('\n--- Generated PR Title ---');
-      console.log(title);
-      console.log('\n--- Generated PR Body ---');
-      console.log(body);
-      fail(err.message);
-    }
-
-    console.log(`Pull Request created: ${prUrl}`);
-    opts.pr = prUrl;
-    await commands.ship();
-
-    try {
-      git(['add', plan.rel]);
-      git(['commit', '-m', `chore: link pr ${prUrl}`]);
-      git(['push', 'origin', branch]);
-      console.log(`Branch ${branch} updated with shipped ticket state.`);
-    } catch (err) {
-      console.warn(
-        `Could not commit/push shipped state automatically: ${err.message}`,
-      );
-    }
+    assertPrSnapshot(branch, head);
+    const linkedHead = await linkPullRequest(plan, prUrl, { branch, head });
+    if (linkedHead !== head) pushPrCommit(branch, linkedHead);
 
     if (opts.auto) {
-      try {
-        console.log(`Enabling auto-merge on ${prUrl}...`);
-        execFileSync(
-          'gh',
-          ['pr', 'merge', prUrl, '--auto', '--squash', '--delete-branch'],
-          {
-            encoding: 'utf8',
-            stdio: ['pipe', 'pipe', 'pipe'],
-          },
-        );
-        console.log(`Auto-merge enabled for ${prUrl}.`);
-      } catch (err) {
-        console.warn(
-          `Could not enable auto-merge: ${err.stderr || err.message}`,
-        );
-      }
+      prCommand('gh', [
+        'pr', 'merge', prUrl, '--auto', '--squash', '--delete-branch',
+        '--match-head-commit', linkedHead,
+      ], 'could not enable auto-merge');
+      console.log(`Auto-merge enabled for ${prUrl}.`);
     }
   },
 
