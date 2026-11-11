@@ -2242,7 +2242,13 @@ const commands = {
     const isPlanPath = (file) => file.startsWith(`${config.plansDir}/`) &&
         file.endsWith('.plan.md') && !basename(file).startsWith('_') &&
         !file.startsWith(`${config.plansDir}/archive/`);
-    const isClosed = (text) => /^status:\s*(?:done|shipped)\s*$/im.test(text.split('\n---\n')[0]);
+    const isClosed = (text) => {
+      if (/^status:\s*(?:done|shipped)\s*$/im.test(text.split('\n---\n')[0])) return true;
+      // Earlier merges sometimes kept in-progress metadata on completed plans.
+      const { items } = findCheckboxes(bodyOf(text));
+      return items.length > 0 && items.every((item) =>
+        item.isChecked || /\sdeferred:\s*\S/i.test(item.text));
+    };
     for (const file of removedPaths.filter(isPlanPath)) {
       if (!isClosed(git(['show', `${opts.base}:${file}`], { allowFail: true })))
         fail(`active plan removed or renamed: ${file}`);
@@ -2271,6 +2277,7 @@ const commands = {
       const newFiles = git([
         'diff',
         '--name-only',
+        '--no-renames',
         '--diff-filter=A',
         range,
         '--',

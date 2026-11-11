@@ -815,7 +815,7 @@ test('ci-check validates committed plan identity, evidence, hygiene, and review 
     requireReview: true,
   });
   const approved = readFileSync(f.plan, 'utf8');
-  writeFileSync(f.plan, approved.replace('status: draft', 'status: shipped'));
+  writeFileSync(f.plan, approved.replace('status: draft', 'status: in-progress'));
   f.git('init', '-b', 'main');
   f.git('config', 'user.name', 'Test');
   f.git('config', 'user.email', 'test@example.invalid');
