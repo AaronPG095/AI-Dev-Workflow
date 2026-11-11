@@ -304,7 +304,12 @@ When developing locally with sibling repositories in the same parent folder:
 .\scripts\sync-repos.ps1 C:\path\to\my-repo -InitPrefix MYP
 ```
 
-### Automated GitHub Action Sync (`workflow-sync.yml`)
-Downstream repositories receive `.github/workflows/workflow-sync.yml`, which runs weekly or via `workflow_dispatch`. If upstream `AI-Dev-Workflow` has updates, the action automatically detects drift and opens a PR: `chore(workflow): sync to latest AI-Dev-Workflow`.
+Both installers and `sync.mjs` use the same versioned manifest. Remote sync resolves its ref to one Git commit before loading files. Use `--branch <commit-sha>` for an exact release. Existing `scripts/ticket.config.json` files are preserved. To upgrade an older copy without the manifest, run the current installer from GitHub in the target repo.
+
+`--check` exits with **0** when current, **1** for managed-file drift or absence, and **2** for an incomplete check such as missing config or a failed download. `--check --bundle-only` checks the manifest-managed files without checking generated agent documentation. Doctor uses this mode against the local bundle.
+
+### Scheduled drift check (`workflow-sync.yml`)
+
+The downstream workflow checks weekly or via `workflow_dispatch`. If it reports drift, run sync on a branch and open a PR with an approved plan.
 
 See [`docs/dev-workflow/setup-other-repos.md`](docs/dev-workflow/setup-other-repos.md) for full details on Local vs. Notion configuration.

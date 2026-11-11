@@ -29,7 +29,9 @@ From the `AI-Dev-Workflow` checkout when sibling repositories are present:
 .\scripts\sync-repos.ps1 C:\path\to\repo
 ```
 
-`sync.mjs` updates the shared engine files (`scripts/ticket.mjs`, `scripts/ticket.test.mjs`, `docs/plans/_template.plan.md`, `.agents/skills/{dev-workflow,quick-review}/SKILL.md`, `.claude/skills/{dev-workflow,quick-review}/SKILL.md`, `.github/workflows/{plan-check,ticket-done,workflow-sync}.yml`, and `.github/pull_request_template.md`) while preserving each repository's `scripts/ticket.config.json`.
+`scripts/workflow-manifest.json` lists the required engine, updater, installers, skills, templates, and workflows. Sync reads the complete bundle before writing files and preserves each repository's `scripts/ticket.config.json`. Remote mode pins the requested ref for the duration of a sync. To bootstrap or upgrade an older copy that cannot read the manifest, use a current installer.
+
+A check returns 0 if current, 1 for managed-file drift, and 2 when incomplete. The scheduled workflow reports drift. Run updates on a branch and open a PR with an approved plan.
 
 ---
 

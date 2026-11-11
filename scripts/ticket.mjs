@@ -34,7 +34,7 @@ import {
 } from 'node:fs';
 import { dirname, join, resolve, relative, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execFileSync, execSync } from 'node:child_process';
+import { execFileSync, execSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -83,6 +83,7 @@ const DEFAULT_PACK_IGNORE = [
   '*.Designer.cs',
 ];
 const WORKFLOW_FILES = new Set([
+  'scripts/workflow-manifest.json',
   '.github/workflows/ci.yml',
   'scripts/ticket.mjs',
   'scripts/ticket.test.mjs',
@@ -3130,26 +3131,11 @@ const commands = {
         !process.env.NOTION_TOKEN && !readEnvToken(join(dir, '.env'))
       );
 
-      let syncDrift = 'synced';
-      const ticketScript = join(dir, 'scripts', 'ticket.mjs');
-      const canonicalTicket = join(repoRoot, 'scripts', 'ticket.mjs');
-      if (
-        dir !== repoRoot &&
-        existsSync(ticketScript) &&
-        existsSync(canonicalTicket)
-      ) {
-        try {
-          const canonical = readFileSync(canonicalTicket, 'utf8').replace(
-            /\r\n/g,
-            '\n',
-          );
-          const current = readFileSync(ticketScript, 'utf8').replace(
-            /\r\n/g,
-            '\n',
-          );
-          if (canonical !== current) syncDrift = 'drift detected';
-        } catch {}
-      }
+      const syncCheck = spawnSync(process.execPath, [
+        join(here, 'sync.mjs'), dir, '--check', '--bundle-only',
+      ], { cwd: repoRoot, encoding: 'utf8', timeout: 30_000 });
+      const syncDrift = syncCheck.status === 0 ? 'synced to local bundle' :
+        syncCheck.status === 1 ? 'drift detected' : 'incomplete (run sync --check)';
 
       console.log(`Repo:      ${name} (${dir})`);
       console.log(

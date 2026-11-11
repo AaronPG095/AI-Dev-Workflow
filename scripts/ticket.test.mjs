@@ -1306,6 +1306,64 @@ test('public distribution and installer files integrity', () => {
   assert.match(ticketMjsContent, /['"]scripts\/install\.ps1['"]/);
 });
 
+test('the pinned workflow bundle installs and upgrades without replacing target config', (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'workflow-distribution-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const target = join(root, 'target');
+  mkdirSync(target);
+  const preload = join(root, 'fetch.mjs');
+  const release = 'a'.repeat(40);
+  writeFileSync(preload, `
+    import { readFileSync } from 'node:fs';
+    import { join } from 'node:path';
+    globalThis.fetch = async (url) => {
+      if (url === 'https://api.github.com/repos/example/workflow/commits/main')
+        return Response.json({ sha: '${release}' });
+      const pinned = 'https://raw.githubusercontent.com/example/workflow/${release}/';
+      if (!url.startsWith(pinned)) throw new Error('unversioned file request ' + url);
+      const path = url.slice(pinned.length);
+      if (path === process.env.MISSING_BUNDLE_FILE) return new Response('', { status: 404 });
+      return new Response(readFileSync(join(process.env.BUNDLE_ROOT, path), 'utf8'));
+    };
+  `);
+  const run = (flags = [], extraEnv = {}) => spawnSync(process.execPath, [
+    '--import', pathToFileURL(preload).href, join(scripts, 'sync.mjs'),
+    '--remote', '--upstream', 'example/workflow', target, ...flags,
+  ], {
+    encoding: 'utf8',
+    env: { ...process.env, BUNDLE_ROOT: join(scripts, '..'), ...extraEnv },
+  });
+
+  const incomplete = run(['--init-prefix', 'DEMO'], {
+    MISSING_BUNDLE_FILE: '.github/workflows/ticket-done.yml',
+  });
+  assert.equal(incomplete.status, 2, incomplete.stderr);
+  assert.deepEqual(readdirSync(target), []);
+  const missingConfig = run(['--check']);
+  assert.equal(missingConfig.status, 2, missingConfig.stderr);
+  assert.match(missingConfig.stderr, /missing scripts\/ticket.config.json/);
+
+  const installed = run(['--init-prefix', 'DEMO']);
+  assert.equal(installed.status, 0, installed.stderr);
+  assert.match(installed.stdout, new RegExp(release));
+  assert.match(readFileSync(join(target, '.agents/skills/dev-workflow/SKILL.md'), 'utf8'), /DEMO-Plan-/);
+  assert.equal(run(['--check']).status, 0);
+
+  const configPath = join(target, 'scripts/ticket.config.json');
+  const custom = JSON.stringify({ prefix: 'APP', tracker: 'local', protectedBranches: ['release'] });
+  writeFileSync(configPath, custom);
+  const updater = join(target, 'scripts/sync.mjs');
+  writeFileSync(updater, '// Previous installer placed this older updater.\n');
+  const drift = run(['--check']);
+  assert.equal(drift.status, 1, drift.stderr);
+  assert.match(drift.stdout, /\[DRIFT\].*scripts\/sync.mjs/);
+  assert.equal(run().status, 0);
+  assert.equal(readFileSync(configPath, 'utf8'), custom);
+  assert.match(readFileSync(updater, 'utf8'), /workflow-manifest\.json/);
+  assert.match(readFileSync(join(target, '.github/workflows/plan-check.yml'), 'utf8'), /branches: \["release"\]/);
+  assert.equal(run(['--check']).status, 0);
+});
+
 test('verify command executes tiered commands and falls back to legacy verifyCommand', (t) => {
   // 1. Tiered config
   const fTiered = fixture(t, '', [], {
