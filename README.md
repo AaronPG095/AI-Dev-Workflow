@@ -105,6 +105,8 @@ Stage new files before preparing a review. The review records a fingerprint of t
 
 `pr` requires a clean committed working tree. With `--verify`, it runs the configured verification on the commit it will push and stops if verification changes the checkout. If shipping fails after opening the PR, retry the command to reuse the open PR on that branch. The link commit contains only the selected plan.
 
+The merge workflow passes a complete PR file list to `ci-done`, so ticket closure covers merge commits, squash merges, and rebase merges. For a manual retry, pass `--base <pre-merge-sha> --head <merged-sha>` to identify the full range. Notion mode requires `dataSourceId` and reports missing credentials when a ticket needs closing. Local mode derives closure from protected branch history.
+
 *(Optional safety guardrail: run `node scripts/ticket.mjs hook install` to block accidental direct pushes to protected branches like `main`.)*
 
 ---
@@ -122,7 +124,7 @@ AI-Dev-Workflow/
 │   ├── workflows/
 │   │   ├── ci.yml                 # Runs the test suite on push/PR
 │   │   ├── plan-check.yml         # Blocks PRs with unclosed plans or unverified criteria
-│   │   ├── ticket-done.yml        # Marks linked tickets Done when a PR merges
+│   │   ├── ticket-done.yml        # Closes Notion tickets from the full merged PR file list
 │   │   └── workflow-sync.yml      # Weekly automated drift check and sync PR generator
 │   └── pull_request_template.md
 ├── docs/
