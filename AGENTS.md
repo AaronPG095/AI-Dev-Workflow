@@ -10,7 +10,7 @@ Canonical source for the shared, token-lean AI development workflow (plan, ticke
 
 ## Development process (every AI: Claude, Codex, Gemini/Antigravity, Cursor)
 
-Non-trivial changes follow these six steps. Only trivial changes (at most 40 changed lines, no new files under `scripts/`: typos, dependency bumps, one-line fixes) may skip them; their PR gets the `no-plan` label.
+Non-trivial changes follow these six steps. Only trivial changes with at most 40 changed lines, no new files under `scripts/`, and no managed workflow changes may skip them. Label those PRs `no-plan`.
 
 1. **Plan.** Investigate read-only and propose a plan. Wait for approval before changing code, and quote it under Notes in the plan.
 2. **Plan doc.** Copy `docs/plans/_template.plan.md` to `docs/plans/ADW-Plan-<Topic>-<YYYY-MM>.plan.md` or scaffold with `node scripts/ticket.mjs new "<Topic>" [--type Feature] [--branch]`. The title reads `<Plan|Debug|Ask> - <Type>: <Title>` (for example `Plan - Feature: Smart Shortcut Suggestions`); optionally set `priority`, `state` and `due` in the frontmatter. Acceptance criteria and Steps are `- [ ]` checkboxes. A plan bigger than one PR is split into separate plans, one per PR.

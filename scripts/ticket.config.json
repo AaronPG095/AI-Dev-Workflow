@@ -14,7 +14,7 @@
     "maxFileSizeKB": 1024,
     "disallowedPatterns": [".tmp", "test-results", "coverage", ".worktrees"]
   },
-  "requireReview": false,
+  "requireReview": true,
   "knownRepos": [
     "FluentOverlay",
     "Fluent-Studio-Website",
