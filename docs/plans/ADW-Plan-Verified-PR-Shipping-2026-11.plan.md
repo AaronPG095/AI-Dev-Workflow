@@ -1,7 +1,7 @@
 ---
 title: Plan - Bug: Verified PR Shipping
 ticket: local://ADW:ADW-Plan-Verified-PR-Shipping-2026-11
-status: in-progress
+status: shipped
 priority: high
 devTicketKey: ADW:ADW-Plan-Verified-PR-Shipping-2026-11
 agent: Codex
@@ -11,6 +11,7 @@ startedAt: 2026-11-11
 reviewedBy: Codex
 reviewVerdict: pass
 reviewFingerprint: c0ae0c25353072bb2762da7a6decc5c5758d67a3043d2db70e0ffeed46ce254e
+pr: https://github.com/AaronPG095/AI-Dev-Workflow/pull/20
 ---
 
 # Verified PR Shipping
@@ -37,4 +38,5 @@ Aaron approved the repair sequence: “Plan approved.” Aaron directed executio
 
 ## Progress log
 - 2026-11-11 11:09 UTC, Codex (review: pass): Verified snapshot, exact push, real template, link scope, and retry tests pass.
+- 2026-11-11 11:09 UTC, Codex (handoff): Done: Bind PR verification to the commit that is pushed, fill the real PR template, and safely resume an existing PR after a partial failure.; Next: Start the merge and ticket reconciliation repair.; Open: none; Tree: 1 dirty file(s)
 
