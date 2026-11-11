@@ -1,7 +1,7 @@
 ---
 title: Plan - Bug: Canonical Notion Ticket URLs
 ticket: local://ADW:ADW-Plan-Canonical-Notion-Ticket-URLs-2026-11
-status: in-progress
+status: shipped
 priority: high
 devTicketKey: ADW:ADW-Plan-Canonical-Notion-Ticket-URLs-2026-11
 agent: Codex
@@ -11,6 +11,7 @@ startedAt: 2026-11-11
 reviewedBy: Codex
 reviewVerdict: pass
 reviewFingerprint: 9a15d23d39ed999ed45ca2fd725ff3df1f41dab3ae03567730afa11d3f1b4cc6
+pr: https://github.com/AaronPG095/AI-Dev-Workflow/pull/23
 ---
 
 # Canonical Notion Ticket URLs
@@ -33,4 +34,5 @@ Aaron approved the repair sequence: “Plan approved.” Aaron directed executio
 
 ## Progress log
 - 2026-11-11 13:47 UTC, Codex (review: pass): Canonical app URL and lookalike host regression passed.
+- 2026-11-11 13:48 UTC, Codex (handoff): Done: Accept app.notion.com/p URLs returned by the Notion integration, with an explicit host and page ID.; Next: Resume the existing TokenHUD pilot ticket and distribute the corrected pinned release.; Open: none; Tree: 1 dirty file(s)
 
