@@ -418,6 +418,11 @@ test('auto-resolves active plan when plan argument is omitted', (t) => {
 
 test('review command records verdict and blocks check when verdict is block', (t) => {
   const f = fixture(t, `ticket: ${url}\n`, [], { requireReview: true });
+  f.git('init', '-b', 'main');
+  f.git('config', 'user.name', 'Test');
+  f.git('config', 'user.email', 'test@example.invalid');
+  f.git('add', '.');
+  f.git('commit', '-m', 'base');
   const unreviewed = f.run('check');
   assert.notEqual(unreviewed.status, 0);
   assert.match(unreviewed.stderr, /no passing review recorded/);
@@ -754,7 +759,7 @@ test('pr command validates plan closeout and outputs PR body in dry-run mode', (
   assert.match(r.stdout, /Works verified: fixture/);
 });
 
-test('ci-check allows workflow infrastructure sync under no-plan', (t) => {
+test('ci-check requires a plan for workflow policy changes', (t) => {
   const f = fixture(
     t,
     'status: in-progress\nticket: https://www.notion.so/test\n',
@@ -791,8 +796,90 @@ test('ci-check allows workflow infrastructure sync under no-plan', (t) => {
     envOverrides: { NO_PLAN: '1' },
     omitPlan: true,
   });
-  assert.equal(r.status, 0, r.stderr);
-  assert.match(r.stdout, /allowed as workflow infrastructure sync/i);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /no workflow policy changes/);
+  writeFileSync(join(f.root, 'notes.txt'), 'Small documentation change.\n');
+  f.git('add', 'notes.txt');
+  f.git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid',
+    'commit', '-m', 'docs: clarify notes');
+  const trivial = f.run('ci-check', ['--base', headSha, '--head', 'HEAD'], [], {
+    envOverrides: { NO_PLAN: '1' },
+    omitPlan: true,
+  });
+  assert.equal(trivial.status, 0, trivial.stderr);
+});
+
+test('ci-check validates committed plan identity, evidence, hygiene, and review scope', (t) => {
+  const f = fixture(t, 'ticket: local://FO:FO-Plan-Test\n', [], {
+    tracker: 'local',
+    requireReview: true,
+  });
+  const approved = readFileSync(f.plan, 'utf8');
+  writeFileSync(f.plan, approved.replace('status: draft', 'status: shipped'));
+  f.git('init', '-b', 'main');
+  f.git('config', 'user.name', 'Test');
+  f.git('config', 'user.email', 'test@example.invalid');
+  f.git('add', '.');
+  f.git('commit', '-m', 'historical plan');
+  const base = f.git('rev-parse', 'HEAD');
+  f.git('switch', '-c', 'fix/test-gate');
+  const commit = () => {
+    f.git('add', '.');
+    f.git('commit', '-m', 'candidate');
+  };
+  const check = () => f.run('ci-check', ['--base', base, '--head', 'HEAD'], [], {
+    omitPlan: true,
+    envOverrides: { NO_PLAN: '' },
+  });
+  const review = (plan) => f.run('review', [
+    plan, '--agent', 'Codex', '--verdict', 'pass', '--summary', 'fixture',
+  ], [], { omitPlan: true });
+
+  writeFileSync(f.plan, approved + '\n<!-- unrelated edit -->\n');
+  writeFileSync(join(f.root, 'app.mjs'), 'export const value = 1;\n');
+  commit();
+  assert.match(check().stderr, /no plan with a ticket header changed/);
+
+  const plan = 'docs/plans/FO-Plan-Current.plan.md';
+  const planPath = join(f.root, plan);
+  const current = approved.replace('local://FO:FO-Plan-Test', 'local://FO:FO-Plan-Current');
+  writeFileSync(planPath, current);
+  commit();
+  assert.match(check().stderr, /no passing review recorded/);
+  const stamped = review(plan);
+  assert.equal(stamped.status, 0, stamped.stderr);
+  const reviewed = readFileSync(planPath, 'utf8');
+  writeFileSync(planPath, reviewed.replace('status: draft', 'status: shipped'));
+  commit();
+  assert.equal(check().status, 0, check().stderr);
+  writeFileSync(planPath, 'invalid working-copy plan');
+  assert.equal(check().status, 0, check().stderr);
+
+  writeFileSync(planPath, reviewed.replace('local://FO:FO-Plan-Current', 'local://'));
+  commit();
+  assert.match(check().stderr, /ticket does not match/);
+
+  writeFileSync(planPath, reviewed.replace('Works verified: fixture', 'Replacement verified:'));
+  commit();
+  const replacement = check();
+  assert.match(replacement.stderr, /criterion ticked without evidence/);
+  assert.match(replacement.stderr, /checkbox removed or replaced/);
+  writeFileSync(planPath, reviewed.replace('- [x] Implement', '- [ ] Implement deferred:'));
+  commit();
+  assert.match(check().stderr, /open item: Implement deferred:/);
+  writeFileSync(planPath, reviewed);
+  writeFileSync(join(f.root, 'app.mjs'), 'export const value = 2;\n');
+  commit();
+  assert.match(check().stderr, /review does not cover this change/);
+
+  mkdirSync(join(f.root, 'src/coverage'), { recursive: true });
+  writeFileSync(join(f.root, 'src/coverage/debris.txt'), 'artifact');
+  commit();
+  assert.match(check().stderr, /committed hygiene issues/);
+  writeFileSync(join(f.root, 'src/coverage/debris.txt'), 'updated artifact');
+  const hygiene = f.run('hygiene', [], [], { omitPlan: true });
+  assert.equal(hygiene.status, 1);
+  assert.match(hygiene.stdout, /src\/coverage\/debris\.txt/);
 });
 
 test('tick and defer commands update plan checkboxes without manual markdown edits', (t) => {

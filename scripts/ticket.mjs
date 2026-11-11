@@ -34,6 +34,7 @@ import {
 import { dirname, join, resolve, relative, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync, execSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..');
@@ -76,6 +77,7 @@ const DEFAULT_PACK_IGNORE = [
   '*.Designer.cs',
 ];
 const WORKFLOW_FILES = new Set([
+  '.github/workflows/ci.yml',
   'scripts/ticket.mjs',
   'scripts/ticket.test.mjs',
   'scripts/ticket.config.json',
@@ -181,50 +183,44 @@ function resolveVerifyCommand(cfg = config, tier = 'test') {
   return null;
 }
 
-function checkHygiene(cfg = config) {
-  const issues = [];
-  const warnings = [];
-  const hyg = cfg.hygiene || {};
-  const maxKB = hyg.maxFileSizeKB || 1024;
-  const disallowed = new Set([
+function artifactPatterns(cfg = config) {
+  return new Set([
     '.tmp',
     'test-results',
     'coverage',
     '.worktrees',
-    ...(hyg.disallowedPatterns || []),
+    ...(cfg.hygiene?.disallowedPatterns || []),
   ]);
+}
 
-  let statusLines = [];
-  try {
-    statusLines = git(['status', '--porcelain'], { allowFail: true })
-      .split('\n')
-      .map((l) => l.trim())
-      .filter(Boolean);
-  } catch {}
+function isArtifact(file, patterns) {
+  return [...patterns].some((pattern) => pattern.startsWith('*.')
+    ? file.endsWith(pattern.slice(1))
+    : file === pattern || file.startsWith(`${pattern}/`) || file.split('/').includes(pattern));
+}
 
-  for (const line of statusLines) {
+function checkHygiene(cfg = config) {
+  const issues = [];
+  const warnings = [];
+  const maxKB = cfg.hygiene?.maxFileSizeKB || 1024;
+  const patterns = artifactPatterns(cfg);
+  const statusLines = git(['status', '--porcelain=v1', '-z', '--untracked-files=all'], {
+    allowFail: true, trim: false,
+  }).split('\0').filter(Boolean);
+  for (let index = 0; index < statusLines.length; index++) {
+    const line = statusLines[index];
     const code = line.slice(0, 2);
-    const file = line.slice(3).trim().replace(/^"|"$/g, '');
+    const file = line.slice(3);
+    if (/[RC]/.test(code)) index++;
 
     // Check conflict markers
-    if (code === 'UU' || code === 'AA' || code === 'UD' || code === 'DU') {
+    if (['DD', 'AU', 'UD', 'UA', 'DU', 'AA', 'UU'].includes(code)) {
       issues.push(`Unmerged conflict marker in ${file}`);
     }
 
     // Check disallowed patterns
-    const cleanFile = file.replace(/[/\\]+$/, '');
-    for (const pat of disallowed) {
-      if (
-        cleanFile === pat ||
-        file.startsWith(pat + '/') ||
-        file.startsWith(pat + '\\') ||
-        (pat.startsWith('*.') &&
-          (file.endsWith(pat.slice(1)) || cleanFile.endsWith(pat.slice(1))))
-      ) {
-        issues.push(`Disallowed temporary or build artifact: ${file}`);
-        break;
-      }
-    }
+    if (isArtifact(file, patterns))
+      issues.push(`Disallowed temporary or build artifact: ${file}`);
 
     // Check oversized files
     const fullPath = join(repoRoot, file);
@@ -268,7 +264,11 @@ function hasTicket(value) {
 function readPlan(path) {
   const full = resolve(path);
   if (!existsSync(full)) fail(`plan not found: ${path}`);
-  const text = readFileSync(full, 'utf8');
+  return readPlanText(readFileSync(full, 'utf8'), full);
+}
+
+function readPlanText(text, path) {
+  const full = resolve(repoRoot, path);
   const eol = text.includes('\r\n') ? '\r\n' : '\n';
   const norm = text.replace(/\r\n/g, '\n');
   const m = norm.match(/^---\n([\s\S]*?)\n---\n/);
@@ -315,7 +315,7 @@ function section(body, heading) {
   return out.join('\n').trim();
 }
 
-function problems(plan, { requireTicket = true, ignoreReview = false } = {}) {
+function problems(plan, { requireTicket = true, ignoreReview = false, base, head } = {}) {
   const found = [];
   if (!plan.meta.title || plan.meta.title.startsWith('<'))
     found.push('frontmatter has no title');
@@ -345,14 +345,13 @@ function problems(plan, { requireTicket = true, ignoreReview = false } = {}) {
     found.push('Steps section has no checkboxes');
   if (!/^\s*- \[[ xX]\]/m.test(section(plan.body, 'Acceptance criteria')))
     found.push('Acceptance criteria section has no checkboxes');
-  for (const line of plan.body.split('\n')) {
-    if (/^\s*- \[ \]/.test(line) && !/deferred:/i.test(line))
-      found.push(`open item: ${line.trim()}`);
-  }
-  for (const line of section(plan.body, 'Acceptance criteria').split('\n')) {
-    if (/^\s*- \[[xX]\]/.test(line) && !/verified:/i.test(line))
+  for (const item of findCheckboxes(plan.body).items) {
+    if (!item.isChecked && !/\sdeferred:\s*\S/i.test(item.text))
+      found.push(`open item: ${item.text}`);
+    if (item.isChecked && item.section.toLowerCase() === 'acceptance criteria' &&
+        !/\sverified:\s*\S/i.test(item.text))
       found.push(
-        `criterion ticked without evidence (append "verified: <how it was checked>"): ${line.trim()}`,
+        `criterion ticked without evidence (append "verified: <how it was checked>"): ${item.text}`,
       );
   }
   if (!ignoreReview) {
@@ -365,17 +364,33 @@ function problems(plan, { requireTicket = true, ignoreReview = false } = {}) {
       found.push(
         `no passing review recorded (run: node scripts/ticket.mjs pack ${plan.rel}, then node scripts/ticket.mjs review ${plan.rel} --agent <client> --verdict pass --summary "<findings>")`,
       );
+    } else if (['pass', 'warn'].includes(verdict) &&
+      (config.requireReview || plan.meta.reviewFingerprint) &&
+      plan.meta.reviewFingerprint !== reviewFingerprint(plan, base, head)) {
+      found.push('review does not cover this change; run pack and review again');
     }
   }
   return found;
 }
 
-const BOX = /^\s*- \[[ xX]\]/gm;
-const countBoxes = (body) =>
-  ['Acceptance criteria', 'Steps'].reduce(
-    (n, h) => n + (section(body, h).match(BOX) || []).length,
-    0,
-  );
+function missingCheckboxes(original, candidate) {
+  const identity = (item) => JSON.stringify([
+    item.section.toLowerCase(),
+    item.text.replace(/\s+(?:verified|deferred):.*$/i, '').trim(),
+  ]);
+  const remaining = new Map();
+  for (const item of findCheckboxes(candidate).items) {
+    const key = identity(item);
+    remaining.set(key, (remaining.get(key) || 0) + 1);
+  }
+  return findCheckboxes(original).items.filter((item) => {
+    const key = identity(item);
+    const count = remaining.get(key) || 0;
+    if (!count) return true;
+    remaining.set(key, count - 1);
+    return false;
+  });
+}
 const deferredItems = (body) =>
   body
     .split('\n')
@@ -388,13 +403,14 @@ function bodyOf(text) {
   return m ? norm.slice(m[0].length) : norm;
 }
 
-function git(args, { allowFail = false } = {}) {
+function git(args, { allowFail = false, trim = true } = {}) {
   try {
-    return execFileSync('git', args, {
+    const output = execFileSync('git', args, {
       cwd: repoRoot,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim();
+    });
+    return trim ? output.trim() : output;
   } catch (e) {
     if (allowFail) return '';
     throw e;
@@ -675,6 +691,18 @@ function resolveDiffBase() {
     git(['rev-parse', 'HEAD~1'], { allowFail: true }) ||
     git(['rev-parse', 'HEAD'], { allowFail: true })
   );
+}
+
+function reviewFingerprint(plan, base = resolveDiffBase(), head) {
+  if (!base) fail('review needs a Git baseline; commit the plan before reviewing');
+  const diff = execFileSync('git', [
+    'diff', '--binary', '--full-index', '--no-ext-diff', '--no-textconv',
+    '--no-color', '--no-renames', base, ...(head ? [head] : []), '--',
+    '.', `:(exclude,literal)${plan.rel}`,
+  ], { cwd: repoRoot, maxBuffer: 64 * 1024 * 1024 });
+  const scope = ['Summary', 'Acceptance criteria', 'Steps', 'Out of scope']
+    .map((heading) => section(plan.body, heading));
+  return createHash('sha256').update(JSON.stringify(scope)).update(diff).digest('hex');
 }
 
 function isIgnoredDiffPath(filePath, ignorePatterns) {
@@ -1731,6 +1759,9 @@ const commands = {
     });
     const deferred = deferredItems(plan.body);
     const statusShort = git(['status', '--short'], { allowFail: true });
+    const untracked = git(['ls-files', '--others', '--exclude-standard'], {
+      allowFail: true,
+    });
     const diffStat = base
       ? git(['diff', '--stat', base], { allowFail: true })
       : '';
@@ -1823,6 +1854,7 @@ const commands = {
       diffStat || '(no changes)',
       '',
       '## Code Diff (filtered)',
+      ...(untracked ? ['Untracked files omitted from the diff:', untracked, ''] : []),
       filteredDiff,
     ];
     console.log(lines.join('\n'));
@@ -1912,7 +1944,7 @@ const commands = {
     if (verdict === 'pass' && !opts.force) {
       const openCriteria = section(plan.body, 'Acceptance criteria')
         .split('\n')
-        .filter((l) => /^\s*- \[ \]/.test(l) && !/deferred:/i.test(l));
+        .filter((l) => /^\s*- \[ \]/.test(l) && !/\sdeferred:\s*\S/i.test(l));
       if (openCriteria.length > 0) {
         fail(
           `cannot stamp review verdict "pass": ${openCriteria.length} acceptance criteria remain unticked. Complete criteria first or pass --force.`,
@@ -1920,7 +1952,7 @@ const commands = {
       }
       const unverified = section(plan.body, 'Acceptance criteria')
         .split('\n')
-        .filter((l) => /^\s*- \[[xX]\]/.test(l) && !/verified:/i.test(l));
+        .filter((l) => /^\s*- \[[xX]\]/.test(l) && !/\sverified:\s*\S/i.test(l));
       if (unverified.length > 0) {
         fail(
           `cannot stamp review verdict "pass": ${unverified.length} criterion ticked without verified evidence. Pass --force to override.`,
@@ -1937,6 +1969,13 @@ const commands = {
     const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ');
     plan.meta.reviewedBy = agent;
     plan.meta.reviewVerdict = verdict;
+    if (verdict === 'block') {
+      delete plan.meta.reviewFingerprint;
+    } else {
+      if (git(['ls-files', '--others', '--exclude-standard', '--', '.', `:(exclude,literal)${plan.rel}`]))
+        fail('review omits untracked files; stage the reviewed files before stamping a verdict');
+      plan.meta.reviewFingerprint = reviewFingerprint(plan);
+    }
     plan.body = appendToSection(
       plan.body,
       'Progress log',
@@ -2192,32 +2231,43 @@ const commands = {
     if (!opts.base || !opts.head)
       fail('usage: ci-check --base <sha> --head <sha>');
     const range = `${opts.base}...${opts.head}`;
-    const plans = changedPlans([range]);
+    const diffPaths = (filter) => git([
+      'diff', '--name-only', '--no-renames', `--diff-filter=${filter}`, '-z', range,
+    ]).split('\0').filter(Boolean);
+    const changedPaths = diffPaths('AMT');
+    const removedPaths = diffPaths('D');
+    const patterns = artifactPatterns();
+    const debris = changedPaths.filter((file) => isArtifact(file, patterns));
+    if (debris.length) fail(`committed hygiene issues:\n- ${debris.join('\n- ')}`);
+    const isPlanPath = (file) => file.startsWith(`${config.plansDir}/`) &&
+        file.endsWith('.plan.md') && !basename(file).startsWith('_') &&
+        !file.startsWith(`${config.plansDir}/archive/`);
+    const isClosed = (text) => /^status:\s*(?:done|shipped)\s*$/im.test(text.split('\n---\n')[0]);
+    for (const file of removedPaths.filter(isPlanPath)) {
+      if (!isClosed(git(['show', `${opts.base}:${file}`], { allowFail: true })))
+        fail(`active plan removed or renamed: ${file}`);
+    }
+    const plans = changedPaths
+      .filter(isPlanPath)
+      .map((file) => ({
+        plan: readPlanText(git(['show', `${opts.head}:${file}`]), file),
+        original: originalPlan(file, opts.base, opts.head),
+        baseline: git(['show', `${opts.base}:${file}`], { allowFail: true }),
+      }))
+      .filter(({ baseline }) => !isClosed(baseline));
     if (!plans.length) {
       if (process.env.NO_PLAN !== '1')
         fail(
           `no plan with a ticket header changed in this PR. Add one under ${config.plansDir}/ (see AGENTS.md), or add the "no-plan" label for a trivial change.`,
         );
       const { maxChangedLines, noNewFilesUnder } = config.noPlan;
-      const changedFiles = git(['diff', '--name-only', range])
-        .split('\n')
-        .map((f) => f.trim().replace(/\\/g, '/'))
-        .filter(Boolean);
-      const isWorkflowSync =
-        changedFiles.length > 0 &&
-        changedFiles.every((f) => WORKFLOW_FILES.has(f));
       const changed = git(['diff', '--numstat', range])
         .split('\n')
         .filter(Boolean)
         .reduce((n, l) => {
           const [a, d] = l.split('\t');
-          return n + (Number(a) || 0) + (Number(d) || 0);
+          return a === '-' || d === '-' ? Infinity : n + Number(a) + Number(d);
         }, 0);
-      if (isWorkflowSync) {
-        return console.log(
-          `No plan in this PR; allowed as workflow infrastructure sync (${changed} changed lines across ${changedFiles.length} workflow files).`,
-        );
-      }
       const newFiles = git([
         'diff',
         '--name-only',
@@ -2228,27 +2278,33 @@ const commands = {
       ])
         .split('\n')
         .filter(Boolean);
-      if (changed > maxChangedLines || newFiles.length) {
+      const policyChanged = [...changedPaths, ...removedPaths]
+        .some((file) => WORKFLOW_FILES.has(file) || file.startsWith('.github/workflows/'));
+      if (policyChanged || changed > maxChangedLines || newFiles.length) {
         fail(
-          `the no-plan label only covers trivial changes (at most ${maxChangedLines} changed lines, no new files under ${noNewFilesUnder.join(', ')}). This PR changes ${changed} lines${newFiles.length ? ` and adds ${newFiles.join(', ')}` : ''}. Add a plan instead.`,
+          `the no-plan label only covers trivial changes (at most ${maxChangedLines} changed lines, no new files under ${noNewFilesUnder.join(', ')}, and no workflow policy changes). Add a plan instead.`,
         );
       }
       return console.log(
         `No plan in this PR; allowed by the no-plan label (${changed} changed lines).`,
       );
     }
+    const baseline = git(['merge-base', opts.base, opts.head]);
     let failed = false;
-    for (const f of plans) {
-      const plan = readPlan(join(repoRoot, f));
-      const found = problems(plan);
-      const original = originalPlan(f, opts.base, opts.head);
+    for (const { plan, original } of plans) {
+      const f = plan.rel;
+      const found = problems(plan, {
+        base: baseline,
+        head: opts.head,
+      });
+      const ticket = plan.meta.ticket || '';
+      const validIdentity = isLocal
+        ? ticket === `local://${ticketKey(plan)}`
+        : /^https:\/\/(?:www\.)?notion\.so\/[^?#]*[\da-f]{8}(?:-?[\da-f]{4}){3}-?[\da-f]{12}(?:[?#].*)?$/i.test(ticket);
+      if (!validIdentity) found.push('ticket does not match the configured tracker and plan identity');
       if (original) {
-        const before = countBoxes(bodyOf(original));
-        const now = countBoxes(plan.body);
-        if (now < before)
-          found.push(
-            `${before - now} checkbox(es) removed since the plan was first committed. Restore them and mark any you won't do "deferred: <reason>".`,
-          );
+        for (const item of missingCheckboxes(bodyOf(original), plan.body))
+          found.push(`checkbox removed or replaced: ${item.text}`);
       }
       if (found.length) {
         failed = true;

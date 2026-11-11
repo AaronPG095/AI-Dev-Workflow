@@ -80,7 +80,7 @@ irm https://raw.githubusercontent.com/AaronPG095/AI-Dev-Workflow/main/scripts/in
 
 ## The 6-Step Workflow
 
-Trivial changes (`<= 40` changed lines and no new files in the main source folder) can skip the process using the `no-plan` PR label. All non-trivial changes follow six steps:
+Trivial changes (`<= 40` changed lines, no new files in the main source folder, and no changes to managed workflow files) can skip the process using the `no-plan` PR label. Workflow sync PRs need a plan until the updater can verify the upstream version. All non-trivial changes follow six steps:
 
 1. **Plan** — Investigate read-only, propose the approach, and wait for human approval.
 2. **Plan Doc** — Scaffold automatically with `node scripts/ticket.mjs new "<Topic>" [--type Feature] [--branch]` or copy `docs/plans/_template.plan.md` to `docs/plans/<PREFIX>-Plan-<Topic>-<YYYY-MM>.plan.md` with `- [ ]` checkboxes for Acceptance Criteria and Steps. Plans bigger than one PR are split into sequential plans via `node scripts/ticket.mjs split <plan> --after <#|query>`.
@@ -99,7 +99,9 @@ Trivial changes (`<= 40` changed lines and no new files in the main source folde
    # Or dual-pass review:
    node scripts/ticket.mjs review --agent <client> --standards pass --spec pass --summary "<findings>"
    ```
-6. **Finish (`check` & `ship`)** — Verify close-out and working-tree hygiene with `node scripts/ticket.mjs check [--strict]`, open the PR, and link it via `node scripts/ticket.mjs ship --pr <url>` (or run `node scripts/ticket.mjs pr [--verify] [--auto]`). GitHub Actions (`plan-check.yml`) blocks PRs with open items, unverified criteria, deleted checkboxes, hygiene violations, or a `block` review verdict.
+6. **Finish (`check` & `ship`)** — Verify close-out and working-tree hygiene with `node scripts/ticket.mjs check [--strict]`, open the PR, and link it via `node scripts/ticket.mjs ship --pr <url>` (or run `node scripts/ticket.mjs pr [--verify] [--auto]`). GitHub Actions evaluates committed PR files with the base branch's validator. It rejects reused closed plans, removed or replaced checkboxes, empty evidence, committed artifacts matching the hygiene patterns, and a `block` or stale review verdict.
+
+Stage new files before preparing a review. The review records a fingerprint of the diff and plan requirements. Code or requirement edits require a new review. PR linking and progress log updates preserve the fingerprint. Set `requireReview: true` to require a passing or warning review before close-out.
 
 *(Optional safety guardrail: run `node scripts/ticket.mjs hook install` to block accidental direct pushes to protected branches like `main`.)*
 
