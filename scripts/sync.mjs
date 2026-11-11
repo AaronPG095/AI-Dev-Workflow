@@ -9,7 +9,7 @@
 //   node scripts/sync.mjs --remote [--check] [--dry-run]
 //   node scripts/sync.mjs <repo-path> [--check] [--dry-run] [--init-prefix <PREFIX>]
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, lstatSync } from 'node:fs';
 import { dirname, join, resolve, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -32,29 +32,14 @@ try {
   }
 } catch {}
 
-const DIRECT_FILES = [
-  'scripts/ticket.mjs',
-  'scripts/ticket.test.mjs',
-  'scripts/install.ps1',
-  'scripts/install.sh',
-  'docs/plans/_template.plan.md',
-  '.agents/skills/quick-review/SKILL.md',
-  '.claude/skills/quick-review/SKILL.md',
-  '.agents/skills/agentic-workflow/SKILL.md',
-  '.claude/skills/agentic-workflow/SKILL.md',
-  '.github/pull_request_template.md',
-];
-
-const PREFIX_TEMPLATED_FILES = [
-  '.agents/skills/dev-workflow/SKILL.md',
-  '.claude/skills/dev-workflow/SKILL.md',
-];
+const MANIFEST = 'scripts/workflow-manifest.json';
 
 const args = process.argv.slice(2);
 const opts = {
   repos: [],
   allKnown: false,
   check: false,
+  bundleOnly: false,
   dryRun: false,
   initPrefix: '',
   remote: false,
@@ -65,6 +50,7 @@ for (let i = 0; i < args.length; i++) {
   const a = args[i];
   if (a === '--all-known' || a === '-AllKnown') opts.allKnown = true;
   else if (a === '--check' || a === '-Check') opts.check = true;
+  else if (a === '--bundle-only') opts.bundleOnly = true;
   else if (a === '--dry-run' || a === '-DryRun') opts.dryRun = true;
   else if (a === '--remote' || a === '-Remote') opts.remote = true;
   else if (a === '--upstream' || a === '-Upstream') opts.upstream = args[++i] || opts.upstream;
@@ -73,26 +59,51 @@ for (let i = 0; i < args.length; i++) {
   else opts.repos.push(a);
 }
 
-const remoteCache = new Map();
-async function getSourceFile(rel) {
+async function fetchSource(url) {
+  const response = await fetch(url, { signal: AbortSignal.timeout(30_000) });
+  if (!response.ok) throw new Error(`Could not fetch ${url}: HTTP ${response.status}`);
+  return response.text();
+}
+
+async function loadBundle() {
+  let ref = opts.branch;
   if (opts.remote) {
-    if (remoteCache.has(rel)) return remoteCache.get(rel);
-    const url = `https://raw.githubusercontent.com/${opts.upstream}/${opts.branch}/${rel}`;
-    const res = await fetch(url);
-    if (res.status === 404) {
-      remoteCache.set(rel, null);
-      return null;
+    if (!/^[\w.-]+\/[\w.-]+$/.test(opts.upstream))
+      throw new Error('Upstream must be owner/repository');
+    if (!/^[0-9a-f]{40}$/i.test(ref)) {
+      const url = `https://api.github.com/repos/${opts.upstream}/commits/${encodeURIComponent(ref)}`;
+      const commit = JSON.parse(await fetchSource(url));
+      ref = commit.sha;
+      if (typeof ref !== 'string' || !/^[0-9a-f]{40}$/i.test(ref))
+        throw new Error('Upstream did not resolve to a commit SHA');
     }
-    if (!res.ok) {
-      throw new Error(`Failed to fetch ${url}: HTTP ${res.status}`);
-    }
-    const text = await res.text();
-    remoteCache.set(rel, text);
-    return text;
+    console.log(`Upstream release: ${opts.upstream}@${ref}`);
   }
-  const localPath = join(workflowRoot, rel);
-  if (!existsSync(localPath)) return null;
-  return readFileSync(localPath, 'utf8');
+  const read = async (path) => {
+    const text = opts.remote
+      ? await fetchSource(`https://raw.githubusercontent.com/${opts.upstream}/${ref}/${path}`)
+      : readFileSync(join(workflowRoot, path), 'utf8');
+    if (!text.trim()) throw new Error(`Empty required bundle file: ${path}`);
+    return text;
+  };
+  const manifestText = await read(MANIFEST);
+  const manifest = JSON.parse(manifestText);
+  if (manifest.schemaVersion !== 1 ||
+      ![manifest.copy, manifest.prefix, manifest.branches].every(Array.isArray) ||
+      manifest.starterConfig?.tracker !== 'local')
+    throw new Error('Invalid or unsupported workflow manifest');
+  const paths = [...manifest.copy, ...manifest.prefix, ...manifest.branches];
+  if (!manifest.copy.includes(MANIFEST) || !manifest.copy.includes('scripts/sync.mjs') ||
+      new Set(paths).size !== paths.length || paths.some((path) =>
+        typeof path !== 'string' || !/^(?:[\w.-]+\/)*[\w.-]+$/.test(path) ||
+        path.split('/').some((part) => part === '.' || part === '..' || part === '.git') ||
+        ['AGENTS.md', 'CLAUDE.md', 'scripts/ticket.config.json'].includes(path)))
+    throw new Error('Invalid required paths in workflow manifest');
+  const files = new Map([[MANIFEST, manifestText]]);
+  for (const path of paths) {
+    if (path !== MANIFEST) files.set(path, await read(path));
+  }
+  return { manifest, files };
 }
 
 if (resolve(process.argv[1] || '') === fileURLToPath(import.meta.url)) {
@@ -138,7 +149,7 @@ export function renderDevProcessSection({ prefix, noNewFilesUnder = ['src'], max
   return [
     '## Development process (every AI: Claude, Codex, Gemini/Antigravity, Cursor)',
     '',
-    `Non-trivial changes follow these six steps. Only trivial changes (at most ${maxChangedLines} changed lines, no new files under ${folders}: typos, dependency bumps, one-line fixes) may skip them; their PR gets the \`no-plan\` label.`,
+    `Non-trivial changes follow these six steps. Only trivial changes with at most ${maxChangedLines} changed lines, no new files under ${folders}, and no managed workflow changes may skip them. Label those PRs \`no-plan\`.`,
     '',
     '1. **Plan.** Investigate read-only and propose a plan. Wait for Aaron\'s approval before changing code, and quote it under Notes in the plan.',
     `2. **Plan doc.** Copy \`docs/plans/_template.plan.md\` to \`docs/plans/${prefix}-Plan-<Topic>-<YYYY-MM>.plan.md\` or scaffold with \`node scripts/ticket.mjs new "<Topic>" [--type Feature] [--branch]\`. The title reads \`<Plan|Debug|Ask> - <Type>: <Title>\` (for example \`Plan - Feature: Smart Shortcut Suggestions\`); optionally set \`priority\`, \`state\` and \`due\` in the frontmatter. Acceptance criteria and Steps are \`- [ ]\` checkboxes. A plan bigger than one PR is split into separate plans, one per PR.`,
@@ -183,93 +194,91 @@ export function patchClaudeMd(existingText) {
   return `@AGENTS.md\n\n${normalized}\n`;
 }
 
-if (resolve(process.argv[1] || '') === fileURLToPath(import.meta.url)) {
-  let totalDrift = 0;
+async function sync() {
+  if (opts.bundleOnly && !opts.check)
+    throw new Error('--bundle-only requires --check');
+  const { manifest, files } = await loadBundle();
+  const updates = [];
 
   for (const rawRepo of opts.repos) {
     const repo = resolve(rawRepo);
     const repoName = basename(repo);
+    if (!existsSync(repo)) throw new Error('Target repository is missing: ' + repo);
     const configPath = join(repo, 'scripts/ticket.config.json');
+    const configExists = existsSync(configPath);
+    if (!configExists && !opts.initPrefix)
+      throw new Error(repoName + ': missing scripts/ticket.config.json. Pass --init-prefix <PREFIX> to initialize.');
 
-    if (!existsSync(configPath)) {
-      if (opts.initPrefix) {
-        const starter = JSON.parse(readFileSync(join(workflowRoot, 'scripts/ticket.config.json'), 'utf8'));
-        starter.prefix = opts.initPrefix;
-        starter.noPlan = { maxChangedLines: 40, noNewFilesUnder: ['src'] };
-        writeManaged(configPath, `${JSON.stringify(starter, null, 2)}\n`, opts.dryRun);
-        console.log(`[${repoName}] Initialized scripts/ticket.config.json (prefix: ${opts.initPrefix})`);
-      } else {
-        console.warn(`[${repoName}] Missing scripts/ticket.config.json. Pass --init-prefix <PREFIX> to initialize.`);
-        continue;
-      }
-    }
-
-    const cfg = existsSync(configPath)
+    const cfg = configExists
       ? JSON.parse(readFileSync(configPath, 'utf8'))
-      : { prefix: opts.initPrefix, protectedBranches: ['main'], noPlan: { maxChangedLines: 40, noNewFilesUnder: ['src'] } };
+      : { prefix: opts.initPrefix, ...manifest.starterConfig };
     const prefix = cfg.prefix || 'PROJ';
-    let repoDrift = 0;
-
-    console.log(`=== ${repoName} (prefix: ${prefix}) ===`);
-
-    function syncItem(rel, expectedText) {
-      if (expectedText === null) return;
-      const dst = join(repo, rel);
-      const expected = norm(expectedText);
-      const actual = readNorm(dst);
-      if (expected !== actual) {
-        repoDrift++;
-        totalDrift++;
-        if (opts.check) {
-          console.log(`  [${actual === null ? 'MISSING' : 'DRIFT'}] ${rel}`);
-        } else {
-          writeManaged(dst, `${expected}\n`, opts.dryRun);
-          console.log(`  [UPDATED] ${rel}`);
-        }
-      } else if (opts.check) {
-        console.log(`  [OK]      ${rel}`);
-      }
-    }
-
-    for (const rel of DIRECT_FILES) {
-      syncItem(rel, await getSourceFile(rel));
-    }
-
-    for (const rel of PREFIX_TEMPLATED_FILES) {
-      const raw = await getSourceFile(rel);
-      syncItem(rel, raw.replace(/ADW-Plan-/g, `${prefix}-Plan-`));
-    }
-
     const branches = Array.isArray(cfg.protectedBranches) && cfg.protectedBranches.length
-      ? `[${cfg.protectedBranches.join(', ')}]`
-      : '[main]';
-    for (const wf of ['.github/workflows/plan-check.yml', '.github/workflows/ticket-done.yml']) {
-      const raw = await getSourceFile(wf);
-      syncItem(wf, raw.replace(/branches: \[main, develop\]/g, `branches: ${branches}`));
-    }
-    const syncWfRaw = await getSourceFile('.github/workflows/workflow-sync.yml');
-    syncItem('.github/workflows/workflow-sync.yml', syncWfRaw);
+      ? JSON.stringify(cfg.protectedBranches)
+      : '["main"]';
 
-    const agentsPath = join(repo, 'AGENTS.md');
-    const existingAgents = existsSync(agentsPath) ? readFileSync(agentsPath, 'utf8') : '';
-    const patchedAgents = patchAgentsMd(existingAgents, repoName, {
+    function compare(path, text) {
+      let partPath = repo;
+      for (const part of path.split('/')) {
+        partPath = join(partPath, part);
+        if (lstatSync(partPath, { throwIfNoEntry: false })?.isSymbolicLink())
+          throw new Error('Managed path contains a symbolic link: ' + partPath);
+      }
+      const destination = join(repo, path);
+      const current = readNorm(destination);
+      const expected = norm(text);
+      if (current === expected) return;
+      updates.push({ repoName, path, destination, text: expected + '\n', missing: current === null });
+    }
+
+    if (!configExists) compare('scripts/ticket.config.json', JSON.stringify(cfg, null, 2));
+    for (const path of manifest.copy) compare(path, files.get(path));
+    const canonicalSelf = opts.bundleOnly && !opts.remote && repo === workflowRoot;
+    for (const path of manifest.prefix)
+      compare(path, canonicalSelf ? files.get(path) :
+        files.get(path).replace(/\b[\w-]+-Plan-/g, () => prefix + '-Plan-'));
+    for (const path of manifest.branches) {
+      const text = files.get(path);
+      const branchList = /^(\s*branches:\s*)\[[^\r\n]+\]/gm;
+      if (!branchList.test(text))
+        throw new Error('Missing branch template in required bundle file: ' + path);
+      compare(path, canonicalSelf ? text :
+        text.replace(branchList, (_, key) => key + branches));
+    }
+
+    if (opts.bundleOnly) continue;
+    const agents = readNorm(join(repo, 'AGENTS.md')) || '';
+    compare('AGENTS.md', patchAgentsMd(agents, repoName, {
       prefix,
       noNewFilesUnder: cfg.noPlan?.noNewFilesUnder || ['src'],
       maxChangedLines: cfg.noPlan?.maxChangedLines || 40,
-    });
-    syncItem('AGENTS.md', patchedAgents);
-
-    const claudePath = join(repo, 'CLAUDE.md');
-    const existingClaude = existsSync(claudePath) ? readFileSync(claudePath, 'utf8') : '';
-    syncItem('CLAUDE.md', patchClaudeMd(existingClaude));
-
-    if (!opts.check && repoDrift === 0) {
-      console.log('  Already up to date.');
-    }
+    }));
+    const claude = readNorm(join(repo, 'CLAUDE.md')) || '';
+    compare('CLAUDE.md', patchClaudeMd(claude));
   }
 
-  if (opts.check && totalDrift > 0) {
-    console.log(`\nDetected ${totalDrift} drifted/missing file(s). Run without --check to sync.`);
-    process.exit(1);
+  // Validate all source and target inputs before changing a managed file.
+  for (const update of updates) {
+    if (opts.check) {
+      const state = update.missing ? 'MISSING' : 'DRIFT';
+      console.log('[' + state + '] ' + update.repoName + ': ' + update.path);
+    } else {
+      writeManaged(update.destination, update.text, opts.dryRun);
+      if (!opts.dryRun) console.log('[UPDATED] ' + update.repoName + ': ' + update.path);
+    }
+  }
+  if (!updates.length) console.log('Workflow bundle is up to date.');
+  if (opts.check && updates.length) {
+    console.log('Detected ' + updates.length + ' drifted/missing managed files.');
+    process.exitCode = 1;
+  }
+}
+
+if (resolve(process.argv[1] || '') === fileURLToPath(import.meta.url)) {
+  try {
+    await sync();
+  } catch (error) {
+    console.error('Incomplete workflow check or update: ' + error.message);
+    process.exitCode = 2;
   }
 }
