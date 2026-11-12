@@ -1,7 +1,7 @@
 ---
 title: Plan - Feature: Agentic Outer-Loop Supervisor and Wave Lifecycle Closure
 ticket: local://ADW:ADW-Plan-Agentic-Supervisor-Wave-Lifecycle-2026-11
-status: in-progress
+status: shipped
 priority: high
 state: flow
 due: 
@@ -13,6 +13,7 @@ startedAt: 2026-11-12
 reviewedBy: Gemini
 reviewVerdict: pass
 reviewFingerprint: 392171680bc6ae472bd4037d47db481518bf01e7fb28bbe7f9d77330a64a5030
+pr: https://github.com/AaronPG095/AI-Dev-Workflow/pull/24
 ---
 # Agentic Outer-Loop Supervisor and Wave Lifecycle Closure
 
