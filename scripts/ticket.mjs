@@ -2184,10 +2184,22 @@ const commands = {
           failureContext = tailLines(verifyRes.output, 15);
           continue;
         }
+        let planModified = false;
+        if (
+          resolvedItem.section.toLowerCase() === 'acceptance criteria' &&
+          !/\sverified:\s*\S/i.test(resolvedItem.text)
+        ) {
+          const parsedLines = planAfter.body.split('\n');
+          parsedLines[resolvedItem.lineIndex] =
+            `${resolvedItem.prefix}x${resolvedItem.delim}${resolvedItem.text} verified: verify ${ctx.resolvedVerify.tier} passed (exit code 0)`;
+          planAfter.body = parsedLines.join('\n');
+          planModified = true;
+        }
         if (planAfter.meta.retryCount) {
           delete planAfter.meta.retryCount;
-          writePlan(planAfter);
+          planModified = true;
         }
+        if (planModified) writePlan(planAfter);
         failureContext = '';
         completed++;
         continue;
