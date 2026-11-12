@@ -12,7 +12,7 @@ worktree: AI-Dev-Workflow
 startedAt: 2026-11-12
 reviewedBy: Gemini
 reviewVerdict: pass
-reviewFingerprint: 85027c12cc97561a0261ce12a3ad9d1ade5ef4cd4a5c2a5d645ee0ebc3302511
+reviewFingerprint: 392171680bc6ae472bd4037d47db481518bf01e7fb28bbe7f9d77330a64a5030
 ---
 # Agentic Outer-Loop Supervisor and Wave Lifecycle Closure
 
@@ -76,3 +76,4 @@ Complete the Layer 2 Agentic Coding Engine in `scripts/ticket.mjs` by adding an 
 
 <!-- One line per session/review, added with `ticket.mjs log` or `ticket.mjs review` -->
 - 2026-11-12 14:11 UTC, Gemini (review: pass): All 6 acceptance criteria and 6 steps verified against diff and 70/70 passing tests. Shared helpers (resolveStepContext, buildStepBrief, executeCheckpoint, pruneLinkedWorktrees) eliminate duplication; run supervisor safely isolates prompts via stdin/ADW_PROMPT_FILE with finally cleanup and circuit-breaker enforcement; wave --check and --prune handle worktree lifecycle cleanly.
+- 2026-11-12 14:15 UTC, Gemini (review: pass): Polished run command to auto-stamp verified evidence when runner ticks criteria directly; all 70 tests pass.
