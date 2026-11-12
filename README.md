@@ -20,9 +20,9 @@ flowchart TD
     end
 
     subgraph Layer2 ["Layer 2: Modular Agentic Engine (Autonomous Add-On)"]
-        A1["Level A: Autonomous Step Loop\n(ticket.mjs step / checkpoint --commit)"]
+        A1["Level A: Autonomous Step Loop & Supervisor\n(ticket.mjs step / checkpoint / run)"]
         A2["Level B: Adversarial Builder ↔ Reviewer\n(ticket.mjs step --role builder|reviewer|fixer)"]
-        A3["Level C: Worktree Wave Swarm\n(ticket.mjs wave --spawn|--status)"]
+        A3["Level C: Worktree Wave Swarm\n(ticket.mjs wave --spawn|--status|--check|--prune)"]
     end
 
     Layer1 -.->|"Opt-In Autonomy"| Layer2
@@ -39,7 +39,7 @@ Most AI coding workflows fail in one of two ways:
 
 `AI-Dev-Workflow` delivers the best of both worlds:
 - **Layer 1 (Deterministic Core):** Enforces plan fidelity, verified criteria evidence, zero-token context ignition (`prime`), zero-token review digests (`pack`), and strict pre-push/CI gates.
-- **Layer 2 (Modular Agentic Engine):** Enables autonomous self-healing loops with retry circuit breakers (`step`), verification-gated atomic git checkpoints (`checkpoint`), adversarial role briefs (`--role builder|reviewer|fixer`), and parallel git worktree waves (`wave`).
+- **Layer 2 (Modular Agentic Engine):** Enables autonomous self-healing loops with retry circuit breakers (`step` / `run`), verification-gated atomic git checkpoints (`checkpoint`), adversarial role briefs (`--role builder|reviewer|fixer`), and parallel git worktree waves (`wave`).
 - **One canonical process in `AGENTS.md`** (loaded natively by Codex, Antigravity/Gemini, Cursor, and via `@AGENTS.md` in Claude Code).
 - **One zero-dependency CLI (`scripts/ticket.mjs`)** with 57 hermetic tests running across macOS, Linux, and Windows.
 - **One zero-dependency CLI (`scripts/ticket.mjs`)** for plan scaffolding, session ignition, local or Notion ticket tracking, handoff logs, deterministic review packets, git guardrails, and GitHub Actions CI gates.
@@ -258,17 +258,22 @@ node scripts/ticket.mjs step --json
 # Level A: Stage the intended changes, then verify and commit them with the plan
 node scripts/ticket.mjs checkpoint <#> --commit [--message "<msg>"] [--tier <name>]
 
+# Outer-Loop Autonomous Supervisor (drive an external CLI runner step-by-step up to maxRetries)
+node scripts/ticket.mjs run [<plan>] --cmd "<runner>" [--review-cmd "<runner>"] [--commit] [--tier <name>] [--max-retries <N>] [--max-steps <N>] [--no-review] [--dry-run]
+
 # Level B: Generate role-isolated sub-agent briefs (Builder, Adversarial Reviewer, Block-Fixer)
 node scripts/ticket.mjs step --role builder
 node scripts/ticket.mjs step --role reviewer
 node scripts/ticket.mjs step --role fixer
 
-# Level C: Parallel Worktree Wave Swarm (provision isolated worktrees & live dashboard)
+# Level C: Parallel Worktree Wave Swarm (provision, monitor, check, and prune isolated worktrees)
 node scripts/ticket.mjs wave --spawn [--dry-run]
 node scripts/ticket.mjs wave docs/plans/Plan-A.plan.md docs/plans/Plan-B.plan.md --spawn
 node scripts/ticket.mjs wave --status
+node scripts/ticket.mjs wave --check [--test] [--strict]
+node scripts/ticket.mjs wave --prune [--dry-run] [--all]
 
-# Run the 57-test hermetic test suite
+# Run the hermetic test suite
 node --test scripts/ticket.test.mjs
 ```
 
