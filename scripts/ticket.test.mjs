@@ -2159,3 +2159,185 @@ test("wt prune preserves dirty, locked, and invoking worktrees", (t) => {
   for (const name of ['current', 'dirty', 'locked']) assert.ok(existsSync(join(parent, name)));
   assert.equal(existsSync(join(parent, 'clean')), false);
 });
+
+test('run command executes outer-loop steps, self-heals on retry, invokes reviewer, and trips circuit breaker', (t) => {
+  const f = fixture(
+    t,
+    'branch: feat/run-test\n',
+    [],
+    {
+      agentic: { maxRetries: 2, verifyTier: 'test' },
+      verify: { test: 'node verify.mjs' },
+    },
+  );
+  f.git('init', '-b', 'main');
+  f.git('config', 'user.name', 'Test');
+  f.git('config', 'user.email', 'test@example.invalid');
+  writeFileSync(
+    join(f.root, 'verify.mjs'),
+    `import { readFileSync } from 'node:fs';
+const state = readFileSync('state.txt', 'utf8').trim();
+if (state !== 'fixed') {
+  console.error('STATE_ERR: expected fixed, got ' + state);
+  process.exit(1);
+}
+console.log('VERIFY_OK');
+`,
+  );
+  writeFileSync(join(f.root, 'state.txt'), 'broken\n');
+  writeFileSync(
+    join(f.root, 'runner.mjs'),
+    `import { readFileSync, writeFileSync, appendFileSync, existsSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+const stdinText = readFileSync(0, 'utf8');
+const promptFile = process.env.ADW_PROMPT_FILE;
+if (!promptFile || !existsSync(promptFile)) throw new Error('missing ADW_PROMPT_FILE');
+const fileText = readFileSync(promptFile, 'utf8');
+if (stdinText !== fileText) throw new Error('stdin mismatch with ADW_PROMPT_FILE');
+appendFileSync('.git/prompt-paths.log', promptFile + '\\n');
+const role = process.env.ADW_ROLE;
+if (role === 'builder') {
+  if (/## Last Verification Failure/.test(fileText)) {
+    writeFileSync('state.txt', 'fixed\\n');
+    execFileSync('git', ['add', 'state.txt']);
+  }
+} else if (role === 'reviewer') {
+  execFileSync(process.execPath, [
+    'scripts/ticket.mjs', 'review', process.env.ADW_PLAN,
+    '--agent', 'Gemini', '--verdict', 'pass', '--summary', 'Supervisor auto-review pass',
+  ], { stdio: 'inherit' });
+}
+`,
+  );
+  const planPath = join(f.root, 'docs/plans/FO-Plan-Run.plan.md');
+  writeFileSync(
+    planPath,
+    `---\ntitle: Plan - Feature: Supervisor Loop\nstatus: in-progress\nbranch: feat/run-test\n---\n# Supervisor Loop\n\n## Summary\nOuter loop supervisor test\n\n## Acceptance criteria\n- [ ] Self-heals via failure context\n\n## Steps\n- [ ] Fix state file\n`,
+  );
+  f.git('add', '.');
+  f.git('commit', '-m', 'initial');
+
+  // Dry-run leaves disk untouched
+  const dry = f.run('run', ['docs/plans/FO-Plan-Run.plan.md', '--dry-run'], [], { omitPlan: true });
+  assert.equal(dry.status, 0, dry.stderr);
+  assert.match(dry.stdout, /=== Dry-Run Agentic Supervisor ===/);
+  assert.equal(existsSync(join(f.root, '.git/prompt-paths.log')), false);
+
+  // Full supervisor run: attempt 1 fails verify -> injects STATE_ERR -> attempt 2 fixes & commits -> item 2 completes -> reviewer stamps pass
+  const res = f.run(
+    'run',
+    ['docs/plans/FO-Plan-Run.plan.md', '--cmd', 'node runner.mjs', '--commit'],
+    [],
+    { omitPlan: true },
+  );
+  assert.equal(res.status, 0, res.stderr);
+  assert.match(res.stdout, /Run complete: docs\/plans\/FO-Plan-Run\.plan\.md finished/);
+  const finalPlan = readFileSync(planPath, 'utf8');
+  assert.doesNotMatch(finalPlan, /- \[ \]/);
+  assert.match(finalPlan, /reviewVerdict: pass/);
+  assert.equal(readFileSync(join(f.root, 'state.txt'), 'utf8').trim(), 'fixed');
+  const loggedPromptPaths = readFileSync(join(f.root, '.git/prompt-paths.log'), 'utf8')
+    .trim()
+    .split(/\r?\n/)
+    .filter(Boolean);
+  assert.equal(loggedPromptPaths.length, 4); // 2 attempts for step + 1 criterion + 1 reviewer
+  for (const p of loggedPromptPaths) assert.equal(existsSync(p), false);
+
+  // Circuit breaker trips cleanly when failing reaches maxRetries
+  writeFileSync(join(f.root, 'state.txt'), 'broken\n');
+  writeFileSync(
+    planPath,
+    `---\ntitle: Plan - Feature: Breaker\nstatus: in-progress\nbranch: feat/run-test\n---\n# Breaker\n\n## Acceptance criteria\n- [ ] Never passes\n\n## Steps\n- [ ] Step 1\n`,
+  );
+  const broken = f.run(
+    'run',
+    ['docs/plans/FO-Plan-Run.plan.md', '--cmd', 'node -e "0"'],
+    [],
+    { omitPlan: true },
+  );
+  assert.equal(broken.status, 1);
+  assert.match(broken.stderr, /CIRCUIT BREAKER TRIPPED \(2\/2/);
+  assert.match(readFileSync(planPath, 'utf8'), /retryCount: 2/);
+});
+
+test('wave --check and wave --prune verify and clean closed wave worktrees safely', (t) => {
+  const f = fixture(
+    t,
+    '',
+    [],
+    {
+      tracker: 'local',
+      verify: { test: 'node -e "console.log(\'wave-test-ok\')"' },
+      hygiene: { disallowedPatterns: ['.tmp', '.worktrees'] },
+    },
+  );
+  rmSync(join(f.root, 'docs/plans/FO-Plan-Test.plan.md'), { force: true });
+  writeFileSync(join(f.root, '.gitignore'), '.worktrees/\n');
+  f.git('init', '-b', 'main');
+  f.git('config', 'user.name', 'Test');
+  f.git('config', 'user.email', 'test@example.invalid');
+  f.git('add', '.');
+  f.git('commit', '-m', 'initial commit');
+
+  const planPass = 'docs/plans/FO-Plan-Wave-Pass.plan.md';
+  const planFail = 'docs/plans/FO-Plan-Wave-Fail.plan.md';
+  writeFileSync(
+    join(f.root, planFail),
+    `---\ntitle: Plan - Feature: Wave Fail\nticket: local://FO:FO-Plan-Wave-Fail\nstatus: in-progress\nbranch: feat/wave-fail\n---\n# Wave Fail\n\n## Acceptance criteria\n- [ ] Criterion F\n\n## Steps\n- [ ] Step F\n`,
+  );
+
+  // Add completed pass worktree and spawn fail worktree
+  f.git('worktree', 'add', '-b', 'feat/wave-pass', join(f.root, '.worktrees/wave-pass'));
+  mkdirSync(join(f.root, '.worktrees/wave-pass/docs/plans'), { recursive: true });
+  writeFileSync(
+    join(f.root, '.worktrees/wave-pass', planPass),
+    `---\ntitle: Plan - Feature: Wave Pass\nticket: local://FO:FO-Plan-Wave-Pass\nstatus: in-progress\nbranch: feat/wave-pass\nworktree: wave-pass\n---\n# Wave Pass\n\n## Acceptance criteria\n- [x] Criterion P verified: pass\n\n## Steps\n- [x] Step P\n`,
+  );
+  execFileSync('git', ['-C', join(f.root, '.worktrees/wave-pass'), 'add', '.'], { stdio: 'ignore' });
+  execFileSync('git', ['-C', join(f.root, '.worktrees/wave-pass'), 'commit', '-m', 'complete pass plan'], { stdio: 'ignore' });
+
+  const spawned = f.run('wave', [planFail, '--spawn'], [], { omitPlan: true });
+  assert.equal(spawned.status, 0, spawned.stderr);
+  const failWt = join(f.root, '.worktrees/wave-fail');
+  mkdirSync(join(failWt, '.tmp'), { recursive: true });
+  writeFileSync(join(failWt, '.tmp/junk.txt'), 'junk');
+
+  // Check detects hygiene & open plan problems in wave-fail while wave-pass is clean
+  const chkFail = f.run('wave', ['--check'], [], { omitPlan: true });
+  assert.equal(chkFail.status, 1);
+  assert.match(chkFail.stdout, /FO-Plan-Wave-Pass\s+\.worktrees\/wave-pass\s+0\s+clean\s+PASS/);
+  assert.match(chkFail.stdout, /FO-Plan-Wave-Fail\s+\.worktrees\/wave-fail\s+2 issue\(s\)\s+1 fail\s+FAIL/);
+  assert.match(chkFail.stdout, /\[hygiene\] Disallowed temporary or build artifact: \.tmp\/junk\.txt/);
+  assert.match(chkFail.stderr, /wave --check detected failing worktree/);
+
+  // Fix wave-fail and verify --check --test passes across active wave worktrees
+  rmSync(join(failWt, '.tmp'), { recursive: true, force: true });
+  writeFileSync(
+    join(failWt, planFail),
+    `---\ntitle: Plan - Feature: Wave Fail\nticket: local://FO:FO-Plan-Wave-Fail\nstatus: in-progress\nbranch: feat/wave-fail\nworktree: wave-fail\n---\n# Wave Fail\n\n## Acceptance criteria\n- [x] Criterion F verified: pass\n\n## Steps\n- [x] Step F\n`,
+  );
+  execFileSync('git', ['-C', failWt, 'add', '.'], { stdio: 'ignore' });
+  execFileSync('git', ['-C', failWt, 'commit', '-m', 'finish fail plan'], { stdio: 'ignore' });
+
+  const chkPass = f.run('wave', ['--check', '--test'], [], { omitPlan: true });
+  assert.equal(chkPass.status, 0, chkPass.stderr);
+  assert.match(chkPass.stdout, /Wave check passed: 2 worktree\(s\) clean/);
+
+  // Merge only wave-pass into main so only wave-pass is eligible for default wave --prune
+  f.git('merge', '--no-ff', 'feat/wave-pass', '-m', 'merge wave pass');
+  const dryPrune = f.run('wave', ['--prune', '--dry-run'], [], { omitPlan: true });
+  assert.equal(dryPrune.status, 0, dryPrune.stderr);
+  assert.match(dryPrune.stdout, /\[dry-run\] 1 worktree\(s\) eligible/);
+
+  const pruned = f.run('wave', ['--prune'], [], { omitPlan: true });
+  assert.equal(pruned.status, 0, pruned.stderr);
+  assert.match(pruned.stdout, /Prune complete: 1 worktree\(s\) pruned/);
+  assert.equal(existsSync(join(f.root, '.worktrees/wave-pass')), false);
+  assert.equal(existsSync(failWt), true);
+
+  // Also assert starterConfig alignment in workflow-manifest.json
+  const manifest = JSON.parse(readFileSync(join(scripts, 'workflow-manifest.json'), 'utf8'));
+  assert.equal(manifest.starterConfig.verify?.test, 'npm test');
+  assert.equal(manifest.starterConfig.agentic?.maxRetries, 3);
+  assert.deepEqual(manifest.starterConfig.hygiene?.disallowedPatterns, ['.tmp', 'test-results', 'coverage', '.worktrees']);
+});
