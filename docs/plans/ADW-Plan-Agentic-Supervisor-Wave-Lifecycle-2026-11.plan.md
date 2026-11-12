@@ -1,12 +1,15 @@
 ---
 title: Plan - Feature: Agentic Outer-Loop Supervisor and Wave Lifecycle Closure
 ticket: local://ADW:ADW-Plan-Agentic-Supervisor-Wave-Lifecycle-2026-11
-status: planned
+status: in-progress
 priority: high
 state: flow
 due: 
 devTicketKey: ADW:ADW-Plan-Agentic-Supervisor-Wave-Lifecycle-2026-11
 agent: Gemini
+branch: feat/agentic-supervisor-wave-lifecycle
+worktree: AI-Dev-Workflow
+startedAt: 2026-11-12
 ---
 # Agentic Outer-Loop Supervisor and Wave Lifecycle Closure
 
