@@ -12,7 +12,7 @@ worktree: AI-Dev-Workflow
 startedAt: 2026-11-13
 reviewedBy: Other
 reviewVerdict: pass
-reviewFingerprint: 5677be1cc1c42a17d62a29c61e887fc0d3ea24f034467343ebc40e04adeb31da
+reviewFingerprint: 0e32ac34dd5ae0527402678b2d677c40e793f3ef4d9db6fb8a9437d961808195
 pr: https://github.com/AaronPG095/AI-Dev-Workflow/pull/27
 ---
 # Review And Evidence Integrity
@@ -23,11 +23,11 @@ Eliminate self-review loopholes, detect test tampering or dropped assertions dur
 
 ## Acceptance criteria
 
-- [x] AC1: When `config.requireReview` is `true`, `review`, `check`, and `ci-check` reject `reviewedBy` matching `plan.meta.agent` (case-insensitive) unless `--self-review "<reason>"` was recorded in `reviewSelfReason`. verified(test): T1.1 subtest in scripts/ticket.test.mjs passes
-- [x] AC2: `pack` prints a `## Test Integrity` section flagging deleted test files, net dropped test cases, newly added `.skip`/`.only`/`.todo`, or net dropped assertion lines vs base; `review --verdict pass` rejects a net test drop or added skip unless `--allow-test-drop "<reason>"` is supplied. verified(test): T1.2 subtest in scripts/ticket.test.mjs passes
-- [x] AC3: `tick <#> --verify-cmd "<cmd>"` runs `<cmd>`, fails without ticking if exit != 0, and records `verified(cmd): \`<cmd>\` exit 0 @<shortSha>`; `verified(test|cmd|manual|inspect):` prefixes are accepted everywhere alongside legacy `verified:`. verified(test): T1.3 subtest in scripts/ticket.test.mjs passes
-- [x] AC4: `check --strict` fails if all ticked Acceptance Criteria use `verified(manual):` when a `verifyCommand` or `verify` tier is configured. verified(test): T1.3 subtest in scripts/ticket.test.mjs passes
-- [x] AC5: `node --test scripts/ticket.test.mjs` passes with new hermetic tests for T1.1–T1.3, and `README.md` + `.agents/skills/` + `.claude/skills/` are updated identically. verified(test): node --test scripts/ticket.test.mjs 75/75 pass; skills mirrors checked
+- [x] AC1: When `config.requireReview` is `true`, `review`, `check`, and `ci-check` reject `reviewedBy` matching `plan.meta.agent` (case-insensitive) unless `--self-review "<reason>"` was recorded in `reviewSelfReason`. verified: T1.1 subtest in scripts/ticket.test.mjs passes
+- [x] AC2: `pack` prints a `## Test Integrity` section flagging deleted test files, net dropped test cases, newly added `.skip`/`.only`/`.todo`, or net dropped assertion lines vs base; `review --verdict pass` rejects a net test drop or added skip unless `--allow-test-drop "<reason>"` is supplied. verified: T1.2 subtest in scripts/ticket.test.mjs passes
+- [x] AC3: `tick <#> --verify-cmd "<cmd>"` runs `<cmd>`, fails without ticking if exit != 0, and records `verified(cmd): \`<cmd>\` exit 0 @<shortSha>`; `verified(test|cmd|manual|inspect):` prefixes are accepted everywhere alongside legacy `verified:`. verified: T1.3 subtest in scripts/ticket.test.mjs passes
+- [x] AC4: `check --strict` fails if all ticked Acceptance Criteria use `verified(manual):` when a `verifyCommand` or `verify` tier is configured. verified: T1.3 subtest in scripts/ticket.test.mjs passes
+- [x] AC5: `node --test scripts/ticket.test.mjs` passes with new hermetic tests for T1.1–T1.3, and `README.md` + `.agents/skills/` + `.claude/skills/` are updated identically. verified: node --test scripts/ticket.test.mjs 75/75 pass; skills mirrors checked
 
 ## Steps
 
@@ -56,3 +56,4 @@ Eliminate self-review loopholes, detect test tampering or dropped assertions dur
 <!-- One line per session/review, added with `ticket.mjs log` or `ticket.mjs review` -->
 - 2026-11-13 16:57 UTC, Gemini (review: pass [standards: pass, spec: pass]): Implemented T1.1 independent review, T1.2 test integrity, T1.3 executable/typed evidence; 75/75 tests pass [self-review: single-session implementation; verified with 75/75 hermetic tests and pack]
 - 2026-11-13 17:06 UTC, Other (review: pass [standards: pass, spec: pass]): Independent fresh-context review: AC1-AC5 implemented cleanly, 75/75 tests pass, skills mirrors identical
+- 2026-11-13 19:41 UTC, Other (review: pass [standards: pass, spec: pass]): Independent fresh-context review: AC1-AC5 implemented cleanly, 75/75 tests pass, skills mirrors identical
