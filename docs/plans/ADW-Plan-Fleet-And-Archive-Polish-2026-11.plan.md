@@ -1,7 +1,7 @@
 ---
 title: Plan - Feature: Fleet and Archive Polish
 ticket: local://ADW:ADW-Plan-Fleet-And-Archive-Polish-2026-11
-status: in-progress
+status: shipped
 priority: 
 state: 
 due: 
@@ -13,6 +13,7 @@ startedAt: 2026-11-13
 reviewedBy: Gemini
 reviewVerdict: pass
 reviewFingerprint: d792cbb909c7744739437289814cfa2b9a152ebd571e6f7e17486393391c5a65
+pr: https://github.com/AaronPG095/AI-Dev-Workflow/pull/25
 ---
 # Fleet and Archive Polish
 
