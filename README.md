@@ -179,8 +179,9 @@ node scripts/ticket.mjs switch [<plan|branch>] [--path]
 # Shell navigation alias helper:
 cd $(node scripts/ticket.mjs switch <branch> --path)
 
-# Tick checkboxes by index or substring without editing markdown files (enforces --verified on criteria)
+# Tick checkboxes by index or substring without editing markdown files (enforces --verified or --verify-cmd on criteria)
 node scripts/ticket.mjs tick 1 --verified "tests pass"
+node scripts/ticket.mjs tick 1 --verify-cmd "npm test" [--evidence-type test|cmd|manual|inspect]
 node scripts/ticket.mjs defer 2 --reason "covered in follow-up"
 
 # Record structured handoff between AI models (Gemini -> Claude -> Codex)
@@ -199,18 +200,19 @@ node scripts/ticket.mjs verify [--tier <name>|--all]
 # Inspect working tree for disallowed artifacts (.tmp, test-results, coverage, *.log), oversized files, and dangling worktrees
 node scripts/ticket.mjs hygiene
 
-# Generate a 0-token review packet; optionally embed test results for a specific tier
+# Generate a 0-token review packet (includes Test Integrity check); optionally embed test results for a specific tier
 node scripts/ticket.mjs pack [--test] [--tier <name>]
 
 # Generate a structured review prompt for sub-agents or secondary models
 node scripts/ticket.mjs review --prompt
 
 # Record a single-pass or dual-pass code review verdict (pass | warn | block)
+# Under requireReview: true, self-review requires --self-review "<reason>"; test drops require --allow-test-drop "<reason>"
 node scripts/ticket.mjs review --agent Codex --verdict pass --summary "Criteria verified, clean hygiene"
-node scripts/ticket.mjs review --agent Gemini --standards pass --spec pass --summary "Dual-pass pass"
+node scripts/ticket.mjs review --agent Gemini --standards pass --spec pass --summary "Dual-pass pass" [--self-review "<reason>"]
 
 # 5. Finish & Gatekeeper
-# Verify all checkboxes are closed and working tree hygiene is clean (--strict to fail on warnings)
+# Verify all checkboxes are closed and working tree hygiene is clean (--strict also requires non-manual proof when verifyCommand is configured)
 node scripts/ticket.mjs check [--strict]
 
 # Automated PR creation & ticket shipping in one command (pushes branch, verifies, opens PR, auto-merges)
