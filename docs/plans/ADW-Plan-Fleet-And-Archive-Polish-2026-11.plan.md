@@ -1,12 +1,15 @@
 ---
 title: Plan - Feature: Fleet and Archive Polish
 ticket: local://ADW:ADW-Plan-Fleet-And-Archive-Polish-2026-11
-status: planned
+status: in-progress
 priority: 
 state: 
 due: 
 devTicketKey: ADW:ADW-Plan-Fleet-And-Archive-Polish-2026-11
 agent: Gemini
+branch: feat/fleet-and-archive-polish
+worktree: AI-Dev-Workflow
+startedAt: 2026-11-13
 ---
 # Fleet and Archive Polish
 
