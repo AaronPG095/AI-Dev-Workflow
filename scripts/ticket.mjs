@@ -970,6 +970,59 @@ function getKnownRepoDirs() {
   return candidateDirs;
 }
 
+function readRepoConfig(dir) {
+  const cfgPath = join(dir, 'scripts', 'ticket.config.json');
+  if (!existsSync(cfgPath)) return {};
+  try {
+    return JSON.parse(readFileSync(cfgPath, 'utf8'));
+  } catch {
+    return {};
+  }
+}
+
+function resolveHookPath(dir = repoRoot) {
+  let gitDir;
+  try {
+    gitDir = git(['rev-parse', '--git-path', 'hooks'], { cwd: dir });
+  } catch {
+    gitDir = join(dir, '.git', 'hooks');
+  }
+  return resolve(dir, gitDir, 'pre-push');
+}
+
+function resolveRepoActivePlan(dir, branch, repoCfg = {}) {
+  const plansDir = join(dir, repoCfg.plansDir || 'docs/plans');
+  if (!existsSync(plansDir)) return null;
+  try {
+    const files = readdirSync(plansDir).filter(
+      (f) => f.endsWith('.plan.md') && !f.startsWith('_'),
+    );
+    const plans = files.map((f) => {
+      const raw = readFileSync(join(plansDir, f), 'utf8').replace(/\r\n/g, '\n');
+      const match = raw.match(/^---\n([\s\S]*?)\n---/);
+      const meta = match
+        ? Object.fromEntries(
+            match[1]
+              .split('\n')
+              .filter((l) => l.includes(':'))
+              .map((l) => {
+                const idx = l.indexOf(':');
+                return [l.slice(0, idx).trim(), l.slice(idx + 1).trim()];
+              }),
+          )
+        : {};
+      return { file: f, meta, raw };
+    });
+    let activePlan = plans.find((p) => p.meta.branch === branch);
+    if (!activePlan && branch !== 'main' && branch !== 'master') {
+      activePlan = plans.find((p) => p.meta.status === 'in-progress');
+    }
+    return activePlan || null;
+  } catch {
+    return null;
+  }
+}
+
 function findCheckboxes(body) {
   const lines = body.split('\n');
   const items = [];
@@ -2877,17 +2930,37 @@ const commands = {
     const isPlanPath = (file) => file.startsWith(`${config.plansDir}/`) &&
         file.endsWith('.plan.md') && !basename(file).startsWith('_') &&
         !file.startsWith(`${config.plansDir}/archive/`);
-    const isClosed = (text) => {
+    const isArchivePath = (file) => file.startsWith(`${config.plansDir}/archive/`) &&
+        file.endsWith('.plan.md') && !basename(file).startsWith('_');
+    const isClosed = (rawText) => {
+      const text = (rawText || '').replace(/\r\n/g, '\n');
       if (/^status:\s*(?:done|shipped)\s*$/im.test(text.split('\n---\n')[0])) return true;
       // Earlier merges sometimes kept in-progress metadata on completed plans.
       const { items } = findCheckboxes(bodyOf(text));
       return items.length > 0 && items.every((item) =>
         item.isChecked || /\sdeferred:\s*\S/i.test(item.text));
     };
-    for (const file of removedPaths.filter(isPlanPath)) {
+    const removedPlans = removedPaths.filter(isPlanPath);
+    for (const file of removedPlans) {
       if (!isClosed(git(['show', `${opts.base}:${file}`], { allowFail: true })))
         fail(`active plan removed or renamed: ${file}`);
     }
+    const archivedFiles = changedPaths.filter(isArchivePath);
+    for (const file of archivedFiles) {
+      const archivedText = git(['show', `${opts.head}:${file}`], { allowFail: true });
+      if (!archivedText || !isClosed(archivedText)) {
+        fail(`archived plan is not closed out: ${file}`);
+      }
+    }
+    const removedPlanSet = new Set(removedPlans);
+    const removedBasenames = new Set(removedPlans.map((file) => basename(file)));
+    const verifiedArchiveMoves = new Set(
+      archivedFiles.filter((file) => removedBasenames.has(basename(file))),
+    );
+    const movedBasenames = new Set([...verifiedArchiveMoves].map((file) => basename(file)));
+    const isArchiveMovePath = (file) =>
+      verifiedArchiveMoves.has(file) ||
+      (removedPlanSet.has(file) && movedBasenames.has(basename(file)));
     const plans = changedPaths
       .filter(isPlanPath)
       .map((file) => ({
@@ -2897,16 +2970,27 @@ const commands = {
       }))
       .filter(({ baseline }) => !isClosed(baseline));
     if (!plans.length) {
+      const isPureArchiveMove =
+        verifiedArchiveMoves.size > 0 &&
+        changedPaths.every((file) => isArchiveMovePath(file)) &&
+        removedPaths.every((file) => isArchiveMovePath(file));
+      if (isPureArchiveMove) {
+        return console.log(
+          `Closed-plan archive PR (${verifiedArchiveMoves.size} archived plan(s)); no new plan required.`,
+        );
+      }
       if (process.env.NO_PLAN !== '1')
         fail(
           `no plan with a ticket header changed in this PR. Add one under ${config.plansDir}/ (see AGENTS.md), or add the "no-plan" label for a trivial change.`,
         );
       const { maxChangedLines, noNewFilesUnder } = config.noPlan;
-      const changed = git(['diff', '--numstat', range])
+      const changed = git(['diff', '--numstat', '--no-renames', range])
         .split('\n')
         .filter(Boolean)
         .reduce((n, l) => {
-          const [a, d] = l.split('\t');
+          const [a, d, ...rest] = l.split('\t');
+          const file = rest.join('\t');
+          if (isArchiveMovePath(file)) return n;
           return a === '-' || d === '-' ? Infinity : n + Number(a) + Number(d);
         }, 0);
       const newFiles = git([
@@ -2919,7 +3003,8 @@ const commands = {
         ...noNewFilesUnder,
       ])
         .split('\n')
-        .filter(Boolean);
+        .filter(Boolean)
+        .filter((file) => !verifiedArchiveMoves.has(file));
       const policyChanged = [...changedPaths, ...removedPaths]
         .some((file) => WORKFLOW_FILES.has(file) || file.startsWith('.github/workflows/'));
       if (policyChanged || changed > maxChangedLines || newFiles.length) {
@@ -3029,47 +3114,18 @@ const commands = {
       } catch {}
       const clean = !statusShort;
 
-      const plansDir = join(dir, 'docs/plans');
-      let activePlan = null;
+      const repoCfg = readRepoConfig(dir);
+      const activePlan = resolveRepoActivePlan(dir, branch, repoCfg);
       let openBoxes = '-';
       let state = 'Idle';
 
-      if (existsSync(plansDir)) {
-        try {
-          const files = readdirSync(plansDir).filter(
-            (f) => f.endsWith('.plan.md') && !f.startsWith('_'),
-          );
-          const plans = files.map((f) => {
-            const raw = readFileSync(join(plansDir, f), 'utf8');
-            const match = raw.match(/^---\n([\s\S]*?)\n---/);
-            const meta = match
-              ? Object.fromEntries(
-                  match[1]
-                    .split('\n')
-                    .filter((l) => l.includes(':'))
-                    .map((l) => {
-                      const idx = l.indexOf(':');
-                      return [l.slice(0, idx).trim(), l.slice(idx + 1).trim()];
-                    }),
-                )
-              : {};
-            return { file: f, meta, raw };
-          });
-
-          activePlan = plans.find((p) => p.meta.branch === branch);
-          if (!activePlan && branch !== 'main' && branch !== 'master') {
-            activePlan = plans.find((p) => p.meta.status === 'in-progress');
-          }
-          if (activePlan) {
-            state =
-              activePlan.meta.status === 'in-progress'
-                ? 'Doing'
-                : activePlan.meta.status || 'Active';
-            const openCriteria = (activePlan.raw.match(/^- \[ \] /gm) || [])
-              .length;
-            openBoxes = String(openCriteria);
-          }
-        } catch {}
+      if (activePlan) {
+        state =
+          activePlan.meta.status === 'in-progress'
+            ? 'Doing'
+            : activePlan.meta.status || 'Active';
+        const openCriteria = (activePlan.raw.match(/^- \[ \] /gm) || []).length;
+        openBoxes = String(openCriteria);
       }
 
       rows.push({
@@ -3117,15 +3173,17 @@ const commands = {
 
   async hook() {
     const action = opts.files[0] || 'status';
-    let gitDir;
-    try {
-      gitDir = git(['rev-parse', '--git-path', 'hooks']);
-    } catch {
-      gitDir = join(repoRoot, '.git', 'hooks');
+    if (!['install', 'uninstall', 'status'].includes(action)) {
+      fail('usage: node scripts/ticket.mjs hook [install|uninstall|status] [--fleet]');
     }
-    const hookPath = resolve(repoRoot, gitDir, 'pre-push');
+    const dirs = opts.fleet ? getKnownRepoDirs() : [repoRoot];
+    const applyHook = (dir) => {
+      if (opts.fleet && !existsSync(join(dir, '.git'))) return;
+      const hookPath = resolveHookPath(dir);
+      const label = opts.fleet ? `[${basename(dir)}] ` : '';
 
-    if (action === 'install') {
+      if (action === 'install') {
+        mkdirSync(dirname(hookPath), { recursive: true });
       mkdirSync(dirname(hookPath), { recursive: true });
       const script = [
         '#!/bin/sh',
@@ -3168,24 +3226,24 @@ const commands = {
         '',
         'exit 0',
       ].join('\n');
-      writeFileSync(hookPath, `${script}\n`, { mode: 0o755 });
-      console.log(`Pre-push hook installed: ${hookPath}`);
-    } else if (action === 'uninstall') {
-      if (existsSync(hookPath)) {
-        unlinkSync(hookPath);
-        console.log(`Pre-push hook removed: ${hookPath}`);
-      } else {
-        console.log(`Pre-push hook not present: ${hookPath}`);
+        writeFileSync(hookPath, `${script}\n`, { mode: 0o755 });
+        console.log(`${label}Pre-push hook installed: ${hookPath}`);
+      } else if (action === 'uninstall') {
+        if (existsSync(hookPath)) {
+          unlinkSync(hookPath);
+          console.log(`${label}Pre-push hook removed: ${hookPath}`);
+        } else {
+          console.log(`${label}Pre-push hook not present: ${hookPath}`);
+        }
+      } else if (action === 'status') {
+        console.log(
+          existsSync(hookPath)
+            ? `${label}Pre-push hook is installed at ${hookPath}`
+            : `${label}Pre-push hook is NOT installed. Run 'node scripts/ticket.mjs hook install' to install.`,
+        );
       }
-    } else if (action === 'status') {
-      console.log(
-        existsSync(hookPath)
-          ? `Pre-push hook is installed at ${hookPath}`
-          : `Pre-push hook is NOT installed. Run 'node scripts/ticket.mjs hook install' to install.`,
-      );
-    } else {
-      fail('usage: node scripts/ticket.mjs hook [install|uninstall|status]');
-    }
+    };
+    for (const dir of dirs) applyHook(dir);
   },
 
   async adr() {
@@ -3563,7 +3621,7 @@ const commands = {
         wtCount = (wtOut.match(/^worktree /gm) || []).length;
       } catch {}
 
-      const hookPath = join(dir, '.git', 'hooks', 'pre-push');
+      const hookPath = resolveHookPath(dir);
       const hasHook = existsSync(hookPath);
 
       const tracker = repoCfg.tracker || 'notion';
@@ -4149,41 +4207,16 @@ const commands = {
         wtCount = (wtOut.match(/^worktree /gm) || []).length || 1;
       } catch {}
 
-      const plansDir = join(dir, 'docs/plans');
+      const repoCfg = readRepoConfig(dir);
+      const activePlan = resolveRepoActivePlan(dir, branch, repoCfg);
       let activePlanName = '-';
       let reviewStatus = '-';
 
-      if (existsSync(plansDir)) {
-        try {
-          const files = readdirSync(plansDir).filter(
-            (f) => f.endsWith('.plan.md') && !f.startsWith('_'),
-          );
-          for (const f of files) {
-            const raw = readFileSync(join(plansDir, f), 'utf8');
-            const match = raw.match(/^---\n([\s\S]*?)\n---/);
-            if (match) {
-              const meta = Object.fromEntries(
-                match[1]
-                  .split('\n')
-                  .filter((l) => l.includes(':'))
-                  .map((l) => {
-                    const idx = l.indexOf(':');
-                    return [l.slice(0, idx).trim(), l.slice(idx + 1).trim()];
-                  }),
-              );
-              if (
-                meta.branch === branch ||
-                (branch !== 'main' && meta.status === 'in-progress')
-              ) {
-                activePlanName = f.replace(/\.plan\.md$/, '').slice(0, 32);
-                reviewStatus =
-                  meta.reviewVerdict ||
-                  (meta.reviewedBy ? 'reviewed' : 'unreviewed');
-                break;
-              }
-            }
-          }
-        } catch {}
+      if (activePlan) {
+        activePlanName = activePlan.file.replace(/\.plan\.md$/, '').slice(0, 32);
+        reviewStatus =
+          activePlan.meta.reviewVerdict ||
+          (activePlan.meta.reviewedBy ? 'reviewed' : 'unreviewed');
       }
 
       rows.push({
