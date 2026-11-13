@@ -1,7 +1,7 @@
 ---
 title: Plan - Feature: Template V5 And Appetite Budget
 ticket: local://ADW:ADW-Plan-Template-V5-And-Appetite-Budget-2026-11
-status: in-progress
+status: shipped
 priority: 
 state: 
 due: 
@@ -13,6 +13,7 @@ startedAt: 2026-11-13
 reviewedBy: Other
 reviewVerdict: pass
 reviewFingerprint: 9d6ce58cc9c14d632a4860993b8000d5c092cd92f9c7dfa43e1fa0b54242ecd0
+pr: https://github.com/AaronPG095/AI-Dev-Workflow/pull/28
 ---
 # Template V5 And Appetite Budget
 
