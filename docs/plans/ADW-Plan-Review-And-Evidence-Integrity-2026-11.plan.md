@@ -1,7 +1,7 @@
 ---
 title: Plan - Feature: Review And Evidence Integrity
 ticket: local://ADW:ADW-Plan-Review-And-Evidence-Integrity-2026-11
-status: in-progress
+status: shipped
 priority: 
 state: 
 due: 
@@ -13,6 +13,7 @@ startedAt: 2026-11-13
 reviewedBy: Other
 reviewVerdict: pass
 reviewFingerprint: 5677be1cc1c42a17d62a29c61e887fc0d3ea24f034467343ebc40e04adeb31da
+pr: https://github.com/AaronPG095/AI-Dev-Workflow/pull/27
 ---
 # Review And Evidence Integrity
 
