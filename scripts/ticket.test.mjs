@@ -1913,12 +1913,12 @@ test('checkpoint command verifies, ticks checkbox, and creates git commit', (t) 
     { omitPlan: true },
   );
   assert.equal(rChk1.status, 0, rChk1.stderr);
-  assert.match(rChk1.stdout, /✓ Ticked \[1\]: - \[x\] First criterion verified:/);
+  assert.match(rChk1.stdout, /✓ Ticked \[1\]: - \[x\] First criterion verified\(test\):/);
   assert.match(rChk1.stdout, /✓ Git checkpoint committed:/);
   assert.match(rChk1.stdout, /Next open item \[1\]: - \[ \] First step \(section: Steps\)/);
 
   const updatedPlan = readFileSync(planPath, 'utf8');
-  assert.match(updatedPlan, /- \[x\] First criterion verified:/);
+  assert.match(updatedPlan, /- \[x\] First criterion verified\(test\):/);
 
   // Default target alignment: calling checkpoint without index picks First step [1]
   const rDefault = f.run('step', ['docs/plans/FO-Plan-Test.plan.md'], [], {
@@ -2568,4 +2568,220 @@ test('ci-check allows verified upstream workflow sync under no-plan and rejects 
   });
   assert.notEqual(mixedRes.status, 0);
   assert.match(mixedRes.stderr, /no workflow policy changes/);
+});
+
+test('T1.1: requireReview blocks self-review unless --self-review is recorded', (t) => {
+  const f = fixture(t, 'agent: Gemini\n', [], {
+    tracker: 'local',
+    requireReview: true,
+  });
+  f.git('init', '-b', 'main');
+  f.git('config', 'user.name', 'Test');
+  f.git('config', 'user.email', 'test@example.invalid');
+  f.git('add', '.');
+  f.git('commit', '-m', 'init');
+  f.git('checkout', '-b', 'feat/self-review');
+  const createRes = f.run('create', ['--agent', 'Gemini']);
+  assert.equal(createRes.status, 0, createRes.stderr);
+  f.git('add', '.');
+  f.git('commit', '-m', 'ticketed');
+
+  // Same agent without --self-review is blocked
+  const selfBlocked = f.run('review', [
+    '--agent',
+    'Gemini',
+    '--verdict',
+    'pass',
+    '--summary',
+    'self check',
+  ]);
+  assert.notEqual(selfBlocked.status, 0);
+  assert.match(selfBlocked.stderr, /self-review blocked/);
+
+  // Same agent with --self-review succeeds and passes check
+  const selfAllowed = f.run('review', [
+    '--agent',
+    'Gemini',
+    '--verdict',
+    'pass',
+    '--summary',
+    'solo session',
+    '--self-review',
+    'no second model available',
+  ]);
+  assert.equal(selfAllowed.status, 0, selfAllowed.stderr);
+  assert.match(readFileSync(f.plan, 'utf8'), /reviewSelfReason: no second model available/);
+
+  const checkSelf = f.run('check');
+  assert.equal(checkSelf.status, 0, checkSelf.stderr);
+
+  // Tampering reviewSelfReason out of frontmatter causes check to fail
+  const planPath = f.plan;
+  writeFileSync(
+    planPath,
+    readFileSync(planPath, 'utf8').replace(/^reviewSelfReason:.*\r?\n/m, ''),
+  );
+  const checkTampered = f.run('check');
+  assert.notEqual(checkTampered.status, 0);
+  assert.match(checkTampered.stderr, /self-review blocked/);
+
+  // Independent reviewer clears reviewSelfReason and passes check
+  const indepRes = f.run('review', [
+    '--agent',
+    'Codex',
+    '--verdict',
+    'pass',
+    '--summary',
+    'independent pass',
+  ]);
+  assert.equal(indepRes.status, 0, indepRes.stderr);
+  assert.doesNotMatch(readFileSync(f.plan, 'utf8'), /reviewSelfReason:/);
+  const checkIndep = f.run('check');
+  assert.equal(checkIndep.status, 0, checkIndep.stderr);
+});
+
+test('T1.2: pack and review detect deleted tests and added skips unless --allow-test-drop is given', (t) => {
+  const f = fixture(t, `ticket: local://FO:FO-Plan-Test\nagent: Gemini\n`, [], {
+    tracker: 'local',
+    requireReview: true,
+  });
+  writeFileSync(
+    join(f.root, 'sample.test.mjs'),
+    "import { test } from 'node:test';\nimport assert from 'node:assert/strict';\ntest('a', () => { assert.equal(1, 1); });\ntest('b', () => { assert.equal(2, 2); });\n",
+  );
+  f.git('init', '-b', 'main');
+  f.git('config', 'user.name', 'Test');
+  f.git('config', 'user.email', 'test@example.invalid');
+  f.git('add', '.');
+  f.git('commit', '-m', 'init');
+  f.git('checkout', '-b', 'feat/test-integrity');
+
+  // Clean pack reports Test Integrity OK
+  const packClean = f.run('pack');
+  assert.equal(packClean.status, 0, packClean.stderr);
+  assert.match(packClean.stdout, /## Test Integrity[\s\S]*OK/);
+
+  // Drop one test and skip the other
+  writeFileSync(
+    join(f.root, 'sample.test.mjs'),
+    "import { test } from 'node:test';\nimport assert from 'node:assert/strict';\ntest.skip('a', () => { assert.equal(1, 1); });\n",
+  );
+  f.git('add', 'sample.test.mjs');
+
+  const packWarn = f.run('pack');
+  assert.equal(packWarn.status, 0, packWarn.stderr);
+  assert.match(packWarn.stdout, /Net drop in test cases/);
+  assert.match(packWarn.stdout, /Added test skip\/only\/todo marker/);
+
+  const reviewBlocked = f.run('review', [
+    '--agent',
+    'Codex',
+    '--verdict',
+    'pass',
+    '--summary',
+    'looks ok',
+  ]);
+  assert.notEqual(reviewBlocked.status, 0);
+  assert.match(reviewBlocked.stderr, /test integrity check flagged/);
+
+  const reviewAllowed = f.run('review', [
+    '--agent',
+    'Codex',
+    '--verdict',
+    'pass',
+    '--summary',
+    'intentional removal',
+    '--allow-test-drop',
+    'obsolete test removed after refactor',
+  ]);
+  assert.equal(reviewAllowed.status, 0, reviewAllowed.stderr);
+  assert.match(readFileSync(f.plan, 'utf8'), /reviewTestDropReason: obsolete test removed after refactor/);
+});
+
+test('T1.3: tick --verify-cmd runs command, stamps typed evidence, and check --strict rejects manual-only criteria', (t) => {
+  const f = fixture(t, `ticket: local://FO:FO-Plan-Test\n`, [], {
+    tracker: 'local',
+    requireReview: false,
+    verifyCommand: 'node -e "process.exit(0)"',
+  });
+  const planPath = join(f.root, 'docs/plans/FO-Plan-Test.plan.md');
+  writeFileSync(
+    planPath,
+    [
+      '---',
+      'title: Plan - Feature: Evidence',
+      'ticket: local://FO:FO-Plan-Test',
+      'status: in-progress',
+      '---',
+      '# Evidence',
+      '',
+      '## Summary',
+      'Test typed and executable evidence.',
+      '',
+      '## Acceptance criteria',
+      '- [ ] AC1: Manual check',
+      '- [ ] AC2: Automated check',
+      '',
+      '## Steps',
+      '- [x] Done',
+      '',
+    ].join('\n'),
+  );
+  f.git('init', '-b', 'main');
+  f.git('config', 'user.name', 'Test');
+  f.git('config', 'user.email', 'test@example.invalid');
+  f.git('add', '.');
+  f.git('commit', '-m', 'init');
+
+  // Manual tick works for non-strict check, fails --strict when all criteria are manual
+  const tickManual = f.run('tick', [
+    '1',
+    '--evidence-type',
+    'manual',
+    '--verified',
+    'inspected output',
+  ]);
+  assert.equal(tickManual.status, 0, tickManual.stderr);
+  assert.match(readFileSync(planPath, 'utf8'), /verified\(manual\): inspected output/);
+
+  // Failing --verify-cmd must not tick AC2
+  const failCmd = f.run('tick', [
+    '1',
+    '--verify-cmd',
+    'node -e "process.exit(1)"',
+  ]);
+  assert.notEqual(failCmd.status, 0);
+  assert.match(readFileSync(planPath, 'utf8'), /- \[ \] AC2: Automated check/);
+
+  // Tick AC2 manually first to test check --strict rejection when all criteria are manual
+  const tickManual2 = f.run('tick', [
+    '1',
+    '--evidence-type',
+    'manual',
+    '--verified',
+    'manual check 2',
+  ]);
+  assert.equal(tickManual2.status, 0, tickManual2.stderr);
+  const strictFail = f.run('check', ['--strict']);
+  assert.notEqual(strictFail.status, 0);
+  assert.match(strictFail.stderr, /--strict requires at least one automated verification proof/);
+
+  // Re-open AC2 and tick with --verify-cmd (exit 0) -> check --strict passes
+  writeFileSync(
+    planPath,
+    readFileSync(planPath, 'utf8').replace(
+      /- \[x\] AC2: Automated check.*$/m,
+      '- [ ] AC2: Automated check',
+    ),
+  );
+  const passCmd = f.run('tick', [
+    '1',
+    '--verify-cmd',
+    'node -e "process.exit(0)"',
+  ]);
+  assert.equal(passCmd.status, 0, passCmd.stderr);
+  assert.match(readFileSync(planPath, 'utf8'), /verified\(cmd\): `node -e "process\.exit\(0\)"` exit 0 @[0-9a-f]+/);
+
+  const strictPass = f.run('check', ['--strict']);
+  assert.equal(strictPass.status, 0, strictPass.stderr);
 });

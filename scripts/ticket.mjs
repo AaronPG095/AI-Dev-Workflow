@@ -74,6 +74,8 @@ const OPTIONAL = {
   },
 };
 const VERDICTS = ['pass', 'warn', 'block'];
+const VERIFIED_RE = /\sverified(?:\((?:test|cmd|manual|inspect)\))?:\s*\S/i;
+const EVIDENCE_TYPES = new Set(['test', 'cmd', 'manual', 'inspect']);
 const DEFAULT_PACK_IGNORE = [
   'pnpm-lock.yaml',
   'package-lock.json',
@@ -364,7 +366,7 @@ function problems(plan, { requireTicket = true, ignoreReview = false, base, head
     if (!item.isChecked && !/\sdeferred:\s*\S/i.test(item.text))
       found.push(`open item: ${item.text}`);
     if (item.isChecked && item.section.toLowerCase() === 'acceptance criteria' &&
-        !/\sverified:\s*\S/i.test(item.text))
+        !VERIFIED_RE.test(item.text))
       found.push(
         `criterion ticked without evidence (append "verified: <how it was checked>"): ${item.text}`,
       );
@@ -384,6 +386,18 @@ function problems(plan, { requireTicket = true, ignoreReview = false, base, head
       plan.meta.reviewFingerprint !== reviewFingerprint(plan, base, head, dir)) {
       found.push('review does not cover this change; run pack and review again');
     }
+    if (
+      config.requireReview &&
+      ['pass', 'warn'].includes(verdict) &&
+      plan.meta.agent &&
+      plan.meta.reviewedBy &&
+      plan.meta.agent.toLowerCase() === plan.meta.reviewedBy.toLowerCase() &&
+      !(plan.meta.reviewSelfReason || '').trim()
+    ) {
+      found.push(
+        `self-review blocked (reviewedBy matches agent "${plan.meta.agent}"); run review with a different agent or pass --self-review "<reason>"`,
+      );
+    }
   }
   return found;
 }
@@ -391,7 +405,7 @@ function problems(plan, { requireTicket = true, ignoreReview = false, base, head
 function missingCheckboxes(original, candidate) {
   const identity = (item) => JSON.stringify([
     item.section.toLowerCase(),
-    item.text.replace(/\s+(?:verified|deferred):.*$/i, '').trim(),
+    item.text.replace(/\s+(?:verified(?:\((?:test|cmd|manual|inspect)\))?|deferred):.*$/i, '').trim(),
   ]);
   const remaining = new Map();
   for (const item of findCheckboxes(candidate).items) {
@@ -896,6 +910,109 @@ function reviewFingerprint(plan, base, head, dir = repoRoot) {
   const scope = ['Summary', 'Acceptance criteria', 'Steps', 'Out of scope']
     .map((heading) => section(plan.body, heading));
   return createHash('sha256').update(JSON.stringify(scope)).update(diff).digest('hex');
+}
+
+function isTestFile(filePath, cfg = config) {
+  const normPath = filePath.replace(/\\/g, '/');
+  if (normPath.startsWith(`${cfg.plansDir || 'docs/plans'}/`)) return false;
+  const custom = cfg.hygiene?.testFilePatterns;
+  if (Array.isArray(custom) && custom.length) {
+    return custom.some((pat) => new RegExp(pat, 'i').test(normPath));
+  }
+  return /(?:^|\/)(?:tests?|__tests__)\/|(?:\.test\.|\.spec\.|_test\.)/i.test(normPath);
+}
+
+function analyzeTestIntegrity(base, head, dir = repoRoot) {
+  if (!base) {
+    return {
+      available: false,
+      deletedTestFiles: [],
+      addedTestCases: 0,
+      removedTestCases: 0,
+      addedSkips: [],
+      addedAssertions: 0,
+      removedAssertions: 0,
+      warnings: [],
+      suspiciousDrop: false,
+    };
+  }
+  const rangeArgs = head ? [base, head] : [base];
+  const deletedTestFiles = git(
+    ['diff', '--name-only', '--no-renames', '--diff-filter=D', '-z', ...rangeArgs],
+    { allowFail: true, cwd: dir },
+  )
+    .split('\0')
+    .filter((f) => f && isTestFile(f));
+  const rawDiff = git(
+    ['diff', '--unified=0', '--no-renames', ...rangeArgs],
+    { allowFail: true, cwd: dir },
+  );
+
+  const testDeclRe = /^(?:(?:export\s+)?(?:async\s+)?function\s+test_\w+|(?:it|test|describe)\s*\(|def\s+test_\w+|func\s+Test\w+|\[(?:Fact|Test|Theory)\])/;
+  const skipRe = /(?:\b(?:it|test|describe)\.(?:skip|only|todo)\s*\(|@pytest\.mark\.skip|\bt\.Skip\s*\(|\[Skip\b)/;
+  const assertRe = /\b(?:assert(?:\.\w+)?\s*\(|expect\s*\(|Assert\.\w+|\.should\.)/;
+
+  let addedTestCases = 0;
+  let removedTestCases = 0;
+  let addedAssertions = 0;
+  let removedAssertions = 0;
+  const addedSkips = [];
+
+  for (const chunk of rawDiff.replace(/\r\n/g, '\n').split(/(?=^diff --git )/m)) {
+    const headerMatch = chunk.match(/^diff --git a\/(.+?) b\/(.+)$/m);
+    if (!headerMatch) continue;
+    const filePath = headerMatch[2];
+    if (!isTestFile(filePath)) continue;
+
+    for (const line of chunk.split('\n')) {
+      if (line.startsWith('+++ ') || line.startsWith('--- ')) continue;
+      if (line.startsWith('+')) {
+        const body = line.slice(1).trim();
+        if (testDeclRe.test(body)) addedTestCases++;
+        if (skipRe.test(body)) addedSkips.push(filePath);
+        if (assertRe.test(body)) addedAssertions++;
+      } else if (line.startsWith('-')) {
+        const body = line.slice(1).trim();
+        if (testDeclRe.test(body)) removedTestCases++;
+        if (assertRe.test(body)) removedAssertions++;
+      }
+    }
+  }
+
+  const warnings = [];
+  const netTestDelta = addedTestCases - removedTestCases;
+  const netAssertDelta = addedAssertions - removedAssertions;
+  if (deletedTestFiles.length > 0) {
+    warnings.push(`Deleted test file(s): ${deletedTestFiles.join(', ')}`);
+  }
+  if (netTestDelta < 0) {
+    warnings.push(
+      `Net drop in test cases: ${netTestDelta} (+${addedTestCases}/-${removedTestCases})`,
+    );
+  }
+  if (addedSkips.length > 0) {
+    warnings.push(
+      `Added test skip/only/todo marker(s) in: ${[...new Set(addedSkips)].join(', ')}`,
+    );
+  }
+  if (netAssertDelta < 0 && removedAssertions - addedAssertions >= 2) {
+    warnings.push(
+      `Net drop in assertions: ${netAssertDelta} (+${addedAssertions}/-${removedAssertions})`,
+    );
+  }
+
+  return {
+    available: true,
+    deletedTestFiles,
+    addedTestCases,
+    removedTestCases,
+    addedSkips: [...new Set(addedSkips)],
+    addedAssertions,
+    removedAssertions,
+    warnings,
+    suspiciousDrop:
+      deletedTestFiles.length > 0 || netTestDelta < 0 || addedSkips.length > 0,
+  };
 }
 
 function isIgnoredDiffPath(filePath, ignorePatterns) {
@@ -1519,20 +1636,21 @@ function executeCheckpoint(
   }
 
   const inCriteria = match.section.toLowerCase() === 'acceptance criteria';
+  const shortSha = git(['rev-parse', '--short', 'HEAD'], { allowFail: true }) || 'working-tree';
   let verifiedText = verified || '';
-  if (inCriteria && !verifiedText && !/\sverified:\s*\S/i.test(match.text)) {
-    verifiedText = `verify ${resolvedVerify.tier} passed (exit code 0)`;
+  if (inCriteria && !verifiedText && !VERIFIED_RE.test(match.text)) {
+    verifiedText = `verify ${resolvedVerify.tier} passed (exit code 0) @${shortSha}`;
   }
 
   let updatedText = match.text;
   if (verifiedText) {
-    if (/verified:/i.test(updatedText)) {
+    if (VERIFIED_RE.test(updatedText)) {
       updatedText = updatedText.replace(
-        /verified:.*$/i,
-        `verified: ${verifiedText}`,
+        /verified(?:\((?:test|cmd|manual|inspect)\))?:.*$/i,
+        `verified(test): ${verifiedText}`,
       );
     } else {
-      updatedText = `${updatedText} verified: ${verifiedText}`;
+      updatedText = `${updatedText} verified(test): ${verifiedText}`;
     }
   }
 
@@ -1926,22 +2044,46 @@ const commands = {
     }
 
     const inCriteria = match.section.toLowerCase() === 'acceptance criteria';
-    let verifiedText = opts.verified || opts.v || '';
-    if (inCriteria && !verifiedText && !/verified:/i.test(match.text)) {
+    let verifiedText = (opts.verified || opts.v || '').trim();
+    const evidenceType = (opts.evidenceType || '').toLowerCase().trim();
+    if (evidenceType && !EVIDENCE_TYPES.has(evidenceType)) {
       fail(
-        `ticking an acceptance criterion requires verified evidence. Pass --verified "<how it was checked and result>".`,
+        `--evidence-type must be one of: ${[...EVIDENCE_TYPES].join(', ')}`,
+      );
+    }
+    if (opts.verifyCmd) {
+      const cmdRes = runVerifyCmd(opts.verifyCmd, { captureOutput: true });
+      if (!cmdRes.ok) {
+        fail(
+          `verify command failed (exit != 0); checkbox [${match.openIndex}] not ticked: ${opts.verifyCmd}`,
+        );
+      }
+      const shortSha =
+        git(['rev-parse', '--short', 'HEAD'], { allowFail: true }) ||
+        'working-tree';
+      const note = verifiedText ? ` (${verifiedText})` : '';
+      verifiedText = `\`${opts.verifyCmd}\` exit 0 @${shortSha}${note}`;
+    }
+    if (inCriteria && !verifiedText && !VERIFIED_RE.test(match.text)) {
+      fail(
+        `ticking an acceptance criterion requires verified evidence. Pass --verified "<how it was checked and result>" or --verify-cmd "<cmd>".`,
       );
     }
 
     let updatedText = match.text;
     if (verifiedText) {
-      if (/verified:/i.test(updatedText)) {
+      const prefix = opts.verifyCmd
+        ? `verified(${evidenceType || 'cmd'})`
+        : evidenceType
+          ? `verified(${evidenceType})`
+          : 'verified';
+      if (VERIFIED_RE.test(updatedText)) {
         updatedText = updatedText.replace(
-          /verified:.*$/i,
-          `verified: ${verifiedText}`,
+          /verified(?:\((?:test|cmd|manual|inspect)\))?:.*$/i,
+          `${prefix}: ${verifiedText}`,
         );
       } else {
-        updatedText = `${updatedText} verified: ${verifiedText}`;
+        updatedText = `${updatedText} ${prefix}: ${verifiedText}`;
       }
     }
 
@@ -2617,6 +2759,7 @@ const commands = {
     }
 
     const hygieneRes = checkHygiene();
+    const testIntegrity = analyzeTestIntegrity(base);
 
     const lines = [
       `# Review Packet: ${plan.meta.title || plan.rel}`,
@@ -2659,6 +2802,15 @@ const commands = {
       statusShort
         ? `Working tree status:\n${statusShort}`
         : 'Working tree: clean',
+      '',
+      '## Test Integrity',
+      ...(!testIntegrity.available
+        ? ['(no baseline available)']
+        : testIntegrity.warnings.length
+          ? testIntegrity.warnings.map((w) => `- ⚠ ${w}`)
+          : [
+              `OK (+${testIntegrity.addedTestCases}/-${testIntegrity.removedTestCases} test cases, +${testIntegrity.addedAssertions}/-${testIntegrity.removedAssertions} assertions)`,
+            ]),
       '',
       `## Diff Stat (base: ${base ? base.slice(0, 10) : 'none'})`,
       diffStat || '(no changes)',
@@ -2750,7 +2902,22 @@ const commands = {
         'usage: node scripts/ticket.mjs review [<plan>] --agent <client> --verdict <pass|warn|block> --summary "<findings>"',
       );
 
-    // Guardrail: if stamping "pass", verify criteria & hygiene
+    const selfReviewReason = (opts.selfReview || '').replace(/\s+/g, ' ').trim();
+    const allowTestDropReason = (opts.allowTestDrop || '').replace(/\s+/g, ' ').trim();
+    if (
+      config.requireReview &&
+      verdict !== 'block' &&
+      !opts.force &&
+      plan.meta.agent &&
+      plan.meta.agent.toLowerCase() === agent.toLowerCase() &&
+      !selfReviewReason
+    ) {
+      fail(
+        `cannot stamp review verdict "${verdict}": self-review blocked (reviewedBy "${agent}" matches plan agent "${plan.meta.agent}"). Use an independent reviewer or pass --self-review "<reason>".`,
+      );
+    }
+
+    // Guardrail: if stamping "pass", verify criteria, test integrity & hygiene
     if (verdict === 'pass' && !opts.force) {
       const openCriteria = section(plan.body, 'Acceptance criteria')
         .split('\n')
@@ -2762,10 +2929,16 @@ const commands = {
       }
       const unverified = section(plan.body, 'Acceptance criteria')
         .split('\n')
-        .filter((l) => /^\s*- \[[xX]\]/.test(l) && !/\sverified:\s*\S/i.test(l));
+        .filter((l) => /^\s*- \[[xX]\]/.test(l) && !VERIFIED_RE.test(l));
       if (unverified.length > 0) {
         fail(
           `cannot stamp review verdict "pass": ${unverified.length} criterion ticked without verified evidence. Pass --force to override.`,
+        );
+      }
+      const integrity = analyzeTestIntegrity(resolveDiffBase());
+      if (integrity.available && integrity.suspiciousDrop && !allowTestDropReason) {
+        fail(
+          `cannot stamp review verdict "pass": test integrity check flagged potential test weakening:\n- ${integrity.warnings.join('\n- ')}\nPass --allow-test-drop "<reason>" (or --force) to override.`,
         );
       }
       const hyg = checkHygiene();
@@ -2779,6 +2952,16 @@ const commands = {
     const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ');
     plan.meta.reviewedBy = agent;
     plan.meta.reviewVerdict = verdict;
+    if (selfReviewReason && verdict !== 'block') {
+      plan.meta.reviewSelfReason = selfReviewReason;
+    } else {
+      delete plan.meta.reviewSelfReason;
+    }
+    if (allowTestDropReason && verdict === 'pass') {
+      plan.meta.reviewTestDropReason = allowTestDropReason;
+    } else {
+      delete plan.meta.reviewTestDropReason;
+    }
     if (verdict === 'block') {
       delete plan.meta.reviewFingerprint;
     } else {
@@ -2786,10 +2969,14 @@ const commands = {
         fail('review omits untracked files; stage the reviewed files before stamping a verdict');
       plan.meta.reviewFingerprint = reviewFingerprint(plan);
     }
+    const extraTags = [
+      selfReviewReason && verdict !== 'block' ? ` [self-review: ${selfReviewReason}]` : '',
+      allowTestDropReason && verdict === 'pass' ? ` [test-drop: ${allowTestDropReason}]` : '',
+    ].join('');
     plan.body = appendToSection(
       plan.body,
       'Progress log',
-      `- ${stamp} UTC, ${agent} (review: ${verdict}${dualPassMeta}): ${summary}`,
+      `- ${stamp} UTC, ${agent} (review: ${verdict}${dualPassMeta}): ${summary}${extraTags}`,
     );
     writePlan(plan);
     console.log(
@@ -2802,6 +2989,19 @@ const commands = {
     const found = problems(plan);
     if (found.length)
       fail(`${plan.rel} is not closed out:\n- ${found.join('\n- ')}`);
+    if (opts.strict && resolveVerifyCommand(config)) {
+      const checkedCriteria = findCheckboxes(plan.body).items.filter(
+        (it) => it.isChecked && it.section.toLowerCase() === 'acceptance criteria',
+      );
+      if (
+        checkedCriteria.length > 0 &&
+        checkedCriteria.every((it) => /\sverified\(manual\):/i.test(it.text))
+      ) {
+        fail(
+          `${plan.rel}: --strict requires at least one automated verification proof (verified(test): or verified(cmd):) when a verify command is configured.`,
+        );
+      }
+    }
     const hyg = checkHygiene();
     if (!hyg.clean) {
       if (opts.strict || config.hygiene?.strict) {
