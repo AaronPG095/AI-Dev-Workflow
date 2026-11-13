@@ -155,10 +155,10 @@ Requires **Node.js 22+**. When `<plan>` is omitted on a feature branch, `ticket.
 ```powershell
 # 1. Plan Scaffolding, Splitting & Ignition
 # Automatically creates docs/plans/<PREFIX>-Plan-<Topic>-<YYYY-MM>.plan.md
-node scripts/ticket.mjs new "Smart Shortcut Suggestions" --type Feature [--branch]
+node scripts/ticket.mjs new "Smart Shortcut Suggestions" --type Feature [--appetite S|M|L] [--context "<findings>"] [--branch]
 
 # Fast one-command ignition: scaffold, set criteria, checkout branch, ticket, and start Doing
-node scripts/ticket.mjs new "Fast Feature" --summary "..." --criteria "c1|c2" --steps "s1|s2" --branch --create --start --agent Gemini
+node scripts/ticket.mjs new "Fast Feature" --summary "..." --appetite M --criteria "c1|c2" --steps "s1|s2" --branch --create --start --agent Gemini
 
 # Split an oversized plan into Part 1 and Part 2 without deleting checkboxes (defers moved items)
 node scripts/ticket.mjs split docs/plans/ADW-Plan-Big-Feature.plan.md --after 3 [--title "Part 2 Title"]
