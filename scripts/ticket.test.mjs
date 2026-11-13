@@ -2341,3 +2341,173 @@ test('wave --check and wave --prune verify and clean closed wave worktrees safel
   assert.equal(manifest.starterConfig.agentic?.maxRetries, 3);
   assert.deepEqual(manifest.starterConfig.hygiene?.disallowedPatterns, ['.tmp', 'test-results', 'coverage', '.worktrees']);
 });
+
+test('fleet/overview active-plan parity, ci-check archive validation/exemption, and hook --fleet with custom hooksPath', (t) => {
+  // Part 1 & 3: multi-repo fleet fixture with custom plansDir and core.hooksPath
+  const fleetRoot = mkdtempSync(join(tmpdir(), 'ticket-fleet-polish-'));
+  t.after(() => rmSync(fleetRoot, { recursive: true, force: true }));
+
+  const initRepo = (name, cfg, setupFn) => {
+    const dir = join(fleetRoot, name);
+    mkdirSync(join(dir, 'scripts'), { recursive: true });
+    copyFileSync(join(scripts, 'ticket.mjs'), join(dir, 'scripts/ticket.mjs'));
+    writeFileSync(
+      join(dir, 'scripts/ticket.config.json'),
+      JSON.stringify({ ...defaultNotionConfig, tracker: 'local', ...cfg }, null, 2),
+    );
+    const git = (...args) =>
+      execFileSync('git', args, {
+        cwd: dir,
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      }).trim();
+    git('init');
+    git('config', 'user.name', 'Test');
+    git('config', 'user.email', 'test@example.com');
+    git('checkout', '-B', 'main');
+    setupFn(dir, git);
+    return dir;
+  };
+
+  const repoA = initRepo(
+    'repo-a',
+    { knownRepos: ['repo-a', 'repo-b'] },
+    (dir, git) => {
+      mkdirSync(join(dir, 'docs/plans'), { recursive: true });
+      writeFileSync(
+        join(dir, 'docs/plans/FO-Plan-Alpha-Old.plan.md'),
+        '---\ntitle: Plan - Feature: Alpha Old\nticket: local://FO:Alpha\nstatus: in-progress\nbranch: feat/other\n---\n# Alpha\n\n## Steps\n- [ ] Pending\n',
+      );
+      writeFileSync(
+        join(dir, 'docs/plans/FO-Plan-Zeta-Match.plan.md'),
+        '---\ntitle: Plan - Feature: Zeta Match\nticket: local://FO:Zeta\nstatus: in-progress\nbranch: feat/target-branch\nreviewVerdict: pass\n---\n# Zeta\n\n## Steps\n- [x] Done\n',
+      );
+      git('add', '.');
+      git('commit', '-m', 'init repo-a');
+      git('checkout', '-b', 'feat/target-branch');
+    },
+  );
+
+  const repoB = initRepo(
+    'repo-b',
+    { plansDir: 'custom/plans' },
+    (dir, git) => {
+      mkdirSync(join(dir, 'custom/plans'), { recursive: true });
+      mkdirSync(join(dir, '.githooks'), { recursive: true });
+      writeFileSync(
+        join(dir, 'custom/plans/FO-Plan-Custom-Active.plan.md'),
+        '---\ntitle: Plan - Feature: Custom Active\nticket: local://FO:Custom\nstatus: in-progress\nbranch: feat/custom-plan\nreviewVerdict: warn\n---\n# Custom\n\n## Steps\n- [ ] Pending\n',
+      );
+      git('add', '.');
+      git('commit', '-m', 'init repo-b');
+      git('checkout', '-b', 'feat/custom-plan');
+      git('config', 'core.hooksPath', '.githooks');
+    },
+  );
+
+  const runInRepoA = (...args) =>
+    spawnSync(process.execPath, [join(repoA, 'scripts/ticket.mjs'), ...args], {
+      cwd: repoA,
+      encoding: 'utf8',
+    });
+
+  const ov = runInRepoA('overview');
+  assert.equal(ov.status, 0, ov.stderr);
+  assert.match(ov.stdout, /FO-Plan-Zeta-Match/);
+  assert.doesNotMatch(ov.stdout, /FO-Plan-Alpha-Old/);
+  assert.match(ov.stdout, /FO-Plan-Custom-Active/);
+
+  const fl = runInRepoA('fleet');
+  assert.equal(fl.status, 0, fl.stderr);
+  assert.match(fl.stdout, /FO-Plan-Zeta-Match/);
+  assert.doesNotMatch(fl.stdout, /FO-Plan-Alpha-Old/);
+  assert.match(fl.stdout, /FO-Plan-Custom-Active/);
+
+  const hi = runInRepoA('hook', 'install', '--fleet');
+  assert.equal(hi.status, 0, hi.stderr);
+  assert.equal(existsSync(join(repoA, '.git/hooks/pre-push')), true);
+  assert.equal(existsSync(join(repoB, '.githooks/pre-push')), true);
+
+  const hs = runInRepoA('hook', 'status', '--fleet');
+  assert.equal(hs.status, 0, hs.stderr);
+  assert.match(hs.stdout, /\[repo-a\] Pre-push hook is installed/);
+  assert.match(hs.stdout, /\[repo-b\] Pre-push hook is installed/);
+
+  const dr = runInRepoA('doctor', '--fleet');
+  assert.equal(dr.status, 0, dr.stderr);
+  const installedCount = (dr.stdout.match(/Pre-push:\s+installed/g) || []).length;
+  assert.equal(installedCount, 2, dr.stdout);
+
+  const hu = runInRepoA('hook', 'uninstall', '--fleet');
+  assert.equal(hu.status, 0, hu.stderr);
+  assert.equal(existsSync(join(repoA, '.git/hooks/pre-push')), false);
+  assert.equal(existsSync(join(repoB, '.githooks/pre-push')), false);
+
+  // Part 2: ci-check closed-archive validation and no-plan maxChangedLines exemption
+  const ci = fixture(t, '', [], { tracker: 'local' });
+  ci.git('init');
+  ci.git('config', 'user.name', 'Test');
+  ci.git('config', 'user.email', 'test@example.com');
+  ci.git('checkout', '-B', 'main');
+  const filler = Array.from({ length: 24 }, (_, i) => `- [x] Item ${i + 1} verified: ok`).join('\n');
+  writeFileSync(join(ci.root, 'README.md'), '# Repo\n');
+  writeFileSync(
+    join(ci.root, 'docs/plans/FO-Plan-Old-1.plan.md'),
+    `---\ntitle: Plan - Feature: Old 1\nticket: local://FO:Old1\nstatus: done\n---\n# Old 1\n\n## Acceptance criteria\n${filler}\n\n## Steps\n- [x] Done\n`,
+  );
+  writeFileSync(
+    join(ci.root, 'docs/plans/FO-Plan-Old-2.plan.md'),
+    `---\ntitle: Plan - Feature: Old 2\nticket: local://FO:Old2\nstatus: done\n---\n# Old 2\n\n## Acceptance criteria\n${filler}\n\n## Steps\n- [x] Done\n`,
+  );
+  ci.git('add', '.');
+  ci.git('commit', '-m', 'base commit');
+  const base = ci.git('rev-parse', 'HEAD');
+
+  ci.git('checkout', '-b', 'chore/pure-archive');
+  mkdirSync(join(ci.root, 'docs/plans/archive/2026-11'), { recursive: true });
+  ci.git('mv', 'docs/plans/FO-Plan-Old-1.plan.md', 'docs/plans/archive/2026-11/FO-Plan-Old-1.plan.md');
+  ci.git('mv', 'docs/plans/FO-Plan-Old-2.plan.md', 'docs/plans/archive/2026-11/FO-Plan-Old-2.plan.md');
+  ci.git('commit', '-m', 'archive two closed plans');
+  const headPure = ci.git('rev-parse', 'HEAD');
+
+  const pureRes = ci.run('ci-check', ['--base', base, '--head', headPure], [], {
+    omitPlan: true,
+    envOverrides: { NO_PLAN: '0' },
+  });
+  assert.equal(pureRes.status, 0, pureRes.stderr);
+  assert.match(pureRes.stdout, /Closed-plan archive PR/);
+
+  writeFileSync(join(ci.root, 'README.md'), '# Repo\nSmall note.\n');
+  ci.git('add', 'README.md');
+  ci.git('commit', '-m', 'small readme note with archive');
+  const headCombo = ci.git('rev-parse', 'HEAD');
+
+  const comboNoLabel = ci.run('ci-check', ['--base', base, '--head', headCombo], [], {
+    omitPlan: true,
+    envOverrides: { NO_PLAN: '0' },
+  });
+  assert.notEqual(comboNoLabel.status, 0);
+
+  const comboWithLabel = ci.run('ci-check', ['--base', base, '--head', headCombo], [], {
+    omitPlan: true,
+    envOverrides: { NO_PLAN: '1' },
+  });
+  assert.equal(comboWithLabel.status, 0, comboWithLabel.stderr);
+
+  ci.git('checkout', '-b', 'chore/bad-archive', base);
+  mkdirSync(join(ci.root, 'docs/plans/archive/2026-11'), { recursive: true });
+  writeFileSync(
+    join(ci.root, 'docs/plans/archive/2026-11/FO-Plan-Unclosed.plan.md'),
+    '---\ntitle: Plan - Feature: Unclosed\nticket: local://FO:Unclosed\nstatus: draft\n---\n# Unclosed\n\n## Acceptance criteria\n- [ ] Still open\n',
+  );
+  ci.git('add', '.');
+  ci.git('commit', '-m', 'add unclosed archive plan');
+  const headBad = ci.git('rev-parse', 'HEAD');
+
+  const badRes = ci.run('ci-check', ['--base', base, '--head', headBad], [], {
+    omitPlan: true,
+    envOverrides: { NO_PLAN: '1' },
+  });
+  assert.notEqual(badRes.status, 0);
+  assert.match(badRes.stderr, /archived plan is not closed out/);
+});

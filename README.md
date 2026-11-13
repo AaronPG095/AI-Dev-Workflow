@@ -247,8 +247,9 @@ node scripts/ticket.mjs fleet verify [--tier <name>|--all]
 # Execute command across all local repositories in parallel
 node scripts/ticket.mjs exec "git status --short"
 
-# Install pure shell pre-push hook to prevent direct push to protected branches
+# Install, check, or remove the pure shell pre-push hook (single repo or across all known fleet repos)
 node scripts/ticket.mjs hook install
+node scripts/ticket.mjs hook [install|uninstall|status] [--fleet]
 
 # 7. Layer 2: Modular Agentic Coding Engine (Levels A, B, C)
 # Level A: Get the next unticked step, verify command, and retry budget

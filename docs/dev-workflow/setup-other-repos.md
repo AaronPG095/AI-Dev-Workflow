@@ -49,7 +49,19 @@ Works immediately offline and in public repositories:
   "plansDir": "docs/plans",
   "protectedBranches": ["main"],
   "captureSources": ["Claude", "Codex", "Gemini", "ChatGPT", "Notion AI", "Other"],
+  "verify": {
+    "test": "npm test",
+    "full": "npm run lint && npm test"
+  },
   "verifyCommand": "npm test",
+  "hygiene": {
+    "maxFileSizeKB": 1024,
+    "disallowedPatterns": [".tmp", "test-results", "coverage", ".worktrees"]
+  },
+  "agentic": {
+    "maxRetries": 3,
+    "verifyTier": "test"
+  },
   "requireReview": false,
   "noPlan": {
     "maxChangedLines": 40,
@@ -74,7 +86,19 @@ Connects plans to a Notion Tasks database (`NOTION_TOKEN` in environment, `.env`
   "plansDir": "docs/plans",
   "protectedBranches": ["main", "develop"],
   "captureSources": ["Claude", "Codex", "Gemini", "ChatGPT", "Notion AI", "Other"],
+  "verify": {
+    "test": "npm test",
+    "full": "npm run lint && npm test"
+  },
   "verifyCommand": "npm test",
+  "hygiene": {
+    "maxFileSizeKB": 1024,
+    "disallowedPatterns": [".tmp", "test-results", "coverage", ".worktrees"]
+  },
+  "agentic": {
+    "maxRetries": 3,
+    "verifyTier": "test"
+  },
   "requireReview": false,
   "noPlan": {
     "maxChangedLines": 40,
