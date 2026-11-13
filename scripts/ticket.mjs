@@ -74,6 +74,11 @@ const OPTIONAL = {
   },
 };
 const VERDICTS = ['pass', 'warn', 'block'];
+const DEFAULT_APPETITE = {
+  S: { maxLines: 150, maxFiles: 5 },
+  M: { maxLines: 450, maxFiles: 12 },
+  L: { maxLines: 1000, maxFiles: 25 },
+};
 const DEFAULT_PACK_IGNORE = [
   'pnpm-lock.yaml',
   'package-lock.json',
@@ -352,6 +357,11 @@ function problems(plan, { requireTicket = true, ignoreReview = false, base, head
       new Date(plan.meta.due).toISOString().slice(0, 10) !== plan.meta.due)
   )
     found.push(`due must be YYYY-MM-DD, or empty (got "${plan.meta.due}")`);
+  if (
+    plan.meta.appetite &&
+    !['S', 'M', 'L'].includes(plan.meta.appetite.trim().toUpperCase())
+  )
+    found.push(`appetite must be S, M, or L, or empty (got "${plan.meta.appetite}")`);
   if (requireTicket && !hasTicket(plan.meta.ticket))
     found.push(
       `no ${isLocal ? 'ticket' : 'Notion ticket'} URL (run: node scripts/ticket.mjs create ${plan.rel} --agent <client>)`,
@@ -452,6 +462,73 @@ function originalPlan(file, base, head) {
     .filter(Boolean)
     .pop();
   return first ? git(['show', `${first}:${file}`]) : null;
+}
+
+function countOpenQuestions(body) {
+  const raw = section(body, 'Open questions');
+  if (!raw) return 0;
+  return raw
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(
+      (l) =>
+        l &&
+        !l.startsWith('<!--') &&
+        !l.endsWith('-->') &&
+        !/^<[^>]+>$/.test(l) &&
+        !/^(?:\(none\)|none\.?)$/i.test(l) &&
+        !/^- \[[xX]\]/.test(l),
+    )
+    .filter((l) => /^- /.test(l) || /\?$/.test(l)).length;
+}
+
+function checkAppetite(plan, base, head, dir = repoRoot) {
+  const level = (plan.meta.appetite || '').trim().toUpperCase();
+  if (!level || !Object.hasOwn(DEFAULT_APPETITE, level)) return null;
+  const limits = {
+    ...DEFAULT_APPETITE[level],
+    ...(config.appetite?.[level] || {}),
+  };
+  if (!base) {
+    return {
+      appetite: level,
+      files: 0,
+      lines: 0,
+      maxFiles: limits.maxFiles,
+      maxLines: limits.maxLines,
+      exceeded: false,
+    };
+  }
+  const numstat = git(
+    [
+      'diff',
+      '--numstat',
+      '--no-renames',
+      base,
+      ...(head ? [head] : []),
+      '--',
+      '.',
+      `:(exclude)${config.plansDir}`,
+    ],
+    { allowFail: true, cwd: dir },
+  );
+  let files = 0;
+  let lines = 0;
+  for (const row of numstat.split('\n').filter(Boolean)) {
+    const [added, deleted] = row.split('\t');
+    files++;
+    if (added !== '-' && deleted !== '-') {
+      lines += Number(added) + Number(deleted);
+    }
+  }
+  return {
+    appetite: level,
+    files,
+    lines,
+    maxFiles: limits.maxFiles,
+    maxLines: limits.maxLines,
+    exceeded: files > limits.maxFiles || lines > limits.maxLines,
+  };
 }
 
 function appendToSection(body, heading, entry) {
@@ -1693,8 +1770,13 @@ const commands = {
     const priority = opts.priority || '';
     const state = opts.state || '';
     const due = opts.due || '';
+    const appetite = (opts.appetite || '').trim().toUpperCase();
+    if (appetite && !['S', 'M', 'L'].includes(appetite)) {
+      fail(`--appetite must be S, M, or L (got "${opts.appetite}")`);
+    }
 
     const summary = (opts.summary || '').replace(/^["']|["']$/g, '').trim();
+    const contextText = (opts.context || '').replace(/^["']|["']$/g, '').trim();
     const rawCriteria = (opts.criteria || '')
       .replace(/^["']|["']$/g, '')
       .trim();
@@ -1707,7 +1789,7 @@ const commands = {
           .filter(Boolean)
           .map((c) => `- [ ] ${c}`)
           .join('\n')
-      : '- [ ] <Checkable outcome>';
+      : '- [ ] AC1: <Observable outcome>';
 
     const stepsList = rawSteps
       ? rawSteps
@@ -1716,7 +1798,7 @@ const commands = {
           .filter(Boolean)
           .map((s) => `- [ ] ${s}`)
           .join('\n')
-      : '- [ ] <Step>';
+      : '- [ ] <Step> (AC1)';
 
     const templatePath = join(repoRoot, config.plansDir, '_template.plan.md');
     let template = existsSync(templatePath)
@@ -1730,6 +1812,7 @@ const commands = {
         .replace(/^priority:.*$/m, `priority: ${priority}`)
         .replace(/^state:.*$/m, `state: ${state}`)
         .replace(/^due:.*$/m, `due: ${due}`)
+        .replace(/^appetite:.*$/m, `appetite: ${appetite}`)
         .replace(/^# <Title>.*$/m, `# ${topic}`)
         .replace(/<!--[\s\S]*?-->\n*/m, '');
       if (summary) {
@@ -1738,11 +1821,23 @@ const commands = {
           summary,
         );
       }
+      if (contextText) {
+        content = content.replace(
+          /<Compacted research:[^>]*>/,
+          contextText,
+        );
+      }
       if (rawCriteria) {
-        content = content.replace(/- \[ \] <Checkable outcome>/, criteriaList);
+        content = content.replace(
+          /- \[ \] (?:AC1: )?<[^>]+>/,
+          criteriaList,
+        );
       }
       if (rawSteps) {
-        content = content.replace(/- \[ \] <Step>/, stepsList);
+        content = content.replace(
+          /- \[ \] <Step>(?: \(AC1\))?/,
+          stepsList,
+        );
       }
     } else {
       content = [
@@ -1753,12 +1848,21 @@ const commands = {
         `priority: ${priority}`,
         `state: ${state}`,
         `due: ${due}`,
+        `appetite: ${appetite}`,
         '---',
         `# ${topic}`,
         '',
         '## Summary',
         '',
         summary || '<2-3 sentences: what changes and why.>',
+        '',
+        '## Context',
+        '',
+        contextText || '<Compacted research: relevant files with path:line, current behaviour, constraints, and alternatives considered & rejected.>',
+        '',
+        '## Open questions',
+        '',
+        '<Unresolved assumptions or `- [ ] Question?` items to resolve before `start`; write `None` when clear.>',
         '',
         '## Acceptance criteria',
         '',
@@ -1770,7 +1874,7 @@ const commands = {
         '',
         '## Risks',
         '',
-        '<What could go wrong and how it is contained.>',
+        '<Pre-mortem: Assume this shipped and broke in production a week later — what failed, and what test/guardrail mitigates it?>',
         '',
         '## Out of scope',
         '',
@@ -1844,10 +1948,15 @@ const commands = {
 
     const formatNumberedItem = (it) => `[${it.openIndex}] - [ ] ${it.text}`;
 
+    const openQuestions = countOpenQuestions(plan.body);
+    const appetiteLabel = plan.meta.appetite
+      ? ` | Appetite: ${plan.meta.appetite.toUpperCase()}`
+      : '';
+
     const lines = [
       `# Session Context: ${plan.meta.title || plan.rel}`,
-      `Plan: ${plan.rel} | Status: ${localPlanStatus(plan) || 'unknown'} | Ticket: ${plan.meta.ticket || 'none'}`,
-      `Branch: ${branch} | Tree: ${clean ? 'clean' : 'dirty'}${plan.meta.reviewedBy ? ` | Reviewed: ${plan.meta.reviewedBy} (${plan.meta.reviewVerdict})` : ''}`,
+      `Plan: ${plan.rel} | Status: ${localPlanStatus(plan) || 'unknown'} | Ticket: ${plan.meta.ticket || 'none'}${appetiteLabel}`,
+      `Branch: ${branch} | Tree: ${clean ? 'clean' : 'dirty'} | Open questions: ${openQuestions}${plan.meta.reviewedBy ? ` | Reviewed: ${plan.meta.reviewedBy} (${plan.meta.reviewVerdict})` : ''}`,
       ...(() => {
         const tiers = getVerifyTiers();
         const entries = Object.entries(tiers);
@@ -2426,6 +2535,12 @@ const commands = {
       ].includes(branch)
     )
       fail(`you are on "${branch}". Create a branch for this plan first.`);
+    const openQuestions = countOpenQuestions(plan.body);
+    if (openQuestions > 0) {
+      const msg = `${plan.rel} has ${openQuestions} unresolved item(s) under "## Open questions". Resolve assumptions before implementing.`;
+      if (opts.strict) fail(msg);
+      console.warn(`Warning: ${msg}`);
+    }
     await startTicket(plan.meta.ticket);
     plan.meta.status = 'in-progress';
     plan.meta.branch = branch;
@@ -2617,11 +2732,12 @@ const commands = {
     }
 
     const hygieneRes = checkHygiene();
+    const appetiteRes = checkAppetite(plan, base);
 
     const lines = [
       `# Review Packet: ${plan.meta.title || plan.rel}`,
       `Plan: ${plan.rel} | Status: ${localPlanStatus(plan) || 'unknown'} | Branch: ${plan.meta.branch || git(['rev-parse', '--abbrev-ref', 'HEAD'], { allowFail: true })}`,
-      `Ticket: ${plan.meta.ticket || 'none'} | Reviewed: ${plan.meta.reviewedBy ? `${plan.meta.reviewedBy} (${plan.meta.reviewVerdict || 'unknown'})` : 'not yet'}`,
+      `Ticket: ${plan.meta.ticket || 'none'} | Reviewed: ${plan.meta.reviewedBy ? `${plan.meta.reviewedBy} (${plan.meta.reviewVerdict || 'unknown'})` : 'not yet'}${appetiteRes ? ` | Appetite: ${appetiteRes.appetite} (${appetiteRes.lines}/${appetiteRes.maxLines} lines, ${appetiteRes.files}/${appetiteRes.maxFiles} files${appetiteRes.exceeded ? ' — EXCEEDED' : ''})` : ''}`,
       ...(resolvedTest
         ? [
             `Verify command: \`${resolvedTest.cmd}\`${resolvedTest.tier !== 'test' ? ` (${resolvedTest.tier})` : ''}`,
@@ -2802,6 +2918,12 @@ const commands = {
     const found = problems(plan);
     if (found.length)
       fail(`${plan.rel} is not closed out:\n- ${found.join('\n- ')}`);
+    const appetiteRes = checkAppetite(plan, resolveDiffBase());
+    if (appetiteRes && appetiteRes.exceeded) {
+      const msg = `Appetite ${appetiteRes.appetite} exceeded (${appetiteRes.lines}/${appetiteRes.maxLines} lines, ${appetiteRes.files}/${appetiteRes.maxFiles} files). Consider running \`node scripts/ticket.mjs split ${plan.rel} --after <#>\`.`;
+      if (opts.strict) fail(msg);
+      console.warn(`Warning: ${msg}`);
+    }
     const hyg = checkHygiene();
     if (!hyg.clean) {
       if (opts.strict || config.hygiene?.strict) {

@@ -1,12 +1,18 @@
 ---
 title: Plan - Feature: Template V5 And Appetite Budget
 ticket: local://ADW:ADW-Plan-Template-V5-And-Appetite-Budget-2026-11
-status: planned
+status: in-progress
 priority: 
 state: 
 due: 
 devTicketKey: ADW:ADW-Plan-Template-V5-And-Appetite-Budget-2026-11
 agent: Gemini
+branch: gemini/template-v5-and-appetite-budget
+worktree: AI-Dev-Workflow
+startedAt: 2026-11-13
+reviewedBy: Other
+reviewVerdict: pass
+reviewFingerprint: 9d6ce58cc9c14d632a4860993b8000d5c092cd92f9c7dfa43e1fa0b54242ecd0
 ---
 # Template V5 And Appetite Budget
 
@@ -16,18 +22,18 @@ Upgrade `_template.plan.md` and `ticket.mjs new` to capture compacted codebase c
 
 ## Acceptance criteria
 
-- [ ] AC1: `docs/plans/_template.plan.md` and `ticket.mjs new` include `appetite:` frontmatter, `## Context`, `## Open questions`, `AC#`-indexed outcome criteria guidance, `(AC#)` step mapping guidance, and pre-mortem framing in `## Risks`.
-- [ ] AC2: `prime` displays `Open questions: N` (excluding `None`/empty) and `Appetite: <S|M|L>` when set, while `start` warns (or fails under `--strict`) if `## Open questions` still contains unchecked `- [ ]` items; existing v4 plans remain backwards-compatible.
-- [ ] AC3: Setting `appetite: S|M|L` (or `--appetite <S|M|L>` in `new`) checks changed lines/files via `git diff --numstat` (excluding `docs/plans/`) against configured `config.appetite` thresholds; `pack` displays budget usage and `check` warns (or fails under `--strict`) when exceeded, suggesting `ticket.mjs split`.
-- [ ] AC4: `node --test scripts/ticket.test.mjs` passes with hermetic tests for v5 scaffolding, backwards compatibility, `prime`/`start` open-question checks, and `appetite` budgets; `README.md`, `ticket.config.json`, `workflow-manifest.json`, and synced skills are updated identically.
+- [x] AC1: `docs/plans/_template.plan.md` and `ticket.mjs new` include `appetite:` frontmatter, `## Context`, `## Open questions`, `AC#`-indexed outcome criteria guidance, `(AC#)` step mapping guidance, and pre-mortem framing in `## Risks`. verified: docs/plans/_template.plan.md and T1.4 subtest verified
+- [x] AC2: `prime` displays `Open questions: N` (excluding `None`/empty) and `Appetite: <S|M|L>` when set, while `start` warns (or fails under `--strict`) if `## Open questions` still contains unchecked `- [ ]` items; existing v4 plans remain backwards-compatible. verified: T1.4 subtest in scripts/ticket.test.mjs passes
+- [x] AC3: Setting `appetite: S|M|L` (or `--appetite <S|M|L>` in `new`) checks changed lines/files via `git diff --numstat` (excluding `docs/plans/`) against configured `config.appetite` thresholds; `pack` displays budget usage and `check` warns (or fails under `--strict`) when exceeded, suggesting `ticket.mjs split`. verified: T2.6 subtest in scripts/ticket.test.mjs passes
+- [x] AC4: `node --test scripts/ticket.test.mjs` passes with hermetic tests for v5 scaffolding, backwards compatibility, `prime`/`start` open-question checks, and `appetite` budgets; `README.md`, `ticket.config.json`, `workflow-manifest.json`, and synced skills are updated identically. verified: node --test scripts/ticket.test.mjs 74/74 pass; skills mirrors checked
 
 ## Steps
 
-- [ ] Upgrade `docs/plans/_template.plan.md` with `appetite:`, `## Context`, `## Open questions`, `AC#`/EARS guidance, and pre-mortem `## Risks` prompt (AC1).
-- [ ] Update `commands.new()` (`--appetite`, `--context`, fallback inline template) and frontmatter validation for `appetite` in `problems()` in `scripts/ticket.mjs` (AC1, AC3).
-- [ ] Add `countOpenQuestions()` and wire into `commands.prime()` and `commands.start()` in `scripts/ticket.mjs` (AC2).
-- [ ] Add `checkAppetite()` and wire into `commands.pack()` and `commands.check()`, plus `appetite` defaults in `scripts/ticket.config.json` and `scripts/workflow-manifest.json` (AC3).
-- [ ] Update `README.md`, `.agents/skills/dev-workflow/SKILL.md`, and `.claude/skills/dev-workflow/SKILL.md`, add hermetic tests in `scripts/ticket.test.mjs`, and run `node --test scripts/ticket.test.mjs` (AC4).
+- [x] Upgrade `docs/plans/_template.plan.md` with `appetite:`, `## Context`, `## Open questions`, `AC#`/EARS guidance, and pre-mortem `## Risks` prompt (AC1).
+- [x] Update `commands.new()` (`--appetite`, `--context`, fallback inline template) and frontmatter validation for `appetite` in `problems()` in `scripts/ticket.mjs` (AC1, AC3).
+- [x] Add `countOpenQuestions()` and wire into `commands.prime()` and `commands.start()` in `scripts/ticket.mjs` (AC2).
+- [x] Add `checkAppetite()` and wire into `commands.pack()` and `commands.check()`, plus `appetite` defaults in `scripts/ticket.config.json` and `scripts/workflow-manifest.json` (AC3).
+- [x] Update `README.md`, `.agents/skills/dev-workflow/SKILL.md`, and `.claude/skills/dev-workflow/SKILL.md`, add hermetic tests in `scripts/ticket.test.mjs`, and run `node --test scripts/ticket.test.mjs` (AC4).
 
 ## Risks
 
@@ -46,3 +52,4 @@ Upgrade `_template.plan.md` and `ticket.mjs new` to capture compacted codebase c
 ## Progress log
 
 <!-- One line per session/review, added with `ticket.mjs log` or `ticket.mjs review` -->
+- 2026-11-13 17:14 UTC, Other (review: pass [standards: pass, spec: pass]): Independent fresh-context review: Template v5, open-question checks, appetite budgets, docs/skills parity, and 74/74 tests pass.

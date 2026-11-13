@@ -15,6 +15,11 @@
     "disallowedPatterns": [".tmp", "test-results", "coverage", ".worktrees"]
   },
   "requireReview": true,
+  "appetite": {
+    "S": { "maxLines": 150, "maxFiles": 5 },
+    "M": { "maxLines": 450, "maxFiles": 12 },
+    "L": { "maxLines": 1000, "maxFiles": 25 }
+  },
   "knownRepos": [
     "FluentOverlay",
     "Fluent-Studio-Website",

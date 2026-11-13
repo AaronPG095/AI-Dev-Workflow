@@ -2569,3 +2569,105 @@ test('ci-check allows verified upstream workflow sync under no-plan and rejects 
   assert.notEqual(mixedRes.status, 0);
   assert.match(mixedRes.stderr, /no workflow policy changes/);
 });
+
+test('T1.4: template v5 scaffolding, prime open-question count, start --strict, and v4 compatibility', (t) => {
+  const f = fixture(t, '', [], { tracker: 'local', requireReview: false });
+  f.git('init', '-b', 'main');
+  f.git('config', 'user.name', 'Test');
+  f.git('config', 'user.email', 'test@example.invalid');
+  f.git('add', '.');
+  f.git('commit', '-m', 'init');
+
+  // v4 plan without Context/Open questions/appetite still passes check
+  const v4Path = join(f.root, 'docs/plans/FO-Plan-Test.plan.md');
+  writeFileSync(
+    v4Path,
+    '---\ntitle: Plan - Process: Legacy\nticket: local://FO:FO-Plan-Test\nstatus: in-progress\n---\n# Legacy\n\n## Summary\nOld plan.\n\n## Acceptance criteria\n- [x] Works verified: ok\n\n## Steps\n- [x] Done\n',
+  );
+  const v4Check = f.run('check');
+  assert.equal(v4Check.status, 0, v4Check.stderr);
+
+  // Scaffold v5 plan with --appetite and --context
+  const newRes = f.run(
+    'new',
+    ['V5 Feature', '--appetite', 'M', '--context', 'scripts/ticket.mjs:10'],
+    [],
+    { omitPlan: true },
+  );
+  assert.equal(newRes.status, 0, newRes.stderr);
+  const createdFile = readdirSync(join(f.root, 'docs/plans')).find((n) =>
+    n.includes('V5-Feature'),
+  );
+  assert.ok(createdFile, 'expected v5 plan file');
+  const createdRel = `docs/plans/${createdFile}`;
+  const createdText = readFileSync(join(f.root, createdRel), 'utf8');
+  assert.match(createdText, /appetite: M/);
+  assert.match(createdText, /## Context[\s\S]*scripts\/ticket\.mjs:10/);
+  assert.match(createdText, /## Open questions/);
+  assert.match(createdText, /AC1: <Observable outcome>/);
+
+  // Add an open question and test prime + start --strict
+  writeFileSync(
+    join(f.root, createdRel),
+    createdText.replace(
+      /## Open questions\n\n[^\n]+/,
+      '## Open questions\n\n- [ ] Should cache expire after 5m?',
+    ),
+  );
+  f.git('checkout', '-b', 'feat/v5-test');
+  const createTicket = f.run('create', [createdRel, '--agent', 'Gemini'], [], {
+    omitPlan: true,
+  });
+  assert.equal(createTicket.status, 0, createTicket.stderr);
+
+  const primeRes = f.run('prime', [createdRel], [], { omitPlan: true });
+  assert.equal(primeRes.status, 0, primeRes.stderr);
+  assert.match(primeRes.stdout, /Appetite: M/);
+  assert.match(primeRes.stdout, /Open questions: 1/);
+
+  const startStrict = f.run('start', [createdRel, '--strict'], [], {
+    omitPlan: true,
+  });
+  assert.notEqual(startStrict.status, 0);
+  assert.match(startStrict.stderr, /unresolved item\(s\) under "## Open questions"/);
+});
+
+test('T2.6: appetite diff-size budget warns/fails when exceeded and excludes plansDir', (t) => {
+  const f = fixture(t, 'ticket: local://FO:FO-Plan-Test\nappetite: S\n', [], {
+    tracker: 'local',
+    requireReview: false,
+    appetite: { S: { maxLines: 5, maxFiles: 1 } },
+  });
+  f.git('init', '-b', 'main');
+  f.git('config', 'user.name', 'Test');
+  f.git('config', 'user.email', 'test@example.invalid');
+  f.git('add', '.');
+  f.git('commit', '-m', 'init');
+  f.git('checkout', '-b', 'feat/appetite-test');
+
+  // Adding lines inside docs/plans/ does not trip S budget
+  writeFileSync(
+    join(f.root, 'docs/plans/extra-notes.md'),
+    Array.from({ length: 20 }, (_, i) => `line ${i}`).join('\n'),
+  );
+  f.git('add', '.');
+  f.git('commit', '-m', 'plan docs only');
+  const checkDocsOnly = f.run('check', ['--strict']);
+  assert.equal(checkDocsOnly.status, 0, checkDocsOnly.stderr);
+
+  // Adding 10 code lines exceeds S maxLines=5
+  writeFileSync(
+    join(f.root, 'app.js'),
+    Array.from({ length: 10 }, (_, i) => `export const v${i} = ${i};`).join('\n'),
+  );
+  f.git('add', 'app.js');
+  f.git('commit', '-m', 'exceed appetite');
+
+  const packRes = f.run('pack');
+  assert.equal(packRes.status, 0, packRes.stderr);
+  assert.match(packRes.stdout, /Appetite: S \(10\/5 lines, 1\/1 files — EXCEEDED\)/);
+
+  const checkStrict = f.run('check', ['--strict']);
+  assert.notEqual(checkStrict.status, 0);
+  assert.match(checkStrict.stderr, /Appetite S exceeded.*split/);
+});
