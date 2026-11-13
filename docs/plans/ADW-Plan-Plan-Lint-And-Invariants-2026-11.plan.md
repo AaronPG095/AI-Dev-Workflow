@@ -1,7 +1,7 @@
 ---
 title: Plan - Feature: Plan Lint And Invariants
 ticket: local://ADW:ADW-Plan-Plan-Lint-And-Invariants-2026-11
-status: in-progress
+status: shipped
 priority: 
 state: 
 due: 
@@ -14,6 +14,7 @@ startedAt: 2026-11-13
 reviewedBy: Other
 reviewVerdict: pass
 reviewFingerprint: cf269c5dab8248d5248b354882c4d927d412ee989deee745baf1d296da646edf
+pr: https://github.com/AaronPG095/AI-Dev-Workflow/pull/29
 ---
 # Plan Lint And Invariants
 
