@@ -1,12 +1,18 @@
 ---
 title: Plan - Process: Polish Sync Template Docs Archive And Verified Sync Gate
 ticket: local://ADW:ADW-Plan-Polish-Sync-Template-Docs-Archive-And-Verified-Sync-Gate-2026-11
-status: planned
+status: in-progress
 priority: 
 state: 
 due: 
 devTicketKey: ADW:ADW-Plan-Polish-Sync-Template-Docs-Archive-And-Verified-Sync-Gate-2026-11
 agent: Gemini
+branch: feat/polish-sync-template-docs-archive-and-verified-sync-gate
+worktree: AI-Dev-Workflow
+startedAt: 2026-11-13
+reviewedBy: Gemini
+reviewVerdict: pass
+reviewFingerprint: b5f16262774187532d876f37de19cfc92fefd41b6d6afeb2a6b03ef6c3232993
 ---
 # Polish Sync Template Docs Archive And Verified Sync Gate
 
@@ -16,19 +22,19 @@ Align `scripts/sync.mjs` (`renderDevProcessSection`) with the current `AGENTS.md
 
 ## Acceptance criteria
 
-- [ ] `renderDevProcessSection` in `scripts/sync.mjs` matches `AGENTS.md` (generic approval wording, local + Notion tracker docs, zero-token `tick`/`defer`/`recall`/`wt`/`doctor`/`pr --verify --auto` commands) and passes `sync.mjs` tests.
-- [ ] `ci-check` in `scripts/ticket.mjs` allows a `no-plan` PR when every changed/removed file is a managed workflow file and `sync.mjs --check` verifies parity against upstream (or `ADW_TEST_SYNC_SOURCE` in tests), while still rejecting tampered workflow files or mixed source changes.
-- [ ] `README.md` and `docs/dev-workflow/setup-other-repos.md` reflect the current test count, repository tree (`install.sh`, `workflow-manifest.json`), deduplicated bullets, verified sync rule, and tiered `verify`/`hygiene`/`agentic` config examples.
-- [ ] All 20 shipped/done plans in `docs/plans/` are archived into `docs/plans/archive/<YYYY-MM>/` via `node scripts/ticket.mjs archive --all`.
-- [ ] Hermetic tests in `scripts/ticket.test.mjs` cover the verified workflow-sync fast path (pass on pure verified sync, fail on tampered or mixed PR) and all tests pass (`node --test scripts/ticket.test.mjs`).
+- [x] `renderDevProcessSection` in `scripts/sync.mjs` matches `AGENTS.md` (generic approval wording, local + Notion tracker docs, zero-token `tick`/`defer`/`recall`/`wt`/`doctor`/`pr --verify --auto` commands) and passes `sync.mjs` tests. verified: sync.mjs renderDevProcessSection updated and patchAgentsMd test passes
+- [x] `ci-check` in `scripts/ticket.mjs` allows a `no-plan` PR when every changed/removed file is a managed workflow file and `sync.mjs --check` verifies parity against upstream (or `ADW_TEST_SYNC_SOURCE` in tests), while still rejecting tampered workflow files or mixed source changes. verified: ci-check verified sync fast path tested in test #72 (pass on pure sync, fail on tamper/mixed)
+- [x] `README.md` and `docs/dev-workflow/setup-other-repos.md` reflect the current test count, repository tree (`install.sh`, `workflow-manifest.json`), deduplicated bullets, verified sync rule, and tiered `verify`/`hygiene`/`agentic` config examples. verified: README.md and setup-other-repos.md updated with 72 tests, scripts tree, and verified sync note
+- [x] All 20 shipped/done plans in `docs/plans/` are archived into `docs/plans/archive/<YYYY-MM>/` via `node scripts/ticket.mjs archive --all`. verified: archive --all moved ADW-Plan-Fleet-And-Archive-Polish-2026-11.plan.md into archive/2026-11 (other 19 already archived)
+- [x] Hermetic tests in `scripts/ticket.test.mjs` cover the verified workflow-sync fast path (pass on pure verified sync, fail on tampered or mixed PR) and all tests pass (`node --test scripts/ticket.test.mjs`). verified: 72 of 72 tests pass via node --test --test-reporter=spec scripts/ticket.test.mjs
 
 ## Steps
 
-- [ ] Update `renderDevProcessSection` in `scripts/sync.mjs` to match `AGENTS.md` and keep `ticket.test.mjs` sync assertions passing.
-- [ ] Add verified workflow-sync fast path in `ci-check` (`scripts/ticket.mjs`) with `ADW_TEST_SYNC_SOURCE` test hook in `scripts/sync.mjs`.
-- [ ] Update `README.md` and `docs/dev-workflow/setup-other-repos.md` to remove stale counts/duplicates and document tiered config + verified sync.
-- [ ] Add unit test(s) for the verified workflow-sync fast path in `scripts/ticket.test.mjs` and run `node --test scripts/ticket.test.mjs`.
-- [ ] Run `node scripts/ticket.mjs archive --all` to archive completed plans cleanly.
+- [x] Update `renderDevProcessSection` in `scripts/sync.mjs` to match `AGENTS.md` and keep `ticket.test.mjs` sync assertions passing.
+- [x] Add verified workflow-sync fast path in `ci-check` (`scripts/ticket.mjs`) with `ADW_TEST_SYNC_SOURCE` test hook in `scripts/sync.mjs`.
+- [x] Update `README.md` and `docs/dev-workflow/setup-other-repos.md` to remove stale counts/duplicates and document tiered config + verified sync.
+- [x] Add unit test(s) for the verified workflow-sync fast path in `scripts/ticket.test.mjs` and run `node --test scripts/ticket.test.mjs`.
+- [x] Run `node scripts/ticket.mjs archive --all` to archive completed plans cleanly.
 
 ## Risks
 
@@ -46,3 +52,4 @@ User approval quoted:
 ## Progress log
 
 <!-- One line per session/review, added with `ticket.mjs log` or `ticket.mjs review` -->
+- 2026-11-13 13:22 UTC, Gemini (review: pass [standards: pass, spec: pass]): Aligned sync.mjs AGENTS.md template, added verified workflow-sync fast path to ci-check with test #72, updated README/setup docs, and archived remaining shipped plan

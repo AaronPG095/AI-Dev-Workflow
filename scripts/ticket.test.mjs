@@ -2511,3 +2511,61 @@ test('fleet/overview active-plan parity, ci-check archive validation/exemption, 
   assert.notEqual(badRes.status, 0);
   assert.match(badRes.stderr, /archived plan is not closed out/);
 });
+
+test('ci-check allows verified upstream workflow sync under no-plan and rejects tampered or mixed syncs', (t) => {
+  const f = fixture(t);
+  f.git('init', '-b', 'main');
+  f.git('config', 'user.name', 'Test');
+  f.git('config', 'user.email', 'test@example.invalid');
+  f.git('add', '.');
+  f.git('commit', '-m', 'init');
+  const baseSha = f.git('rev-parse', 'HEAD');
+
+  // 1. Pure verified sync from upstream bundle passes with NO_PLAN=1
+  f.git('checkout', '-b', 'chore/verified-sync', baseSha);
+  copyFileSync(join(process.cwd(), 'scripts/sync.mjs'), join(f.root, 'scripts/sync.mjs'));
+  execFileSync(
+    process.execPath,
+    [join(f.root, 'scripts/sync.mjs'), f.root, '--remote'],
+    { env: { ...process.env, ADW_TEST_SYNC_SOURCE: process.cwd() }, encoding: 'utf8' },
+  );
+  f.git('add', '.');
+  f.git('commit', '-m', 'chore: verified workflow sync');
+  const syncHead = f.git('rev-parse', 'HEAD');
+
+  const okRes = f.run('ci-check', ['--base', baseSha, '--head', syncHead], [], {
+    omitPlan: true,
+    envOverrides: { NO_PLAN: '1', ADW_TEST_SYNC_SOURCE: process.cwd() },
+  });
+  assert.equal(okRes.status, 0, okRes.stderr);
+  assert.match(okRes.stdout, /Verified upstream workflow sync/);
+
+  // 2. Tampering with a managed file fails even with NO_PLAN=1
+  f.git('checkout', '-b', 'chore/tampered-sync', syncHead);
+  writeFileSync(join(f.root, 'AGENTS.md'), '# Tampered\n');
+  f.git('add', 'AGENTS.md');
+  f.git('commit', '-m', 'tamper AGENTS.md');
+  const tamperedHead = f.git('rev-parse', 'HEAD');
+
+  const tamperedRes = f.run('ci-check', ['--base', baseSha, '--head', tamperedHead], [], {
+    omitPlan: true,
+    envOverrides: { NO_PLAN: '1', ADW_TEST_SYNC_SOURCE: process.cwd() },
+  });
+  assert.notEqual(tamperedRes.status, 0);
+  assert.match(tamperedRes.stderr, /no workflow policy changes/);
+
+  // 3. Mixing a source file with a synced workflow file fails even with NO_PLAN=1
+  f.git('checkout', '-b', 'chore/mixed-sync', syncHead);
+  mkdirSync(join(f.root, 'src'), { recursive: true });
+  writeFileSync(join(f.root, 'src/extra.js'), 'export const x = 1;\n');
+  f.git('add', 'src/extra.js');
+  f.git('commit', '-m', 'mix src change');
+  const mixedHead = f.git('rev-parse', 'HEAD');
+
+  const mixedRes = f.run('ci-check', ['--base', baseSha, '--head', mixedHead], [], {
+    omitPlan: true,
+    envOverrides: { NO_PLAN: '1', ADW_TEST_SYNC_SOURCE: process.cwd() },
+  });
+  assert.notEqual(mixedRes.status, 0);
+  assert.match(mixedRes.stderr, /no workflow policy changes/);
+});

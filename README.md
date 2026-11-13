@@ -41,8 +41,7 @@ Most AI coding workflows fail in one of two ways:
 - **Layer 1 (Deterministic Core):** Enforces plan fidelity, verified criteria evidence, zero-token context ignition (`prime`), zero-token review digests (`pack`), and strict pre-push/CI gates.
 - **Layer 2 (Modular Agentic Engine):** Enables autonomous self-healing loops with retry circuit breakers (`step` / `run`), verification-gated atomic git checkpoints (`checkpoint`), adversarial role briefs (`--role builder|reviewer|fixer`), and parallel git worktree waves (`wave`).
 - **One canonical process in `AGENTS.md`** (loaded natively by Codex, Antigravity/Gemini, Cursor, and via `@AGENTS.md` in Claude Code).
-- **One zero-dependency CLI (`scripts/ticket.mjs`)** with 57 hermetic tests running across macOS, Linux, and Windows.
-- **One zero-dependency CLI (`scripts/ticket.mjs`)** for plan scaffolding, session ignition, local or Notion ticket tracking, handoff logs, deterministic review packets, git guardrails, and GitHub Actions CI gates.
+- **One zero-dependency CLI (`scripts/ticket.mjs`)** with 72 hermetic tests running across macOS, Linux, and Windows for plan scaffolding, session ignition, local or Notion ticket tracking, handoff logs, deterministic review packets, git guardrails, and GitHub Actions CI gates.
 - **Zero-token session ignition (`ticket.mjs prime`)** that prints a compact ~20-line context primer for fresh agent chat sessions (active plan, branch, open criteria, next steps, tiered verify commands).
 - **Zero-token review preparation (`ticket.mjs pack`)** that replaces 6+ exploratory tool calls with a single compact digest (plan criteria + working-tree hygiene + lockfile-filtered git diff + optional test verification proof via `--test`).
 - **Instant context switching & worktrees (`ticket.mjs switch`)** to jump between main and isolated worktrees on-demand with automatic `.env` inheritance.
@@ -80,7 +79,7 @@ irm https://raw.githubusercontent.com/AaronPG095/AI-Dev-Workflow/main/scripts/in
 
 ## The 6-Step Workflow
 
-Trivial changes (`<= 40` changed lines, no new files in the main source folder, and no changes to managed workflow files) can skip the process using the `no-plan` PR label. Workflow sync PRs need a plan until the updater can verify the upstream version. All non-trivial changes follow six steps:
+Trivial changes (`<= 40` changed lines, no new files in the main source folder, and no changes to managed workflow files) can skip the process using the `no-plan` PR label. Pure workflow sync PRs that pass `node scripts/sync.mjs . --remote --check` may also use the `no-plan` label. All non-trivial changes follow six steps:
 
 1. **Plan** — Investigate read-only, propose the approach, and wait for human approval.
 2. **Plan Doc** — Scaffold automatically with `node scripts/ticket.mjs new "<Topic>" [--type Feature] [--branch]` or copy `docs/plans/_template.plan.md` to `docs/plans/<PREFIX>-Plan-<Topic>-<YYYY-MM>.plan.md` with `- [ ]` checkboxes for Acceptance Criteria and Steps. Plans bigger than one PR are split into sequential plans via `node scripts/ticket.mjs split <plan> --after <#|query>`.
@@ -136,10 +135,12 @@ AI-Dev-Workflow/
 ├── scripts/
 │   ├── ticket.mjs                 # Zero-dependency workflow & review CLI (Node 22+)
 │   ├── ticket.config.json         # Repository configuration (local mode default)
-│   ├── ticket.test.mjs            # 57 hermetic unit & integration tests (node:test)
+│   ├── ticket.test.mjs            # 72 hermetic unit & integration tests (node:test)
+│   ├── workflow-manifest.json     # Versioned distribution manifest for sync & installers
 │   ├── sync.mjs                   # Cross-platform sync and drift engine (--remote & local)
 │   ├── sync-repos.ps1             # PowerShell wrapper for multi-repo sync
-│   └── install.ps1                # One-line multi-machine bootstrapper (curl/iex)
+│   ├── install.ps1                # One-line Windows bootstrapper (irm | iex)
+│   └── install.sh                 # One-line macOS/Linux/WSL bootstrapper (curl | bash)
 ├── AGENTS.md                      # Universal instructions for Codex, Gemini/Antigravity, Cursor
 ├── CLAUDE.md                      # @AGENTS.md import for Claude Code
 └── ticket.config.example.json     # Example config for Local and Notion tracker modes

@@ -3007,6 +3007,32 @@ const commands = {
         .filter((file) => !verifiedArchiveMoves.has(file));
       const policyChanged = [...changedPaths, ...removedPaths]
         .some((file) => WORKFLOW_FILES.has(file) || file.startsWith('.github/workflows/'));
+      if (policyChanged) {
+        const allManagedSyncFiles =
+          removedPaths.length === 0 &&
+          changedPaths.length > 0 &&
+          changedPaths.every(
+            (file) =>
+              WORKFLOW_FILES.has(file) && file !== 'scripts/ticket.config.json',
+          );
+        const syncScript = join(repoRoot, 'scripts', 'sync.mjs');
+        if (allManagedSyncFiles && existsSync(syncScript)) {
+          try {
+            execFileSync(
+              process.execPath,
+              [syncScript, repoRoot, '--remote', '--check'],
+              {
+                cwd: repoRoot,
+                encoding: 'utf8',
+                stdio: ['ignore', 'pipe', 'pipe'],
+              },
+            );
+            return console.log(
+              `Verified upstream workflow sync (${changedPaths.length} managed file(s)); allowed under no-plan.`,
+            );
+          } catch {}
+        }
+      }
       if (policyChanged || changed > maxChangedLines || newFiles.length) {
         fail(
           `the no-plan label only covers trivial changes (at most ${maxChangedLines} changed lines, no new files under ${noNewFilesUnder.join(', ')}, and no workflow policy changes). Add a plan instead.`,

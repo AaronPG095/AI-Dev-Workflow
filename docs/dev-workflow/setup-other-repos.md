@@ -31,7 +31,7 @@ From the `AI-Dev-Workflow` checkout when sibling repositories are present:
 
 `scripts/workflow-manifest.json` lists the required engine, updater, installers, skills, templates, and workflows. Sync reads the complete bundle before writing files and preserves each repository's `scripts/ticket.config.json`. Remote mode pins the requested ref for the duration of a sync. To bootstrap or upgrade an older copy that cannot read the manifest, use a current installer.
 
-A check returns 0 if current, 1 for managed-file drift, and 2 when incomplete. The scheduled workflow reports drift. Run updates on a branch and open a PR with an approved plan.
+A check returns 0 if current, 1 for managed-file drift, and 2 when incomplete. The scheduled workflow reports drift. Pure workflow sync PRs that pass `node scripts/sync.mjs . --remote --check` can use the `no-plan` label; otherwise run updates on a branch with an approved plan.
 
 ---
 
