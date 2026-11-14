@@ -74,6 +74,7 @@ const OPTIONAL = {
   },
 };
 const VERDICTS = ['pass', 'warn', 'block'];
+const IMPACTS = ['none', 'patch', 'minor', 'major'];
 const VERIFIED_RE = /\sverified(?:\((?:test|cmd|manual|inspect)\))?:\s*\S/i;
 const EVIDENCE_TYPES = new Set(['test', 'cmd', 'manual', 'inspect']);
 const DEFAULT_APPETITE = {
@@ -153,6 +154,7 @@ const BOOLEAN_FLAGS = new Set([
   '--prune',
   '--lessons',
   '--agent-hooks',
+  '--write',
 ]);
 for (let i = 0; i < rest.length; i++) {
   const a = rest[i];
@@ -367,6 +369,28 @@ function problems(plan, { requireTicket = true, ignoreReview = false, base, head
     !['S', 'M', 'L'].includes(plan.meta.appetite.trim().toUpperCase())
   )
     found.push(`appetite must be S, M, or L, or empty (got "${plan.meta.appetite}")`);
+  if (
+    plan.meta.impact &&
+    !IMPACTS.includes(plan.meta.impact.trim().toLowerCase())
+  )
+    found.push(
+      `impact must be one of ${IMPACTS.join(', ')}, or empty (got "${plan.meta.impact}")`,
+    );
+  if (config.versioning?.enabled && config.versioning?.requireVersionOnPlans) {
+    if (!plan.meta.version || !plan.meta.version.trim()) {
+      found.push(
+        'version is required in frontmatter when versioning.requireVersionOnPlans is enabled (e.g. "1.2.0" or "none")',
+      );
+    }
+    if (
+      !plan.meta.impact ||
+      !IMPACTS.includes(plan.meta.impact.trim().toLowerCase())
+    ) {
+      found.push(
+        `impact is required in frontmatter when versioning.requireVersionOnPlans is enabled (${IMPACTS.join(', ')})`,
+      );
+    }
+  }
   if (requireTicket && !hasTicket(plan.meta.ticket))
     found.push(
       `no ${isLocal ? 'ticket' : 'Notion ticket'} URL (run: node scripts/ticket.mjs create ${plan.rel} --agent <client>)`,
@@ -715,6 +739,29 @@ function lintPlan(plan) {
   const openQ = countOpenQuestions(plan.body);
   if (openQ > 0) {
     errors.push(`Section "## Open questions" has ${openQ} unresolved item(s).`);
+  }
+  if (
+    plan.meta.impact &&
+    !IMPACTS.includes(plan.meta.impact.trim().toLowerCase())
+  ) {
+    errors.push(
+      `Frontmatter "impact" must be one of ${IMPACTS.join(', ')} (got "${plan.meta.impact}").`,
+    );
+  }
+  if (config.versioning?.enabled && config.versioning?.requireVersionOnPlans) {
+    if (!plan.meta.version || !plan.meta.version.trim()) {
+      errors.push(
+        'Frontmatter "version" is required when versioning.requireVersionOnPlans is enabled.',
+      );
+    }
+    if (
+      !plan.meta.impact ||
+      !IMPACTS.includes(plan.meta.impact.trim().toLowerCase())
+    ) {
+      errors.push(
+        `Frontmatter "impact" is required when versioning.requireVersionOnPlans is enabled (${IMPACTS.join(', ')}).`,
+      );
+    }
   }
 
   const { items } = findCheckboxes(cleanBody);
@@ -1829,6 +1876,7 @@ function collectRepoStats(dir = repoRoot, { days = 90, filterDays = false } = {}
 
   const byStatus = {};
   const byType = {};
+  const byVersion = {};
   const cycleTimes = [];
   let reviewsTotal = 0;
   let reviewsPass = 0;
@@ -1849,6 +1897,11 @@ function collectRepoStats(dir = repoRoot, { days = 90, filterDays = false } = {}
 
     const pType = parsePlanTypeFromMeta(p.meta);
     byType[pType] = (byType[pType] || 0) + 1;
+
+    const pVersion = (p.meta.version || '').trim();
+    if (pVersion) {
+      byVersion[pVersion] = (byVersion[pVersion] || 0) + 1;
+    }
 
     const startMs = parseIsoDayOrMs(p.meta.startedAt);
     const endMs =
@@ -2001,6 +2054,7 @@ function collectRepoStats(dir = repoRoot, { days = 90, filterDays = false } = {}
     totalPlans: plans.length,
     byStatus,
     byType,
+    byVersion,
     cycleTimeDays: {
       sampleSize: cycleTimes.length,
       median: percentile(cycleTimes, 0.5),
@@ -2560,6 +2614,30 @@ const commands = {
     if (appetite && !['S', 'M', 'L'].includes(appetite)) {
       fail(`--appetite must be S, M, or L (got "${opts.appetite}")`);
     }
+    const verCfg = config.versioning || {};
+    const version =
+      opts.version !== undefined
+        ? String(opts.version).replace(/^["']|["']$/g, '').trim()
+        : verCfg.enabled && verCfg.activeTrain
+          ? String(verCfg.activeTrain).trim()
+          : '';
+    let impact =
+      opts.impact !== undefined
+        ? String(opts.impact).replace(/^["']|["']$/g, '').trim().toLowerCase()
+        : '';
+    if (impact && !IMPACTS.includes(impact)) {
+      fail(`--impact must be one of ${IMPACTS.join(', ')} (got "${opts.impact}")`);
+    }
+    if (!impact && version) {
+      if (['none', 'internal'].includes(version.toLowerCase())) {
+        impact = 'none';
+      } else {
+        const tLower = type.toLowerCase();
+        if (tLower === 'feature') impact = 'minor';
+        else if (tLower === 'bug' || tLower === 'debug') impact = 'patch';
+        else impact = 'none';
+      }
+    }
 
     const summary = (opts.summary || '').replace(/^["']|["']$/g, '').trim();
     const contextText = (opts.context || '').replace(/^["']|["']$/g, '').trim();
@@ -2602,8 +2680,16 @@ const commands = {
         .replace(/^state:.*$/m, `state: ${state}`)
         .replace(/^due:.*$/m, `due: ${due}`)
         .replace(/^appetite:.*$/m, `appetite: ${appetite}`)
+        .replace(/^version:.*$/m, `version: ${version}`)
+        .replace(/^impact:.*$/m, `impact: ${impact}`)
         .replace(/^# <Title>.*$/m, `# ${topic}`)
         .replace(/<!--[\s\S]*?-->\n*/m, '');
+      if (version && !/^version:/m.test(content)) {
+        content = content.replace(/^---\n/, `---\nversion: ${version}\n`);
+      }
+      if (impact && !/^impact:/m.test(content)) {
+        content = content.replace(/^---\n/, `---\nimpact: ${impact}\n`);
+      }
       if (summary) {
         content = content.replace(
           /<2-3 sentences: what changes and why\.>/,
@@ -2638,6 +2724,8 @@ const commands = {
         `state: ${state}`,
         `due: ${due}`,
         `appetite: ${appetite}`,
+        `version: ${version}`,
+        `impact: ${impact}`,
         '---',
         `# ${topic}`,
         '',
@@ -2749,11 +2837,14 @@ const commands = {
     const appetiteLabel = plan.meta.appetite
       ? ` | Appetite: ${plan.meta.appetite.toUpperCase()}`
       : '';
+    const versionLabel = plan.meta.version
+      ? ` | Version: ${plan.meta.version}${plan.meta.impact ? ` (${plan.meta.impact})` : ''}`
+      : '';
 
     const baselineLine = runBootBaselineCheck();
     const lines = [
       `# Session Context: ${plan.meta.title || plan.rel}`,
-      `Plan: ${plan.rel} | Status: ${localPlanStatus(plan) || 'unknown'} | Ticket: ${plan.meta.ticket || 'none'}${appetiteLabel}`,
+      `Plan: ${plan.rel} | Status: ${localPlanStatus(plan) || 'unknown'} | Ticket: ${plan.meta.ticket || 'none'}${appetiteLabel}${versionLabel}`,
       `Branch: ${branch} | Tree: ${clean ? 'clean' : 'dirty'} | Open questions: ${openQuestions}${plan.meta.reviewedBy ? ` | Reviewed: ${plan.meta.reviewedBy} (${plan.meta.reviewVerdict})` : ''}`,
       ...(baselineLine ? [baselineLine] : []),
       ...(() => {
@@ -3336,21 +3427,49 @@ const commands = {
     }
     if (plan.meta.due)
       properties['Due Date'] = { date: { start: plan.meta.due } };
+    const targetVersion = (plan.meta.version || '').trim();
+    const shouldStampVersion =
+      Boolean(targetVersion) &&
+      !['none', 'internal'].includes(targetVersion.toLowerCase());
+    if (shouldStampVersion) {
+      properties['Target Version'] = { rich_text: text(targetVersion) };
+    }
+    const postTaskPage = async (props) => {
+      try {
+        return await notion(
+          'POST',
+          'pages',
+          { parent, properties: props },
+          { soft: true },
+        );
+      } catch (e) {
+        if (
+          props['Target Version'] &&
+          e.status === 400 &&
+          e.code === 'validation_error' &&
+          /Target Version/i.test(e.message)
+        ) {
+          console.warn(
+            `ticket: creating the Task with Target Version failed (${e.message}); retrying without it.`,
+          );
+          const { 'Target Version': _omit, ...restProps } = props;
+          return notion(
+            'POST',
+            'pages',
+            { parent, properties: restProps },
+            { soft: Boolean(props['Life Area']) },
+          );
+        }
+        throw e;
+      }
+    };
     let page;
     if (config.lifeAreaPageId) {
       try {
-        page = await notion(
-          'POST',
-          'pages',
-          {
-            parent,
-            properties: {
-              ...properties,
-              'Life Area': { relation: [{ id: config.lifeAreaPageId }] },
-            },
-          },
-          { soft: true },
-        );
+        page = await postTaskPage({
+          ...properties,
+          'Life Area': { relation: [{ id: config.lifeAreaPageId }] },
+        });
       } catch (e) {
         if (!(
           (e.status === 400 &&
@@ -3364,7 +3483,7 @@ const commands = {
         );
       }
     }
-    if (!page) page = await notion('POST', 'pages', { parent, properties });
+    if (!page) page = await postTaskPage(properties);
     recordTicket(plan, page, key, { agent });
   },
 
@@ -3498,6 +3617,11 @@ const commands = {
     console.log(`\n=== Resuming Session ===`);
     console.log(`Plan:         ${plan.rel} (${localPlanStatus(plan) || 'unknown'})`);
     console.log(`Branch:       ${branch} (${clean ? 'clean' : 'dirty'})`);
+    if (plan.meta.version) {
+      console.log(
+        `Version:      ${plan.meta.version}${plan.meta.impact ? ` (${plan.meta.impact})` : ''}`,
+      );
+    }
     if (baselineLine) {
       console.log(baselineLine);
     }
@@ -3596,7 +3720,7 @@ const commands = {
     const lines = [
       `# Review Packet: ${plan.meta.title || plan.rel}`,
       `Plan: ${plan.rel} | Status: ${localPlanStatus(plan) || 'unknown'} | Branch: ${plan.meta.branch || git(['rev-parse', '--abbrev-ref', 'HEAD'], { allowFail: true })}`,
-      `Ticket: ${plan.meta.ticket || 'none'} | Reviewed: ${plan.meta.reviewedBy ? `${plan.meta.reviewedBy} (${plan.meta.reviewVerdict || 'unknown'})` : 'not yet'}${appetiteRes ? ` | Appetite: ${appetiteRes.appetite} (${appetiteRes.lines}/${appetiteRes.maxLines} lines, ${appetiteRes.files}/${appetiteRes.maxFiles} files${appetiteRes.exceeded ? ' — EXCEEDED' : ''})` : ''}`,
+      `Ticket: ${plan.meta.ticket || 'none'} | Reviewed: ${plan.meta.reviewedBy ? `${plan.meta.reviewedBy} (${plan.meta.reviewVerdict || 'unknown'})` : 'not yet'}${appetiteRes ? ` | Appetite: ${appetiteRes.appetite} (${appetiteRes.lines}/${appetiteRes.maxLines} lines, ${appetiteRes.files}/${appetiteRes.maxFiles} files${appetiteRes.exceeded ? ' — EXCEEDED' : ''})` : ''}${plan.meta.version ? ` | Version: ${plan.meta.version}${plan.meta.impact ? ` (${plan.meta.impact})` : ''}` : ''}`,
       ...(resolvedTest
         ? [
             `Verify command: \`${resolvedTest.cmd}\`${resolvedTest.tier !== 'test' ? ` (${resolvedTest.tier})` : ''}`,
@@ -4246,8 +4370,13 @@ const commands = {
           activePlan.meta.status === 'in-progress'
             ? 'Doing'
             : activePlan.meta.status || 'Active';
+        if (activePlan.meta.version && activePlan.meta.version !== 'none') {
+          state += ` (v${activePlan.meta.version.replace(/^v/i, '')})`;
+        }
         const openCriteria = (activePlan.raw.match(/^- \[ \] /gm) || []).length;
         openBoxes = String(openCriteria);
+      } else if (repoCfg.versioning?.enabled && repoCfg.versioning?.activeTrain) {
+        state = `Idle (v${String(repoCfg.versioning.activeTrain).replace(/^v/i, '')})`;
       }
 
       rows.push({
@@ -4896,6 +5025,14 @@ const commands = {
       console.log(
         `Invariants:${inv.total ? (inv.passed ? ` ${inv.total}/${inv.total} passed` : ` FAILED (${inv.failures[0]})`) : ' none configured'}`,
       );
+      if (repoCfg.versioning?.enabled) {
+        const vCfg = repoCfg.versioning;
+        const rmPath = join(dir, vCfg.roadmapPath || 'docs/ROADMAP.md');
+        const clPath = join(dir, vCfg.changelogPath || 'CHANGELOG.md');
+        console.log(
+          `Version:   current=${vCfg.currentVersion || 'unset'}, train=${vCfg.activeTrain || 'unset'} (roadmap: ${existsSync(rmPath) ? 'present' : 'missing'}, changelog: ${existsSync(clPath) ? 'present' : 'missing'})`,
+        );
+      }
       const tiers = getVerifyTiers(repoCfg);
       const tierEntries = Object.entries(tiers);
       if (tierEntries.length > 1) {
@@ -5183,6 +5320,9 @@ const commands = {
       `priority: ${plan.meta.priority || 'medium'}`,
       `state: ${plan.meta.state || 'flow'}`,
       `due: ${plan.meta.due || ''}`,
+      `appetite: ${plan.meta.appetite || ''}`,
+      `version: ${plan.meta.version || ''}`,
+      `impact: ${plan.meta.impact || ''}`,
       '---',
       `# ${part2Title.replace(/^[^:]+:\s*/, '')}`,
       '',
@@ -5768,6 +5908,7 @@ const commands = {
 
     const combinedStatus = {};
     const combinedType = {};
+    const combinedVersion = {};
     const allSamples = [];
     let totalPlans = 0;
     let reviewsTotal = 0;
@@ -5790,6 +5931,9 @@ const commands = {
       }
       for (const [k, v] of Object.entries(r.byType)) {
         combinedType[k] = (combinedType[k] || 0) + v;
+      }
+      for (const [k, v] of Object.entries(r.byVersion || {})) {
+        combinedVersion[k] = (combinedVersion[k] || 0) + v;
       }
       allSamples.push(...r.cycleTimeDays.samples);
       reviewsTotal += r.reviews.total;
@@ -5816,6 +5960,7 @@ const commands = {
       totalPlans,
       byStatus: combinedStatus,
       byType: combinedType,
+      byVersion: combinedVersion,
       cycleTimeDays: {
         sampleSize: allSamples.length,
         median: percentile(allSamples, 0.5),
@@ -5852,6 +5997,416 @@ const commands = {
     }
     printRepoStatsReport(fleetSummary, { isFleet: true });
   },
+
+  async release() {
+    const rawSub = (opts.files[0] || '').trim().toLowerCase();
+    const isKnownSub = ['status', 'notes', 'closeout', 'init'].includes(rawSub);
+    const sub = isKnownSub ? rawSub : 'status';
+    const verArg = isKnownSub
+      ? opts.files[1] || opts.version || ''
+      : opts.files[0] || opts.version || '';
+
+    const verCfg = config.versioning || {};
+    const tagPrefix = verCfg.tagPrefix ?? 'v';
+    const roadmapRel = (verCfg.roadmapPath || 'docs/ROADMAP.md').replace(/\\/g, '/');
+    const roadmapFull = join(repoRoot, roadmapRel);
+    const changelogRel = (verCfg.changelogPath || 'CHANGELOG.md').replace(/\\/g, '/');
+    const changelogFull = join(repoRoot, changelogRel);
+
+    const normalizeVer = (v) =>
+      String(v || '')
+        .trim()
+        .replace(/^v(?=\d)/i, '');
+
+    if (sub === 'init') {
+      if (existsSync(roadmapFull) && !opts.force) {
+        fail(`${roadmapRel} already exists (pass --force to overwrite)`);
+      }
+      const curVer = verCfg.currentVersion || '1.0.0';
+      const activeTrain = verCfg.activeTrain || '1.1.0';
+      const roadmapTemplate = [
+        `# ${config.prefix || basename(repoRoot)} Product & Release Roadmap`,
+        '',
+        'Canonical single-file release roadmap connecting strategic forward version trains with per-PR plan execution (`docs/plans/*.plan.md`).',
+        '',
+        '## Current Shipped Release',
+        '',
+        `### ${curVer}`,
+        '- Status: **Shipped**',
+        '- Baseline production release.',
+        '',
+        '## Active Release Train',
+        '',
+        `### ${activeTrain}`,
+        '- Status: **In Progress**',
+        '- Target plans carry `version: ' + activeTrain + '` in `docs/plans/*.plan.md`.',
+        '- Run `node scripts/ticket.mjs release status ' + activeTrain + '` to inspect train progress.',
+        '',
+        '## Upcoming Release Trains',
+        '',
+        '### Next Minor / Major Train',
+        '- Status: **Planned**',
+        '- Candidate capabilities queued for future trains.',
+        '',
+        '## Candidate Backlog (Unassigned)',
+        '',
+        '- Ideas and capabilities awaiting version-train assignment.',
+        '',
+      ].join('\n');
+      mkdirSync(dirname(roadmapFull), { recursive: true });
+      writeFileSync(roadmapFull, roadmapTemplate, 'utf8');
+      console.log(`Initialized canonical roadmap: ${roadmapRel}`);
+      return;
+    }
+
+    const allFound = scanPlansIncludingArchive(repoRoot);
+    const impactRank = { none: 0, patch: 1, minor: 2, major: 3 };
+    const rankToImpact = ['none', 'patch', 'minor', 'major'];
+
+    const existingTags = new Set(
+      git(['tag', '-l'], { allowFail: true })
+        .split(/\r?\n/)
+        .map((t) => t.trim())
+        .filter(Boolean),
+    );
+
+    const isVersionTagged = (ver) =>
+      existingTags.has(`${tagPrefix}${ver}`) || existingTags.has(ver);
+
+    const classifyPlan = (p) => {
+      const st = (p.meta.status || 'draft').toLowerCase();
+      const ver = normalizeVer(p.meta.version);
+      const tagged = ver ? isVersionTagged(ver) : false;
+      const openCheckboxes = findCheckboxes(p.body).items.filter(
+        (it) => it.openIndex !== null,
+      ).length;
+      const isClosedOut =
+        st === 'done' ||
+        st === 'shipped' ||
+        st === 'merged' ||
+        (openCheckboxes === 0 && Boolean(p.meta.pr || p.meta.reviewedBy));
+
+      let releaseState = 'planned';
+      if (isClosedOut) {
+        releaseState = tagged ? 'shipped' : 'ready';
+      } else if (st === 'in-progress') {
+        releaseState = 'in-progress';
+      }
+      return {
+        rel: p.rel,
+        title: p.meta.title || basename(p.rel, '.plan.md'),
+        shortTitle: (p.meta.title || basename(p.rel, '.plan.md'))
+          .replace(/^(?:Plan|Debug|Ask)\s*-\s*[^:]+:\s*/i, '')
+          .trim(),
+        type: parsePlanTypeFromMeta(p.meta),
+        status: st,
+        releaseState,
+        version: ver,
+        impact: (p.meta.impact || 'none').toLowerCase(),
+        pr: p.meta.pr || '',
+        ticket: p.meta.ticket || '',
+        summary: section(p.body, 'Summary') || '',
+        openCheckboxes,
+      };
+    };
+
+    const parsedRoadmapTrains = new Set();
+    if (existsSync(roadmapFull)) {
+      const rmText = readFileSync(roadmapFull, 'utf8');
+      for (const m of rmText.matchAll(/^#{2,3}\s+\[?v?(\d+\.\d+(?:\.\d+)?(?:-[0-9A-Za-z.-]+)?)\]?/gm)) {
+        parsedRoadmapTrains.add(normalizeVer(m[1]));
+      }
+    }
+
+    if (sub === 'notes') {
+      const targetVer = normalizeVer(verArg || verCfg.activeTrain);
+      if (!targetVer) {
+        fail(
+          'usage: node scripts/ticket.mjs release notes <version> [--write]',
+        );
+      }
+      const matching = allFound
+        .map(classifyPlan)
+        .filter((p) => p.version === targetVer);
+      if (!matching.length) {
+        fail(`no plans found targeting version "${targetVer}"`);
+      }
+
+      const added = [];
+      const changed = [];
+      const fixed = [];
+
+      for (const p of matching) {
+        const firstSentence = (p.summary.split(/\r?\n/)[0] || p.shortTitle)
+          .replace(/\s+/g, ' ')
+          .trim();
+        let prRef = '';
+        if (p.pr) {
+          const prNumMatch = p.pr.match(/\/pull\/(\d+)/);
+          prRef = prNumMatch ? ` ([#$1](${p.pr}))`.replace('$1', prNumMatch[1]) : ` (${p.pr})`;
+        }
+        const bullet = `- **${p.shortTitle}**: ${firstSentence}${prRef}`;
+        const tLower = p.type.toLowerCase();
+        if (tLower === 'bug' || tLower === 'debug') {
+          fixed.push(bullet);
+        } else if (tLower === 'feature') {
+          added.push(bullet);
+        } else {
+          changed.push(bullet);
+        }
+      }
+
+      const noteLines = [`## [${targetVer}] - ${today()}`];
+      if (added.length) {
+        noteLines.push('', '### Added', ...added);
+      }
+      if (changed.length) {
+        noteLines.push('', '### Changed', ...changed);
+      }
+      if (fixed.length) {
+        noteLines.push('', '### Fixed', ...fixed);
+      }
+      const notesBlock = noteLines.join('\n');
+
+      if (opts.write) {
+        if (!existsSync(changelogFull)) {
+          const initCl = [
+            '# Changelog',
+            '',
+            'All notable changes to this project will be documented in this file.',
+            '',
+            notesBlock,
+            '',
+          ].join('\n');
+          writeFileSync(changelogFull, initCl, 'utf8');
+        } else {
+          const existingCl = readFileSync(changelogFull, 'utf8').replace(/\r\n/g, '\n');
+          const verHeaderRe = new RegExp(
+            `^## \\[${targetVer.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\][^\\n]*\\n[\\s\\S]*?(?=^## \\[|$)`,
+            'm',
+          );
+          let updatedCl;
+          if (verHeaderRe.test(existingCl)) {
+            updatedCl = existingCl.replace(verHeaderRe, `${notesBlock}\n\n`);
+          } else {
+            const firstReleaseIdx = existingCl.search(/^## \[/m);
+            if (firstReleaseIdx >= 0) {
+              updatedCl = `${existingCl.slice(0, firstReleaseIdx)}${notesBlock}\n\n${existingCl.slice(firstReleaseIdx)}`;
+            } else {
+              updatedCl = `${existingCl.trimEnd()}\n\n${notesBlock}\n`;
+            }
+          }
+          writeFileSync(changelogFull, `${updatedCl.trimEnd()}\n`, 'utf8');
+        }
+        console.log(`Updated ${changelogRel} for release ${targetVer}.`);
+        return;
+      }
+
+      console.log(notesBlock);
+      return;
+    }
+
+    if (sub === 'closeout') {
+      const targetVer = normalizeVer(verArg || verCfg.activeTrain);
+      if (!targetVer) {
+        fail(
+          'usage: node scripts/ticket.mjs release closeout <version> [--branch]',
+        );
+      }
+      const matching = allFound
+        .map(classifyPlan)
+        .filter((p) => p.version === targetVer);
+      const openPlans = matching.filter(
+        (p) => p.releaseState !== 'ready' && p.releaseState !== 'shipped',
+      );
+
+      const kebabVer = targetVer.replace(/[^a-zA-Z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+      const month = today().slice(0, 7);
+      const filename = `${config.prefix}-Plan-Release-Closeout-${kebabVer}-${month}.plan.md`;
+      const relPath = join(config.plansDir, filename).replace(/\\/g, '/');
+      const fullPath = join(repoRoot, relPath);
+
+      if (existsSync(fullPath)) {
+        fail(`release closeout plan already exists: ${relPath}`);
+      }
+
+      const trainListLines = matching.length
+        ? matching.map(
+            (p) =>
+              `- \`${p.rel}\` (${p.releaseState}, impact: ${p.impact}) — ${p.title}`,
+          )
+        : [`- (no plans currently tagged with version: ${targetVer})`];
+
+      const closeoutContent = [
+        '---',
+        `title: Plan - Process: Release Closeout ${targetVer}`,
+        'ticket:',
+        'status: draft',
+        'priority: high',
+        'state: flow',
+        'due:',
+        'appetite: S',
+        `version: ${targetVer}`,
+        'impact: none',
+        '---',
+        `# Release Closeout ${targetVer}`,
+        '',
+        '## Summary',
+        '',
+        `Close out release train ${targetVer}, reconcile ${roadmapRel} and ${changelogRel}, update currentVersion in scripts/ticket.config.json, and verify all release gates.`,
+        '',
+        '## Context',
+        '',
+        `Plans in release train ${targetVer} (${matching.length} total, ${openPlans.length} still open):`,
+        ...trainListLines,
+        '',
+        '## Open questions',
+        '',
+        'None',
+        '',
+        '## Acceptance criteria',
+        '',
+        `- [ ] AC1: All plans targeting version \`${targetVer}\` are closed out and \`node scripts/ticket.mjs release status ${targetVer}\` reports 0 open/in-progress plans.`,
+        `- [ ] AC2: \`${changelogRel}\` contains the generated \`## [${targetVer}]\` section via \`node scripts/ticket.mjs release notes ${targetVer} --write\`.`,
+        `- [ ] AC3: \`${roadmapRel}\` marks \`${targetVer}\` as Shipped and \`scripts/ticket.config.json\` updates \`versioning.currentVersion\` to \`${targetVer}\`.`,
+        `- [ ] AC4: Full verification (\`node scripts/ticket.mjs verify --all\`) passes cleanly on the release closeout branch.`,
+        '',
+        '## Steps',
+        '',
+        `- [ ] Verify all train plans for ${targetVer} are closed out with \`node scripts/ticket.mjs release status ${targetVer}\` (AC1)`,
+        `- [ ] Generate and write release notes to ${changelogRel} with \`node scripts/ticket.mjs release notes ${targetVer} --write\` (AC2)`,
+        `- [ ] Update ${roadmapRel} and set \`versioning.currentVersion\` to \`${targetVer}\` in \`scripts/ticket.config.json\` (AC3)`,
+        '- [ ] Run `node scripts/ticket.mjs verify --all` and record verification evidence (AC4)',
+        '',
+        '## Risks',
+        '',
+        'Shipping a release while a train plan is still in-progress or unverified — mitigated by checking `release status` in AC1 before writing release notes.',
+        '',
+        '## Out of scope',
+        '',
+        'Features assigned to subsequent release trains.',
+        '',
+        '## Notes',
+        '',
+        `Scaffolded via \`node scripts/ticket.mjs release closeout ${targetVer}\`.`,
+        '',
+        '## Progress log',
+        '',
+        '<!-- One line per session/review, added with `ticket.mjs log` or `ticket.mjs review` -->',
+        '',
+      ].join('\n');
+
+      mkdirSync(dirname(fullPath), { recursive: true });
+      writeFileSync(fullPath, closeoutContent, 'utf8');
+      console.log(`Created release closeout plan: ${relPath}`);
+      if (openPlans.length) {
+        console.warn(
+          `Warning: ${openPlans.length} plan(s) targeting ${targetVer} are still open (${openPlans.map((p) => basename(p.rel)).join(', ')}).`,
+        );
+      }
+
+      if (opts.branch) {
+        const agent = (opts.agent || process.env.AI_CLIENT || 'feat').toLowerCase();
+        const branchName = `${agent}/release-closeout-${kebabVer.toLowerCase()}`;
+        try {
+          git(['checkout', '-b', branchName]);
+          console.log(`Checked out branch: ${branchName}`);
+        } catch (err) {
+          console.warn(`Could not checkout branch ${branchName}: ${err.message}`);
+        }
+      }
+      return;
+    }
+
+    // Default sub === 'status'
+    const filterVer = normalizeVer(verArg);
+    const classified = allFound
+      .map(classifyPlan)
+      .filter((p) => {
+        if (!p.version) return false;
+        if (!opts.all && ['none', 'internal'].includes(p.version.toLowerCase())) {
+          return false;
+        }
+        return !filterVer || p.version === filterVer;
+      });
+
+    const trainsMap = new Map();
+    if (filterVer) {
+      trainsMap.set(filterVer, []);
+    } else if (verCfg.activeTrain) {
+      trainsMap.set(normalizeVer(verCfg.activeTrain), []);
+    }
+    for (const p of classified) {
+      if (!trainsMap.has(p.version)) trainsMap.set(p.version, []);
+      trainsMap.get(p.version).push(p);
+    }
+
+    const trains = [];
+    for (const [ver, list] of trainsMap.entries()) {
+      let maxRank = 0;
+      const counts = { shipped: 0, ready: 0, 'in-progress': 0, planned: 0 };
+      for (const item of list) {
+        counts[item.releaseState] = (counts[item.releaseState] || 0) + 1;
+        const r = impactRank[item.impact] ?? 0;
+        if (r > maxRank) maxRank = r;
+      }
+      const tagged = isVersionTagged(ver);
+      const inRoadmap = parsedRoadmapTrains.has(ver);
+      trains.push({
+        version: ver,
+        tag: `${tagPrefix}${ver}`,
+        tagged,
+        inRoadmap,
+        highestImpact: rankToImpact[maxRank] || 'none',
+        totalPlans: list.length,
+        counts,
+        plans: list,
+      });
+    }
+
+    const statusPayload = {
+      repo: basename(repoRoot),
+      versioningEnabled: Boolean(verCfg.enabled),
+      currentVersion: verCfg.currentVersion || null,
+      activeTrain: verCfg.activeTrain || null,
+      roadmapPath: roadmapRel,
+      roadmapExists: existsSync(roadmapFull),
+      changelogPath: changelogRel,
+      changelogExists: existsSync(changelogFull),
+      trains,
+    };
+
+    if (opts.json) {
+      console.log(JSON.stringify(statusPayload, null, 2));
+      return;
+    }
+
+    console.log(
+      `=== Release Train Status: ${statusPayload.repo}${filterVer ? ` (${filterVer})` : ''} ===`,
+    );
+    console.log(
+      `Current Version: ${statusPayload.currentVersion || 'unset'} | Active Train: ${statusPayload.activeTrain || 'unset'} | Versioning: ${statusPayload.versioningEnabled ? 'enabled' : 'opt-in (disabled)'}`,
+    );
+    console.log(
+      `Roadmap: ${roadmapRel} (${statusPayload.roadmapExists ? 'present' : 'missing'}) | Changelog: ${changelogRel} (${statusPayload.changelogExists ? 'present' : 'missing'})`,
+    );
+
+    if (!trains.length) {
+      console.log('\nNo versioned plans found.');
+      return;
+    }
+
+    for (const t of trains) {
+      console.log(
+        `\nTrain ${t.version} [tag: ${t.tag} (${t.tagged ? 'tagged' : 'unreleased'}), impact: ${t.highestImpact}, roadmap: ${t.inRoadmap ? 'listed' : 'unlisted'}] — ${t.totalPlans} plan(s) (shipped: ${t.counts.shipped}, ready: ${t.counts.ready}, in-progress: ${t.counts['in-progress']}, planned: ${t.counts.planned})`,
+      );
+      for (const p of t.plans) {
+        console.log(
+          `  • [${p.releaseState}] ${p.rel} (${p.type}, impact: ${p.impact}) — ${p.shortTitle}`,
+        );
+      }
+    }
+  },
 };
 
 function printRepoStatsReport(s, { isFleet = false } = {}) {
@@ -5867,6 +6422,12 @@ function printRepoStatsReport(s, { isFleet = false } = {}) {
     .join(', ') || 'none';
   console.log(`Plans:           ${s.totalPlans} (${statusStr})`);
   console.log(`Types:           ${typeStr}`);
+  const verEntries = Object.entries(s.byVersion || {});
+  if (verEntries.length) {
+    console.log(
+      `Versions:        ${verEntries.map(([k, v]) => `${k}=${v}`).join(', ')}`,
+    );
+  }
   const ct = s.cycleTimeDays;
   console.log(
     `Cycle time:      ${ct.sampleSize ? `median ${ct.median}d, p90 ${ct.p90}d (n=${ct.sampleSize})` : 'n/a'}`,

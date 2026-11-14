@@ -157,10 +157,10 @@ Requires **Node.js 22+**. When `<plan>` is omitted on a feature branch, `ticket.
 ```powershell
 # 1. Plan Scaffolding, Splitting & Ignition
 # Automatically creates docs/plans/<PREFIX>-Plan-<Topic>-<YYYY-MM>.plan.md
-node scripts/ticket.mjs new "Smart Shortcut Suggestions" --type Feature [--appetite S|M|L] [--context "<findings>"] [--branch]
+node scripts/ticket.mjs new "Smart Shortcut Suggestions" --type Feature [--appetite S|M|L] [--version 1.2.0] [--impact none|patch|minor|major] [--context "<findings>"] [--branch]
 
 # Fast one-command ignition: scaffold, set criteria, checkout branch, ticket, and start Doing
-node scripts/ticket.mjs new "Fast Feature" --summary "..." --appetite M --criteria "c1|c2" --steps "s1|s2" --branch --create --start --agent Gemini
+node scripts/ticket.mjs new "Fast Feature" --summary "..." --appetite M --version 1.2.0 --impact minor --criteria "c1|c2" --steps "s1|s2" --branch --create --start --agent Gemini
 
 # Split an oversized plan into Part 1 and Part 2 without deleting checkboxes (defers moved items)
 node scripts/ticket.mjs split docs/plans/ADW-Plan-Big-Feature.plan.md --after 3 [--title "Part 2 Title"]
@@ -289,16 +289,30 @@ node scripts/ticket.mjs wave --status
 node scripts/ticket.mjs wave --check [--test] [--strict]
 node scripts/ticket.mjs wave --prune [--dry-run] [--all]
 
+# 8. Versioning & Release Train Management (Opt-In)
+# Inspect release train status across active + archived plans (shipped, ready, in-progress, planned) and docs/ROADMAP.md
+node scripts/ticket.mjs release [status] [<version>] [--json] [--all]
+
+# Generate Keep-a-Changelog Markdown section from plans targeting <version> (or write directly to CHANGELOG.md)
+node scripts/ticket.mjs release notes [<version>] [--write]
+
+# Scaffold a release closeout plan for <version>
+node scripts/ticket.mjs release closeout <version> [--branch]
+
+# Initialize a canonical single-file docs/ROADMAP.md
+node scripts/ticket.mjs release init [--force]
+
 # Run the hermetic test suite
 node --test scripts/ticket.test.mjs
 ```
 
 Wave uses Git's registered worktrees. A worker owns its plan after creation, and rerunning spawn preserves its progress. Dry runs leave the repository and worktrees untouched. Prune considers clean, unlocked, inactive worktrees under the primary checkout's `.worktrees` directory.
 
-### Runtime Hooks & Boot Verification Config (`scripts/ticket.config.json`)
+### Runtime Hooks, Boot Verification & Versioning Config (`scripts/ticket.config.json`)
 - `bootVerifyTier`: Verification tier executed by `prime --verify` and `resume --verify` (defaults to `fast`, falling back to `test` or `full`).
 - `hooks.postToolVerify`: Set `true` in `ticket.config.json` to run bounded `fast`/`test` verification after edit tools in `scripts/hooks/adw-hook.mjs post-tool`.
 - `hooks.postToolStrict`: Set `true` to exit `2` (blocking) when `post-tool` verification fails instead of warning cleanly.
+- `versioning`: Opt-in release train management (`enabled`, `currentVersion`, `activeTrain`, `roadmapPath` default `docs/ROADMAP.md`, `changelogPath` default `CHANGELOG.md`, `tagPrefix` default `v`, `requireVersionOnPlans`). When `version` is set on a plan, `create` stamps `Target Version` on the Notion Task.
 
 
 ---
