@@ -97,6 +97,7 @@ const WORKFLOW_FILES = new Set([
   '.github/workflows/ci.yml',
   'scripts/ticket.mjs',
   'scripts/ticket.test.mjs',
+  'scripts/hooks/adw-hook.mjs',
   'scripts/ticket.config.json',
   'scripts/ticket.config.example.json',
   'scripts/sync.mjs',
@@ -151,6 +152,7 @@ const BOOLEAN_FLAGS = new Set([
   '--check',
   '--prune',
   '--lessons',
+  '--agent-hooks',
 ]);
 for (let i = 0; i < rest.length; i++) {
   const a = rest[i];
@@ -2185,18 +2187,18 @@ function buildStepBrief(
   return linesOut.join('\n');
 }
 
-function runVerifyCmd(cmd, { cwd = repoRoot, captureOutput = false } = {}) {
+function runVerifyCmd(cmd, { cwd = repoRoot, captureOutput = false, silent = false } = {}) {
   if (!captureOutput) {
     try {
       execSync(cmd, {
         cwd,
         encoding: 'utf8',
-        stdio: 'inherit',
+        stdio: silent ? 'ignore' : 'inherit',
         env: { ...process.env, CI: '1' },
       });
-      return { ok: true, output: '' };
-    } catch {
-      return { ok: false, output: '' };
+      return { ok: true, status: 0, output: '' };
+    } catch (err) {
+      return { ok: false, status: err.status ?? 1, output: '' };
     }
   }
   const res = spawnSync(cmd, {
@@ -2205,11 +2207,37 @@ function runVerifyCmd(cmd, { cwd = repoRoot, captureOutput = false } = {}) {
     encoding: 'utf8',
     env: { ...process.env, CI: '1' },
   });
-  if (res.stdout) process.stdout.write(res.stdout);
-  if (res.stderr) process.stderr.write(res.stderr);
+  if (!silent) {
+    if (res.stdout) process.stdout.write(res.stdout);
+    if (res.stderr) process.stderr.write(res.stderr);
+  }
   const combined = ((res.stdout || '') + (res.stderr || '')).trim();
   const output = combined || (res.error ? res.error.message : '');
-  return { ok: res.status === 0 && !res.error, output };
+  const status = res.status ?? (res.error ? 1 : 0);
+  return { ok: status === 0 && !res.error, status, output };
+}
+
+function runBootBaselineCheck() {
+  if (!opts.verify) return null;
+  const resolved =
+    resolveVerifyCommand(config, config.bootVerifyTier || 'fast') ||
+    resolveVerifyCommand(config, 'test') ||
+    resolveVerifyCommand(config, 'full');
+  if (!resolved) {
+    return 'Baseline: SKIPPED (no verify command configured)';
+  }
+  const res = runVerifyCmd(resolved.cmd, { captureOutput: true, silent: true });
+  if (res.ok) {
+    return `Baseline: PASS (\`${resolved.cmd}\`, tier: ${resolved.tier})`;
+  }
+  const tail = (res.output || '')
+    .trim()
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .slice(-5)
+    .join(' | ');
+  return `Baseline: FAIL (\`${resolved.cmd}\`, tier: ${resolved.tier})${tail ? ` [${tail}]` : ''} — fix baseline before starting next step`;
 }
 
 function tailLines(textValue, count = 15) {
@@ -2549,6 +2577,7 @@ const commands = {
           .join('\n')
       : '- [ ] AC1: <Observable outcome>';
 
+    const isRefactor = type.toLowerCase() === 'refactor';
     const stepsList = rawSteps
       ? rawSteps
           .split(/[|,\n]/)
@@ -2556,7 +2585,9 @@ const commands = {
           .filter(Boolean)
           .map((s) => `- [ ] ${s}`)
           .join('\n')
-      : '- [ ] <Step> (AC1)';
+      : isRefactor
+        ? '- [ ] Lock existing behaviour with characterization tests before structural changes (AC1)'
+        : '- [ ] <Step> (AC1)';
 
     const templatePath = join(repoRoot, config.plansDir, '_template.plan.md');
     let template = existsSync(templatePath)
@@ -2591,7 +2622,7 @@ const commands = {
           criteriaList,
         );
       }
-      if (rawSteps) {
+      if (rawSteps || isRefactor) {
         content = content.replace(
           /- \[ \] <Step>(?: \(AC1\))?/,
           stepsList,
@@ -2719,10 +2750,12 @@ const commands = {
       ? ` | Appetite: ${plan.meta.appetite.toUpperCase()}`
       : '';
 
+    const baselineLine = runBootBaselineCheck();
     const lines = [
       `# Session Context: ${plan.meta.title || plan.rel}`,
       `Plan: ${plan.rel} | Status: ${localPlanStatus(plan) || 'unknown'} | Ticket: ${plan.meta.ticket || 'none'}${appetiteLabel}`,
       `Branch: ${branch} | Tree: ${clean ? 'clean' : 'dirty'} | Open questions: ${openQuestions}${plan.meta.reviewedBy ? ` | Reviewed: ${plan.meta.reviewedBy} (${plan.meta.reviewVerdict})` : ''}`,
+      ...(baselineLine ? [baselineLine] : []),
       ...(() => {
         const tiers = getVerifyTiers();
         const entries = Object.entries(tiers);
@@ -2798,6 +2831,33 @@ const commands = {
         }
         fail(`no open checkbox found matching "${target}" in ${plan.rel}`);
       }
+    }
+
+    if (opts.red && opts.verifyCmd) {
+      fail('cannot combine --red with --verify-cmd');
+    }
+    if (opts.red) {
+      const cmdRes = runVerifyCmd(opts.red, { captureOutput: true, silent: true });
+      if (cmdRes.ok) {
+        fail(
+          `expected failing reproduction (exit != 0) for --red "${opts.red}", but command exited 0`,
+        );
+      }
+      const shortSha =
+        git(['rev-parse', '--short', 'HEAD'], { allowFail: true }) ||
+        'working-tree';
+      const redTag = `red: \`${opts.red}\` exit ${cmdRes.status || 1} @${shortSha}`;
+      const stripped = match.text
+        .replace(/\s+red:\s*`[^`]*`\s+exit\s+\d+\s+@\S+/i, '')
+        .trim();
+      const updatedRedText = `${stripped} ${redTag}`;
+      lines[match.lineIndex] = `${match.prefix} ${match.delim}${updatedRedText}`;
+      plan.body = lines.join('\n');
+      writePlan(plan);
+      console.log(
+        `Red reproduction recorded on [${match.openIndex}]: - [ ] ${updatedRedText}`,
+      );
+      return;
     }
 
     const inCriteria = match.section.toLowerCase() === 'acceptance criteria';
@@ -3434,9 +3494,13 @@ const commands = {
       .map((l) => l.trim())
       .filter((l) => l.startsWith('- [ ]'));
 
+    const baselineLine = runBootBaselineCheck();
     console.log(`\n=== Resuming Session ===`);
     console.log(`Plan:         ${plan.rel} (${localPlanStatus(plan) || 'unknown'})`);
     console.log(`Branch:       ${branch} (${clean ? 'clean' : 'dirty'})`);
+    if (baselineLine) {
+      console.log(baselineLine);
+    }
     if (statusShort) {
       console.log(
         `Dirty files:\n${statusShort
@@ -4232,17 +4296,111 @@ const commands = {
   async hook() {
     const action = opts.files[0] || 'status';
     if (!['install', 'uninstall', 'status'].includes(action)) {
-      fail('usage: node scripts/ticket.mjs hook [install|uninstall|status] [--fleet]');
+      fail('usage: node scripts/ticket.mjs hook [install|uninstall|status] [--agent-hooks] [--fleet]');
     }
     const dirs = opts.fleet ? getKnownRepoDirs() : [repoRoot];
+
+    const isAdwHookEntry = (entry) => {
+      if (!entry || typeof entry !== 'object') return false;
+      if (typeof entry.command === 'string' && entry.command.includes('adw-hook.mjs')) {
+        return true;
+      }
+      if (Array.isArray(entry.hooks)) {
+        return entry.hooks.some(
+          (h) => typeof h?.command === 'string' && h.command.includes('adw-hook.mjs'),
+        );
+      }
+      return false;
+    };
+
+    const manageAgentHooks = (dir, label) => {
+      const settingsPath = join(dir, '.claude', 'settings.json');
+      let settings = {};
+      if (existsSync(settingsPath)) {
+        try {
+          settings = JSON.parse(readFileSync(settingsPath, 'utf8'));
+        } catch (err) {
+          fail(`${label}invalid JSON in ${settingsPath}: ${err.message}`);
+        }
+      }
+      if (!settings || typeof settings !== 'object' || Array.isArray(settings)) {
+        settings = {};
+      }
+      const existingHooks =
+        settings.hooks && typeof settings.hooks === 'object' && !Array.isArray(settings.hooks)
+          ? { ...settings.hooks }
+          : {};
+
+      const spec = [
+        { event: 'PreToolUse', matcher: '*', sub: 'pre-tool' },
+        { event: 'PostToolUse', matcher: 'Edit|Write|MultiEdit', sub: 'post-tool' },
+        { event: 'Stop', matcher: '*', sub: 'stop' },
+      ];
+
+      if (action === 'install') {
+        for (const { event, matcher, sub } of spec) {
+          const prevList = Array.isArray(existingHooks[event])
+            ? existingHooks[event].filter((e) => !isAdwHookEntry(e))
+            : [];
+          prevList.push({
+            matcher,
+            hooks: [
+              {
+                type: 'command',
+                command: `node scripts/hooks/adw-hook.mjs ${sub}`,
+              },
+            ],
+          });
+          existingHooks[event] = prevList;
+        }
+        settings.hooks = existingHooks;
+        mkdirSync(dirname(settingsPath), { recursive: true });
+        writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`, 'utf8');
+        console.log(`${label}Agent runtime hooks installed: ${settingsPath}`);
+      } else if (action === 'uninstall') {
+        for (const { event } of spec) {
+          if (!Array.isArray(existingHooks[event])) continue;
+          const remaining = existingHooks[event].filter((e) => !isAdwHookEntry(e));
+          if (remaining.length) existingHooks[event] = remaining;
+          else delete existingHooks[event];
+        }
+        if (Object.keys(existingHooks).length) {
+          settings.hooks = existingHooks;
+        } else {
+          delete settings.hooks;
+        }
+        if (existsSync(settingsPath)) {
+          writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`, 'utf8');
+          console.log(`${label}Agent runtime hooks removed from ${settingsPath}`);
+        } else {
+          console.log(`${label}Agent runtime hooks not present: ${settingsPath}`);
+        }
+      } else {
+        const wired = spec.filter(
+          ({ event }) =>
+            Array.isArray(existingHooks[event]) &&
+            existingHooks[event].some((e) => isAdwHookEntry(e)),
+        );
+        console.log(
+          wired.length === spec.length
+            ? `${label}Agent runtime hooks installed (${wired.length}/${spec.length} events) in ${settingsPath}`
+            : `${label}Agent runtime hooks NOT fully installed (${wired.length}/${spec.length} events). Run 'node scripts/ticket.mjs hook install --agent-hooks'.`,
+        );
+      }
+    };
+
     const applyHook = (dir) => {
       if (opts.fleet && !existsSync(join(dir, '.git'))) return;
       const hookPath = resolveHookPath(dir);
       const label = opts.fleet ? `[${basename(dir)}] ` : '';
 
+      if (opts.agentHooks) {
+        manageAgentHooks(dir, label);
+        return;
+      }
+
       if (action === 'install') {
         mkdirSync(dirname(hookPath), { recursive: true });
-      mkdirSync(dirname(hookPath), { recursive: true });
       const script = [
         '#!/bin/sh',
         '# AI-Dev-Workflow pre-push hook: guardrails against direct push to protected branches',

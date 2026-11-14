@@ -3250,3 +3250,209 @@ test('T2.7: lesson capture, ship --retro, recall --lessons, review --prompt, and
   assert.match(stepReviewer.stdout, /## Recent & Relevant Lessons/);
   assert.match(stepReviewer.stdout, /Cache timeout tests need fake timers/);
 });
+
+test('T2.4: prime --verify and resume --verify report baseline PASS/FAIL without aborting', (t) => {
+  const fPass = fixture(t, 'ticket: local://FO:FO-Plan-Test\n', [], {
+    tracker: 'local',
+    requireReview: false,
+    bootVerifyTier: 'fast',
+    verify: { fast: 'node -e "process.exit(0)"', test: 'node -e "process.exit(0)"' },
+  });
+  const primePass = fPass.run('prime', ['--verify']);
+  assert.equal(primePass.status, 0, primePass.stderr);
+  assert.match(primePass.stdout, /Baseline: PASS/);
+
+  const resumePass = fPass.run('resume', ['--verify']);
+  assert.equal(resumePass.status, 0, resumePass.stderr);
+  assert.match(resumePass.stdout, /Baseline: PASS/);
+
+  const fFail = fixture(t, 'ticket: local://FO:FO-Plan-Test\n', [], {
+    tracker: 'local',
+    requireReview: false,
+    bootVerifyTier: 'fast',
+    verify: { fast: 'node -e "console.error(\'broken test\'); process.exit(1)"' },
+  });
+  const primeFail = fFail.run('prime', ['--verify']);
+  assert.equal(primeFail.status, 0, primeFail.stderr);
+  assert.match(primeFail.stdout, /Baseline: FAIL .*fix baseline before starting next step/);
+
+  const resumeFail = fFail.run('resume', ['--verify']);
+  assert.equal(resumeFail.status, 0, resumeFail.stderr);
+  assert.match(resumeFail.stdout, /Baseline: FAIL .*fix baseline before starting next step/);
+});
+
+test('T2.5: tick --red records failing reproduction unchecked, rejects exit 0, and new --type Refactor seeds characterization step', (t) => {
+  const f = fixture(t, 'ticket: local://FO:FO-Plan-Test\n', [], {
+    tracker: 'local',
+    requireReview: false,
+  });
+  writeFileSync(
+    f.plan,
+    readFileSync(f.plan, 'utf8').replace('- [x] Works verified: fixture', '- [ ] First criterion'),
+  );
+
+  // 1. tick --red with exit 0 fails
+  const redZero = f.run('tick', ['1', '--red', 'node -e "process.exit(0)"']);
+  assert.notEqual(redZero.status, 0);
+  assert.match(redZero.stderr, /expected failing reproduction/);
+
+  // 2. tick --red with non-zero exit stamps red: ... without checking [x]
+  const redFail = f.run('tick', ['1', '--red', 'node -e "process.exit(2)"']);
+  assert.equal(redFail.status, 0, redFail.stderr);
+  assert.match(redFail.stdout, /Red reproduction recorded on \[1\]: - \[ \]/);
+  const updatedPlan = readFileSync(f.plan, 'utf8');
+  assert.match(updatedPlan, /- \[ \] First criterion red: `node -e "process\.exit\(2\)"` exit 2 @/);
+
+  // 3. new --type Refactor without --steps seeds characterization-test step
+  const refactorNew = f.run('new', ['Clean Module', '--type', 'Refactor'], [], { omitPlan: true });
+  assert.equal(refactorNew.status, 0, refactorNew.stderr);
+  const createdFile = readdirSync(join(f.root, 'docs/plans')).find((n) =>
+    n.includes('Clean-Module'),
+  );
+  assert.ok(createdFile, 'expected refactor plan file');
+  const refactorBody = readFileSync(join(f.root, 'docs/plans', createdFile), 'utf8');
+  assert.match(refactorBody, /Lock existing behaviour with characterization tests before structural changes/);
+});
+
+test('T2.3: hook --agent-hooks lifecycle and adw-hook.mjs pre-tool, post-tool, and stop enforcement', (t) => {
+  const f = fixture(t, 'ticket: local://FO:FO-Plan-Test\nstatus: draft\n', [], {
+    tracker: 'local',
+    requireReview: false,
+    protectedBranches: ['main'],
+    verify: { fast: 'node -e "console.error(\'post fail\'); process.exit(1)"' },
+    hooks: { postToolVerify: true },
+  });
+  const hookSrc = readFileSync(join(scripts, 'hooks', 'adw-hook.mjs'), 'utf8');
+  mkdirSync(join(f.root, 'scripts', 'hooks'), { recursive: true });
+  const hookDest = join(f.root, 'scripts', 'hooks', 'adw-hook.mjs');
+  writeFileSync(hookDest, hookSrc, 'utf8');
+
+  f.git('init', '-b', 'main');
+  f.git('config', 'user.name', 'Test');
+  f.git('config', 'user.email', 'test@example.invalid');
+  f.git('add', '.');
+  f.git('commit', '-m', 'init');
+
+  // Preserve pre-existing settings & user hooks when installing --agent-hooks
+  mkdirSync(join(f.root, '.claude'), { recursive: true });
+  writeFileSync(
+    join(f.root, '.claude/settings.json'),
+    JSON.stringify({
+      theme: 'dark',
+      hooks: {
+        PreToolUse: [{ matcher: 'Custom', hooks: [{ type: 'command', command: 'echo user-hook' }] }],
+      },
+    }),
+  );
+
+  const installRes = f.run('hook', ['install', '--agent-hooks'], [], { omitPlan: true });
+  assert.equal(installRes.status, 0, installRes.stderr);
+  const installedSettings = JSON.parse(readFileSync(join(f.root, '.claude/settings.json'), 'utf8'));
+  assert.equal(installedSettings.theme, 'dark');
+  assert.equal(installedSettings.hooks.PreToolUse.length, 2);
+  assert.ok(installedSettings.hooks.PostToolUse.some((e) => JSON.stringify(e).includes('adw-hook.mjs post-tool')));
+  assert.ok(installedSettings.hooks.Stop.some((e) => JSON.stringify(e).includes('adw-hook.mjs stop')));
+
+  const statusRes = f.run('hook', ['status', '--agent-hooks'], [], { omitPlan: true });
+  assert.equal(statusRes.status, 0, statusRes.stderr);
+  assert.match(statusRes.stdout, /installed \(3\/3 events\)/);
+
+  const runHook = (mode, stdinObjOrRaw, extraArgs = []) => {
+    const input =
+      typeof stdinObjOrRaw === 'string'
+        ? stdinObjOrRaw
+        : JSON.stringify(stdinObjOrRaw);
+    return spawnSync(process.execPath, [hookDest, mode, ...extraArgs], {
+      cwd: f.root,
+      input,
+      encoding: 'utf8',
+    });
+  };
+
+  // Malformed JSON: fail open by default, block under --strict
+  assert.equal(runHook('pre-tool', '{bad json').status, 0);
+  assert.equal(runHook('pre-tool', '{bad json', ['--strict']).status, 2);
+
+  // pre-tool: block direct checkbox edit on .plan.md
+  const blockCheckbox = runHook('pre-tool', {
+    tool_name: 'Edit',
+    tool_input: {
+      file_path: 'docs/plans/FO-Plan-Test.plan.md',
+      old_string: '- [ ] First criterion',
+      new_string: '- [x] First criterion',
+    },
+  });
+  assert.equal(blockCheckbox.status, 2);
+  assert.match(blockCheckbox.stderr, /Direct edits to plan checkboxes/);
+
+  // pre-tool: allow prose edit in Notes on .plan.md
+  const allowProse = runHook('pre-tool', {
+    tool_name: 'Edit',
+    tool_input: {
+      file_path: 'docs/plans/FO-Plan-Test.plan.md',
+      old_string: '## Notes',
+      new_string: '## Notes\nUpdated prose',
+    },
+  });
+  assert.equal(allowProse.status, 0, allowProse.stderr);
+
+  // pre-tool: block workflow file edit when no in-progress plan exists
+  const blockWorkflowNoPlan = runHook('pre-tool', {
+    tool_name: 'Edit',
+    tool_input: { file_path: 'scripts/ticket.mjs', old_string: 'a', new_string: 'b' },
+  });
+  assert.equal(blockWorkflowNoPlan.status, 2);
+  assert.match(blockWorkflowNoPlan.stderr, /requires an active `in-progress` plan/);
+
+  // pre-tool: block git push (including `git -C <dir> push`) to protected branch main
+  const blockPush = runHook('pre-tool', {
+    tool_name: 'Bash',
+    tool_input: { command: 'git push origin main' },
+  });
+  assert.equal(blockPush.status, 2);
+  assert.match(blockPush.stderr, /protected branch "main"/);
+
+  const blockPushWithC = runHook('pre-tool', {
+    tool_name: 'Bash',
+    tool_input: { command: 'git -C . push origin main' },
+  });
+  assert.equal(blockPushWithC.status, 2);
+  assert.match(blockPushWithC.stderr, /protected branch "main"/);
+
+  // post-tool: reports verify failure output boundedly
+  const postRes = runHook('post-tool', {
+    tool_name: 'Edit',
+    tool_input: { file_path: 'src/app.js' },
+  });
+  assert.equal(postRes.status, 0);
+  assert.match(postRes.stderr, /post-tool verify failed/);
+
+  // Switch to feature branch with active in-progress plan and open item, then test stop hook
+  f.git('checkout', '-b', 'feat/hook-test');
+  writeFileSync(
+    f.plan,
+    readFileSync(f.plan, 'utf8')
+      .replace('status: draft', 'status: in-progress')
+      .replace('- [x] Implement', '- [ ] Implement'),
+  );
+  writeFileSync(join(f.root, 'dirty.txt'), 'unlogged change\n');
+
+  const stopBlocked = runHook('stop', {});
+  assert.equal(stopBlocked.status, 2);
+  assert.match(stopBlocked.stderr, /handoff/);
+
+  // Record handoff -> stop allows clean pause (exit 0)
+  const handoffRes = f.run('handoff', ['--agent', 'Gemini', '--done', 'WIP', '--next', 'Finish']);
+  assert.equal(handoffRes.status, 0, handoffRes.stderr);
+  const stopAllowed = runHook('stop', {});
+  assert.equal(stopAllowed.status, 0, stopAllowed.stderr);
+
+  // Uninstall removes only ADW entries and preserves user hook
+  const uninstallRes = f.run('hook', ['uninstall', '--agent-hooks'], [], { omitPlan: true });
+  assert.equal(uninstallRes.status, 0, uninstallRes.stderr);
+  const afterUninstall = JSON.parse(readFileSync(join(f.root, '.claude/settings.json'), 'utf8'));
+  assert.equal(afterUninstall.theme, 'dark');
+  assert.equal(afterUninstall.hooks.PreToolUse.length, 1);
+  assert.equal(afterUninstall.hooks.PreToolUse[0].matcher, 'Custom');
+  assert.equal(afterUninstall.hooks.PostToolUse, undefined);
+});
