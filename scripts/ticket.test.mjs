@@ -2920,7 +2920,7 @@ test('T1.5: runInvariants enforces mirrorDirs, readmeCliSync, zeroDependencies, 
       'new', 'prime', 'tick', 'defer', 'step', 'checkpoint', 'run', 'create', 'start',
       'log', 'handoff', 'resume', 'pack', 'review', 'check', 'lint', 'ship', 'pr', 'done',
       'overview', 'hook', 'adr', 'exec', 'wt', 'recall', 'archive', 'doctor', 'verify',
-      'hygiene', 'switch', 'split', 'fleet', 'wave', 'lesson', 'stats',
+      'hygiene', 'switch', 'split', 'fleet', 'wave', 'lesson', 'stats', 'release',
     ].join(' '),
   );
   writeFileSync(join(f.root, 'package.json'), JSON.stringify({ name: 'test', dependencies: {} }));
@@ -3456,3 +3456,286 @@ test('T2.3: hook --agent-hooks lifecycle and adw-hook.mjs pre-tool, post-tool, a
   assert.equal(afterUninstall.hooks.PreToolUse[0].matcher, 'Custom');
   assert.equal(afterUninstall.hooks.PostToolUse, undefined);
 });
+
+test('T3.1: versioning new --version --impact, activeTrain default, split preservation, and requireVersionOnPlans lint/check', (t) => {
+  const f = fixture(t, 'ticket: local://FO:FO-Plan-Test\n', [], {
+    tracker: 'local',
+    requireReview: false,
+    versioning: {
+      enabled: true,
+      currentVersion: '1.1.0',
+      activeTrain: '1.2.0',
+      roadmapPath: 'docs/ROADMAP.md',
+      changelogPath: 'CHANGELOG.md',
+      tagPrefix: 'v',
+      requireVersionOnPlans: true,
+    },
+  });
+  copyFileSync(
+    join(scripts, '..', 'docs/plans/_template.plan.md'),
+    join(f.root, 'docs/plans/_template.plan.md'),
+  );
+
+  // 1. Existing fixture plan without version/impact fails check & lint when requireVersionOnPlans: true
+  const failCheck = f.run('check');
+  assert.notEqual(failCheck.status, 0);
+  assert.match(failCheck.stderr, /version is required in frontmatter/);
+  assert.match(failCheck.stderr, /impact is required in frontmatter/);
+
+  const failLint = f.run('lint', ['--json']);
+  assert.notEqual(failLint.status, 0);
+  const lintJson = JSON.parse(failLint.stdout);
+  assert.ok(lintJson.errors.some((e) => /"version" is required/.test(e)));
+  assert.ok(lintJson.errors.some((e) => /"impact" is required/.test(e)));
+
+  // 2. Invalid impact is rejected by new and check
+  const badNew = f.run('new', ['Bad Impact', '--impact', 'breaking'], [], { omitPlan: true });
+  assert.notEqual(badNew.status, 0);
+  assert.match(badNew.stderr, /--impact must be one of none, patch, minor, major/);
+
+  // 3. new without --version inherits activeTrain (1.2.0) and infers minor for Feature, patch for Bug
+  const featNew = f.run(
+    'new',
+    ['Overlay Search', '--type', 'Feature', '--appetite', 'M', '--criteria', 'AC1: Search works|AC2: Fast', '--steps', 'Step 1 (AC1)|Step 2 (AC2)'],
+    [],
+    { omitPlan: true },
+  );
+  assert.equal(featNew.status, 0, featNew.stderr);
+  const featFile = readdirSync(join(f.root, 'docs/plans')).find((n) =>
+    n.includes('Overlay-Search'),
+  );
+  assert.ok(featFile);
+  const featRel = `docs/plans/${featFile}`;
+  const featContent = readFileSync(join(f.root, featRel), 'utf8');
+  assert.match(featContent, /^version: 1\.2\.0$/m);
+  assert.match(featContent, /^impact: minor$/m);
+  assert.match(featContent, /^appetite: M$/m);
+
+  // 4. split preserves appetite, version, and impact in Part 2
+  const splitRes = f.run('split', [featRel, '--after', '1'], [], { omitPlan: true });
+  assert.equal(splitRes.status, 0, splitRes.stderr);
+  const part2File = readdirSync(join(f.root, 'docs/plans')).find((n) =>
+    n.includes('Overlay-Search-Part-2'),
+  );
+  assert.ok(part2File);
+  const part2Content = readFileSync(join(f.root, 'docs/plans', part2File), 'utf8');
+  assert.match(part2Content, /^appetite: M$/m);
+  assert.match(part2Content, /^version: 1\.2\.0$/m);
+  assert.match(part2Content, /^impact: minor$/m);
+});
+
+test('T3.2: create stamps Target Version on Notion Tasks and retries gracefully if Target Version is unsupported', (t) => {
+  // 1. Stamps Target Version when version is set (e.g. 1.2.0)
+  const f1 = fixture(t, 'version: 1.2.0\nimpact: minor\n', [empty, created]);
+  const r1 = f1.run('create', ['--agent', 'Gemini']);
+  assert.equal(r1.status, 0, r1.stderr);
+  assert.equal(
+    r1.calls[1].body.properties['Target Version'].rich_text[0].text.content,
+    '1.2.0',
+  );
+
+  // 2. Does not stamp Target Version when version is "none"
+  const f2 = fixture(t, 'version: none\nimpact: none\n', [empty, created]);
+  const r2 = f2.run('create', ['--agent', 'Gemini']);
+  assert.equal(r2.status, 0, r2.stderr);
+  assert.equal(r2.calls[1].body.properties['Target Version'], undefined);
+
+  // 3. Soft fallback retries without Target Version if Notion returns validation_error on Target Version
+  const f3 = fixture(t, 'version: 1.2.0\nimpact: minor\n', [
+    empty,
+    {
+      status: 400,
+      body: {
+        code: 'validation_error',
+        message: 'Target Version is not a property that exists.',
+      },
+    },
+    created,
+  ]);
+  const r3 = f3.run('create', ['--agent', 'Gemini']);
+  assert.equal(r3.status, 0, r3.stderr);
+  assert.equal(r3.calls.length, 3);
+  assert.ok(r3.calls[1].body.properties['Target Version']);
+  assert.equal(r3.calls[2].body.properties['Target Version'], undefined);
+});
+
+test('T3.3: release init, status, notes (--write), closeout, and prime/resume/pack/doctor/stats version surfacing', (t) => {
+  const f = fixture(
+    t,
+    'ticket: local://FO:FO-Plan-Test\nstatus: done\nversion: 1.2.0\nimpact: minor\npr: https://github.com/owner/repo/pull/42\n',
+    [],
+    {
+      tracker: 'local',
+      requireReview: false,
+      versioning: {
+        enabled: true,
+        currentVersion: '1.1.0',
+        activeTrain: '1.2.0',
+        roadmapPath: 'docs/ROADMAP.md',
+        changelogPath: 'CHANGELOG.md',
+        tagPrefix: 'v',
+        requireVersionOnPlans: false,
+      },
+    },
+  );
+  f.git('init', '-b', 'main');
+  f.git('config', 'user.name', 'Test');
+  f.git('config', 'user.email', 'test@example.invalid');
+
+  // Add a second Bug plan targeting 1.2.0 in archive
+  mkdirSync(join(f.root, 'docs/plans/archive/2026-11'), { recursive: true });
+  writeFileSync(
+    join(f.root, 'docs/plans/archive/2026-11/FO-Plan-Fix-Crash-2026-11.plan.md'),
+    [
+      '---',
+      'title: Plan - Bug: Fix Overlay Crash',
+      'ticket: local://FO:FO-Plan-Fix-Crash-2026-11',
+      'status: done',
+      'version: 1.2.0',
+      'impact: patch',
+      'pr: https://github.com/owner/repo/pull/43',
+      '---',
+      '# Fix Overlay Crash',
+      '',
+      '## Summary',
+      'Prevent null-pointer crash when closing overlay.',
+      '',
+      '## Acceptance criteria',
+      '- [x] AC1: No crash verified: test',
+      '',
+      '## Steps',
+      '- [x] Fix guard (AC1)',
+      '',
+    ].join('\n'),
+  );
+
+  // Update main fixture plan to Feature for release notes categorization
+  writeFileSync(
+    f.plan,
+    readFileSync(f.plan, 'utf8').replace(
+      'title: Plan - Process: Test',
+      'title: Plan - Feature: Command Palette',
+    ),
+  );
+
+  f.git('add', '.');
+  f.git('commit', '-m', 'init plans');
+
+  // 1. release init creates docs/ROADMAP.md
+  const initRes = f.run('release', ['init'], [], { omitPlan: true });
+  assert.equal(initRes.status, 0, initRes.stderr);
+  assert.ok(existsSync(join(f.root, 'docs/ROADMAP.md')));
+  const rmContent = readFileSync(join(f.root, 'docs/ROADMAP.md'), 'utf8');
+  assert.match(rmContent, /### 1\.1\.0/);
+  assert.match(rmContent, /### 1\.2\.0/);
+
+  // 2. release status --json aggregates active + archived plans and detects ROADMAP.md entry
+  const statusRes = f.run('release', ['status', '1.2.0', '--json'], [], { omitPlan: true });
+  assert.equal(statusRes.status, 0, statusRes.stderr);
+  const statusJson = JSON.parse(statusRes.stdout);
+  assert.equal(statusJson.versioningEnabled, true);
+  assert.equal(statusJson.roadmapExists, true);
+  assert.equal(statusJson.trains.length, 1);
+  assert.equal(statusJson.trains[0].version, '1.2.0');
+  assert.equal(statusJson.trains[0].inRoadmap, true);
+  assert.equal(statusJson.trains[0].highestImpact, 'minor');
+  assert.equal(statusJson.trains[0].totalPlans, 2);
+  assert.equal(statusJson.trains[0].counts.ready, 2);
+
+  // 3. release notes --write generates Keep-a-Changelog sections in CHANGELOG.md
+  const notesRes = f.run('release', ['notes', '1.2.0', '--write'], [], { omitPlan: true });
+  assert.equal(notesRes.status, 0, notesRes.stderr);
+  const clContent = readFileSync(join(f.root, 'CHANGELOG.md'), 'utf8');
+  assert.match(clContent, /## \[1\.2\.0\] - \d{4}-\d{2}-\d{2}/);
+  assert.match(clContent, /### Added\n- \*\*Command Palette\*\*: Test fixture \(\[#42\]/);
+  assert.match(clContent, /### Fixed\n- \*\*Fix Overlay Crash\*\*: Prevent null-pointer crash when closing overlay\. \(\[#43\]/);
+
+  // 4. release closeout scaffolds a valid V5 closeout plan that passes lint
+  const closeoutRes = f.run('release', ['closeout', '1.2.0'], [], { omitPlan: true });
+  assert.equal(closeoutRes.status, 0, closeoutRes.stderr);
+  const closeoutFile = readdirSync(join(f.root, 'docs/plans')).find((n) =>
+    n.includes('Release-Closeout-1-2-0'),
+  );
+  assert.ok(closeoutFile);
+  const lintCloseout = f.run('lint', [`docs/plans/${closeoutFile}`], [], { omitPlan: true });
+  assert.equal(lintCloseout.status, 0, lintCloseout.stderr);
+
+  // 4b. release status and release notes exclude closeout plans and skip draft/open plans by default
+  writeFileSync(
+    join(f.root, 'docs/plans/FO-Plan-Draft-Future-Work-2026-11.plan.md'),
+    [
+      '---',
+      'title: Plan - Feature: Unfinished Draft Feature',
+      'ticket:',
+      'status: draft',
+      'version: 1.2.0',
+      'impact: minor',
+      '---',
+      '# Unfinished Draft Feature',
+      '',
+      '## Summary',
+      'Should not appear in CHANGELOG until closed out.',
+      '',
+      '## Acceptance criteria',
+      '- [ ] AC1: Pending',
+      '',
+      '## Steps',
+      '- [ ] Pending step (AC1)',
+      '',
+    ].join('\n'),
+  );
+  const postCloseoutStatus = f.run('release', ['status', '1.2.0', '--json'], [], { omitPlan: true });
+  assert.equal(postCloseoutStatus.status, 0, postCloseoutStatus.stderr);
+  const postCloseoutJson = JSON.parse(postCloseoutStatus.stdout);
+  assert.equal(postCloseoutJson.trains[0].totalPlans, 3); // 2 done + 1 draft; closeout excluded
+  assert.equal(postCloseoutJson.trains[0].counts.ready, 2);
+  assert.equal(postCloseoutJson.trains[0].counts.planned, 1);
+
+  const notesDefault = f.run('release', ['notes', '1.2.0'], [], { omitPlan: true });
+  assert.equal(notesDefault.status, 0, notesDefault.stderr);
+  assert.doesNotMatch(notesDefault.stdout, /Release Closeout/);
+  assert.doesNotMatch(notesDefault.stdout, /Unfinished Draft Feature/);
+  assert.match(notesDefault.stderr, /skipping 1 unclosed plan/);
+
+  const notesAll = f.run('release', ['notes', '1.2.0', '--all'], [], { omitPlan: true });
+  assert.equal(notesAll.status, 0, notesAll.stderr);
+  assert.doesNotMatch(notesAll.stdout, /Release Closeout/);
+  assert.match(notesAll.stdout, /Unfinished Draft Feature/);
+
+  // 4c. release notes --write creates nested changelogPath parent directories automatically
+  const cfgPath = join(f.root, 'scripts/ticket.config.json');
+  const prevCfg = JSON.parse(readFileSync(cfgPath, 'utf8'));
+  writeFileSync(
+    cfgPath,
+    JSON.stringify({ ...prevCfg, versioning: { ...prevCfg.versioning, changelogPath: 'docs/releases/CHANGELOG.md' } }, null, 2),
+  );
+  const nestedWrite = f.run('release', ['notes', '1.2.0', '--write'], [], { omitPlan: true });
+  assert.equal(nestedWrite.status, 0, nestedWrite.stderr);
+  assert.ok(existsSync(join(f.root, 'docs/releases/CHANGELOG.md')));
+  // Restore changelogPath & remove extra draft plan before single-plan prime/resume/pack checks
+  writeFileSync(cfgPath, JSON.stringify(prevCfg, null, 2));
+  rmSync(join(f.root, 'docs/plans/FO-Plan-Draft-Future-Work-2026-11.plan.md'), { force: true });
+
+  // 5. prime, resume, pack, doctor, and stats surface version metadata
+  const primeRes = f.run('prime');
+  assert.equal(primeRes.status, 0, primeRes.stderr);
+  assert.match(primeRes.stdout, /Version: 1\.2\.0 \(minor\)/);
+
+  const resumeRes = f.run('resume');
+  assert.equal(resumeRes.status, 0, resumeRes.stderr);
+  assert.match(resumeRes.stdout, /Version:\s+1\.2\.0 \(minor\)/);
+
+  const packRes = f.run('pack');
+  assert.equal(packRes.status, 0, packRes.stderr);
+  assert.match(packRes.stdout, /Version: 1\.2\.0 \(minor\)/);
+
+  const docRes = f.run('doctor', [], [], { omitPlan: true });
+  assert.equal(docRes.status, 0, docRes.stderr);
+  assert.match(docRes.stdout, /Version:\s+current=1\.1\.0, train=1\.2\.0 \(roadmap: present, changelog: present\)/);
+
+  const statsRes = f.run('stats', ['--json'], [], { omitPlan: true });
+  assert.equal(statsRes.status, 0, statsRes.stderr);
+  const statsJson = JSON.parse(statsRes.stdout);
+  assert.equal(statsJson.byVersion['1.2.0'], 3);
+});
+

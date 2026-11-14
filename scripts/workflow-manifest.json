@@ -53,6 +53,15 @@
       "M": { "maxLines": 450, "maxFiles": 12 },
       "L": { "maxLines": 1000, "maxFiles": 25 }
     },
+    "versioning": {
+      "enabled": false,
+      "currentVersion": "1.0.0",
+      "activeTrain": "1.1.0",
+      "roadmapPath": "docs/ROADMAP.md",
+      "changelogPath": "CHANGELOG.md",
+      "tagPrefix": "v",
+      "requireVersionOnPlans": false
+    },
     "noPlan": {
       "maxChangedLines": 40,
       "noNewFilesUnder": ["src"]
