@@ -545,6 +545,219 @@ function checkAppetite(plan, base, head, dir = repoRoot) {
   };
 }
 
+function listFilesRel(rootDir, baseDir = rootDir) {
+  if (!existsSync(rootDir)) return [];
+  const out = [];
+  for (const entry of readdirSync(rootDir, { withFileTypes: true })) {
+    const full = join(rootDir, entry.name);
+    if (entry.isDirectory()) out.push(...listFilesRel(full, baseDir));
+    else out.push(relative(baseDir, full).replace(/\\/g, '/'));
+  }
+  return out.sort();
+}
+
+function runInvariants(cfg = config, dir = repoRoot) {
+  const inv = cfg.invariants;
+  if (!inv || typeof inv !== 'object') {
+    return { total: 0, passed: true, failures: [] };
+  }
+  let total = 0;
+  const failures = [];
+
+  if (Array.isArray(inv.mirrorDirs)) {
+    for (const pair of inv.mirrorDirs) {
+      if (!Array.isArray(pair) || pair.length !== 2) continue;
+      total++;
+      const [dirA, dirB] = pair;
+      const fullA = join(dir, dirA);
+      const fullB = join(dir, dirB);
+      const filesA = listFilesRel(fullA);
+      const filesB = listFilesRel(fullB);
+      const all = new Set([...filesA, ...filesB]);
+      for (const rel of all) {
+        const pA = join(fullA, rel);
+        const pB = join(fullB, rel);
+        if (!existsSync(pA)) {
+          failures.push(`mirrorDirs (${dirA} <-> ${dirB}): missing in ${dirA}: ${rel}`);
+        } else if (!existsSync(pB)) {
+          failures.push(`mirrorDirs (${dirA} <-> ${dirB}): missing in ${dirB}: ${rel}`);
+        } else {
+          const a = readFileSync(pA, 'utf8').replace(/\r\n/g, '\n');
+          const b = readFileSync(pB, 'utf8').replace(/\r\n/g, '\n');
+          if (a !== b) {
+            failures.push(`mirrorDirs (${dirA} <-> ${dirB}): content differs for ${rel}`);
+          }
+        }
+      }
+    }
+  }
+
+  if (inv.readmeCliSync) {
+    total++;
+    const readmePath = join(dir, 'README.md');
+    if (!existsSync(readmePath)) {
+      failures.push('readmeCliSync: README.md is missing');
+    } else {
+      const readme = readFileSync(readmePath, 'utf8');
+      const excluded = new Set([
+        'ci-check',
+        'ci-done',
+        ...(Array.isArray(inv.readmeCliExclude) ? inv.readmeCliExclude : []),
+      ]);
+      for (const cmd of Object.keys(commands)) {
+        if (excluded.has(cmd)) continue;
+        if (!new RegExp(`\\b${cmd}\\b`).test(readme)) {
+          failures.push(`readmeCliSync: CLI command "${cmd}" is not documented in README.md`);
+        }
+      }
+    }
+  }
+
+  if (inv.zeroDependencies) {
+    total++;
+    const pkgPath = join(dir, 'package.json');
+    if (existsSync(pkgPath)) {
+      try {
+        const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
+        const deps = Object.keys(pkg.dependencies || {});
+        const devDeps = Object.keys(pkg.devDependencies || {});
+        if (deps.length || devDeps.length) {
+          failures.push(
+            `zeroDependencies: package.json declares dependencies (${[...deps, ...devDeps].join(', ')})`,
+          );
+        }
+      } catch (err) {
+        failures.push(`zeroDependencies: invalid package.json (${err.message})`);
+      }
+    }
+  }
+
+  if (Array.isArray(inv.noSecretsPatterns) && inv.noSecretsPatterns.length) {
+    total++;
+    const exclude = new Set(Array.isArray(inv.excludePaths) ? inv.excludePaths : []);
+    const tracked = git(['ls-files', '-z'], { allowFail: true, cwd: dir })
+      .split('\0')
+      .filter((f) => f && !exclude.has(f.replace(/\\/g, '/')));
+    const regexes = inv.noSecretsPatterns.map((p) => new RegExp(p));
+    for (const file of tracked) {
+      const full = join(dir, file);
+      if (!existsSync(full)) continue;
+      let textContent = '';
+      try {
+        textContent = readFileSync(full, 'utf8');
+      } catch {
+        continue;
+      }
+      const lines = textContent.split('\n');
+      for (let i = 0; i < lines.length; i++) {
+        if (lines[i].includes('invariant-ignore')) continue;
+        for (const re of regexes) {
+          if (re.test(lines[i])) {
+            failures.push(`noSecretsPatterns: potential secret in ${file}:${i + 1}`);
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  if (Array.isArray(inv.customChecks)) {
+    for (const checkItem of inv.customChecks) {
+      if (!checkItem || !checkItem.cmd) continue;
+      total++;
+      const res = spawnSync(checkItem.cmd, {
+        cwd: dir,
+        shell: true,
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      if (res.status !== 0) {
+        failures.push(
+          `customCheck "${checkItem.name || checkItem.cmd}" failed (exit ${res.status ?? 1})`,
+        );
+      }
+    }
+  }
+
+  return { total, passed: failures.length === 0, failures };
+}
+
+function lintPlan(plan) {
+  const errors = [];
+  const warnings = [];
+  const cleanBody = plan.body.replace(/<!--[\s\S]*?-->/g, '');
+  const placeholderRe = /<(?:2-3 sentences:[^>]*|Compacted research:[^>]*|Unresolved assumptions[^>]*|Observable outcome|Checkable outcome|Step|Pre-mortem:[^>]*|What could go wrong[^>]*|What this plan deliberately[^>]*)>/i;
+
+  for (const heading of ['Summary', 'Acceptance criteria', 'Steps']) {
+    const content = section(cleanBody, heading);
+    if (!content) {
+      errors.push(`Section "## ${heading}" is empty or missing.`);
+    } else if (placeholderRe.test(content)) {
+      errors.push(`Section "## ${heading}" still contains template placeholder text.`);
+    }
+  }
+  for (const heading of ['Risks', 'Out of scope']) {
+    const content = section(cleanBody, heading);
+    if (!content) {
+      warnings.push(`Section "## ${heading}" is empty or missing.`);
+    } else if (placeholderRe.test(content)) {
+      errors.push(`Section "## ${heading}" still contains template placeholder text.`);
+    }
+  }
+  const ctxContent = section(cleanBody, 'Context');
+  if (ctxContent && placeholderRe.test(ctxContent)) {
+    errors.push('Section "## Context" still contains template placeholder text.');
+  }
+
+  const openQ = countOpenQuestions(plan.body);
+  if (openQ > 0) {
+    errors.push(`Section "## Open questions" has ${openQ} unresolved item(s).`);
+  }
+
+  const { items } = findCheckboxes(cleanBody);
+  const criteriaItems = items.filter(
+    (it) => it.section.toLowerCase() === 'acceptance criteria',
+  );
+  const stepsText = section(cleanBody, 'Steps');
+  const taskVerbRe = /^(?:implement|add|create|update|refactor|write|build|wire|move|delete|remove)\b/i;
+  const vagueRe = /\b(?:robust|properly|cleanly|efficiently|seamlessly|all edge cases|appropriately)\b/i;
+
+  const acIds = [];
+  for (const item of criteriaItems) {
+    const core = item.text
+      .replace(/\s+(?:verified(?:\((?:test|cmd|manual|inspect)\))?|deferred):.*$/i, '')
+      .trim();
+    const idMatch = core.match(/^(AC\d+)\s*:\s*(.*)$/i);
+    const id = idMatch ? idMatch[1].toUpperCase() : null;
+    if (id) acIds.push(id);
+    const bodyText = (idMatch ? idMatch[2] : core).trim();
+    if (taskVerbRe.test(bodyText)) {
+      warnings.push(
+        `Acceptance criterion phrased as task verb instead of observable outcome: "${core.slice(0, 70)}"`,
+      );
+    }
+    if (vagueRe.test(bodyText)) {
+      warnings.push(
+        `Acceptance criterion uses vague/unbounded wording: "${core.slice(0, 70)}"`,
+      );
+    }
+  }
+
+  const uncoveredAc = acIds.filter(
+    (id) => !new RegExp(`\\b${id}\\b`, 'i').test(stepsText),
+  );
+  for (const id of uncoveredAc) {
+    warnings.push(`Acceptance criterion ${id} is not referenced by any step in "## Steps".`);
+  }
+
+  return {
+    ok: errors.length === 0,
+    errors,
+    warnings,
+    uncoveredAc,
+  };
+}
+
 function appendToSection(body, heading, entry) {
   const lines = body.split('\n');
   const start = lines.findIndex(
@@ -2008,6 +2221,14 @@ const commands = {
       ].join('\n');
     }
 
+    if (opts.create || opts.start) {
+      content = content
+        .replace(/<Compacted research:[^>]*>/g, 'None noted.')
+        .replace(/<Unresolved assumptions[^>]*>/g, 'None')
+        .replace(/<Pre-mortem:[^>]*>/g, 'None noted.')
+        .replace(/<What this plan deliberately[^>]*>/g, 'None noted.');
+    }
+
     mkdirSync(dirname(fullPath), { recursive: true });
     writeFileSync(fullPath, `${content.trimEnd()}\n`, 'utf8');
     console.log(`Created plan: ${relPath}`);
@@ -2586,6 +2807,9 @@ const commands = {
       ignoreReview: true,
     }).filter((p) => !p.startsWith('open item'));
     if (pre.length) fail(`fix the plan first:\n- ${pre.join('\n- ')}`);
+    const lintRes = lintPlan(plan);
+    for (const w of lintRes.warnings) console.warn(`lint warning: ${w}`);
+    if (!lintRes.ok) fail(`plan lint failed:\n- ${lintRes.errors.join('\n- ')}`);
     const agent = opts.agent || process.env.AI_CLIENT || '';
     if (!config.captureSources.includes(agent))
       fail(`--agent must be one of: ${config.captureSources.join(', ')}`);
@@ -2876,6 +3100,7 @@ const commands = {
     const hygieneRes = checkHygiene();
     const appetiteRes = checkAppetite(plan, base);
     const testIntegrity = analyzeTestIntegrity(base);
+    const lintRes = lintPlan(plan);
 
     const lines = [
       `# Review Packet: ${plan.meta.title || plan.rel}`,
@@ -2909,6 +3134,9 @@ const commands = {
       checkIssues.length
         ? `Plan issues:\n- ${checkIssues.join('\n- ')}`
         : 'Plan checkboxes & evidence: OK',
+      ...(lintRes.uncoveredAc.length
+        ? [`Uncovered AC IDs: ${lintRes.uncoveredAc.join(', ')}`]
+        : []),
       ...(hygieneRes.clean
         ? ['Hygiene check: clean']
         : ['Hygiene issues:', ...hygieneRes.issues.map((i) => `- ✗ ${i}`)]),
@@ -3132,7 +3360,35 @@ const commands = {
         console.warn(`Hygiene issues detected:\n- ${hyg.issues.join('\n- ')}`);
       }
     }
+    const inv = runInvariants(config, repoRoot);
+    if (!inv.passed) {
+      fail(`repository invariants failed:\n- ${inv.failures.join('\n- ')}`);
+    }
     console.log(`${plan.rel}: closed out.`);
+  },
+
+  async lint() {
+    const plan = onePlan();
+    const res = lintPlan(plan);
+    if (opts.json) {
+      console.log(JSON.stringify({ plan: plan.rel, ...res }, null, 2));
+    } else {
+      console.log(`=== Plan Lint: ${plan.rel} ===`);
+      if (res.errors.length) {
+        console.log('Errors:');
+        for (const e of res.errors) console.log(`  ✗ ${e}`);
+      }
+      if (res.warnings.length) {
+        console.log('Warnings:');
+        for (const w of res.warnings) console.log(`  ⚠ ${w}`);
+      }
+      if (res.ok && res.warnings.length === 0) {
+        console.log('✓ Plan lint clean (0 errors, 0 warnings).');
+      }
+    }
+    if (!res.ok || (opts.strict && res.warnings.length > 0)) {
+      fail(`plan lint failed (${res.errors.length} error(s), ${res.warnings.length} warning(s))`);
+    }
   },
 
   async ship() {
@@ -3395,6 +3651,10 @@ const commands = {
       fail(
         'close out the plan(s) above: tick every item or mark it "deferred: <reason>".',
       );
+    const inv = runInvariants(config, repoRoot);
+    if (!inv.passed) {
+      fail(`repository invariants failed:\n- ${inv.failures.join('\n- ')}`);
+    }
   },
 
   async 'ci-done'() {
@@ -3993,6 +4253,10 @@ const commands = {
       );
       console.log(`Pre-push:  ${hasHook ? 'installed' : 'not installed'}`);
       console.log(`Workflow:  ${syncDrift}`);
+      const inv = runInvariants(repoCfg, dir);
+      console.log(
+        `Invariants:${inv.total ? (inv.passed ? ` ${inv.total}/${inv.total} passed` : ` FAILED (${inv.failures[0]})`) : ' none configured'}`,
+      );
       const tiers = getVerifyTiers(repoCfg);
       const tierEntries = Object.entries(tiers);
       if (tierEntries.length > 1) {

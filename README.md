@@ -212,8 +212,11 @@ node scripts/ticket.mjs review --agent Codex --verdict pass --summary "Criteria 
 node scripts/ticket.mjs review --agent Gemini --standards pass --spec pass --summary "Dual-pass pass" [--self-review "<reason>"]
 
 # 5. Finish & Gatekeeper
-# Verify all checkboxes are closed and working tree hygiene is clean (--strict also requires non-manual proof when verifyCommand is configured)
+# Verify all checkboxes are closed, invariants pass, and working tree hygiene is clean (--strict also requires non-manual proof when verifyCommand is configured)
 node scripts/ticket.mjs check [--strict]
+
+# Lint a plan for placeholders, unresolved open questions, vague criteria, and uncovered AC# IDs (0 tokens)
+node scripts/ticket.mjs lint [<plan>] [--strict] [--json]
 
 # Automated PR creation & ticket shipping in one command (pushes branch, verifies, opens PR, auto-merges)
 node scripts/ticket.mjs pr [--verify] [--auto] [--draft]

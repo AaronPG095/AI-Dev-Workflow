@@ -2822,19 +2822,29 @@ test('T1.4: template v5 scaffolding, prime open-question count, start --strict, 
   assert.match(createdText, /## Open questions/);
   assert.match(createdText, /AC1: <Observable outcome>/);
 
-  // Add an open question and test prime + start --strict
-  writeFileSync(
-    join(f.root, createdRel),
-    createdText.replace(
-      /## Open questions\n\n[^\n]+/,
-      '## Open questions\n\n- [ ] Should cache expire after 5m?',
-    ),
-  );
+  // Fill required sections so create lint passes, then add open question to test prime + start --strict
+  const readyText = createdText
+    .replace(/<2-3 sentences:[^>]*>/, 'Verify v5 scaffolding and start --strict.')
+    .replace(/<Unresolved assumptions[^>]*>/, 'None')
+    .replace(/AC1: <Observable outcome>/, 'AC1: Cache returns stored value')
+    .replace(/<Step>/, 'Add cache')
+    .replace(/<Pre-mortem:[^>]*>/, 'None noted.')
+    .replace(/<What this plan deliberately[^>]*>/, 'None noted.');
+  writeFileSync(join(f.root, createdRel), readyText);
   f.git('checkout', '-b', 'feat/v5-test');
   const createTicket = f.run('create', [createdRel, '--agent', 'Gemini'], [], {
     omitPlan: true,
   });
   assert.equal(createTicket.status, 0, createTicket.stderr);
+
+  const ticketedText = readFileSync(join(f.root, createdRel), 'utf8');
+  writeFileSync(
+    join(f.root, createdRel),
+    ticketedText.replace(
+      /## Open questions\n\nNone/,
+      '## Open questions\n\n- [ ] Should cache expire after 5m?',
+    ),
+  );
 
   const primeRes = f.run('prime', [createdRel], [], { omitPlan: true });
   assert.equal(primeRes.status, 0, primeRes.stderr);
@@ -2886,4 +2896,152 @@ test('T2.6: appetite diff-size budget warns/fails when exceeded and excludes pla
   const checkStrict = f.run('check', ['--strict']);
   assert.notEqual(checkStrict.status, 0);
   assert.match(checkStrict.stderr, /Appetite S exceeded.*split/);
+});
+
+test('T1.5: runInvariants enforces mirrorDirs, readmeCliSync, zeroDependencies, noSecretsPatterns, and customChecks', (t) => {
+  const f = fixture(t, 'ticket: local://FO:FO-Plan-Test\n', [], {
+    tracker: 'local',
+    requireReview: false,
+    invariants: {
+      mirrorDirs: [['.agents/skills', '.claude/skills']],
+      readmeCliSync: true,
+      zeroDependencies: true,
+      noSecretsPatterns: ['\\bntn_test_[A-Za-z0-9]{6,}'],
+      customChecks: [{ name: 'ok-check', cmd: 'node -e "process.exit(0)"' }],
+    },
+  });
+  mkdirSync(join(f.root, '.agents/skills/demo'), { recursive: true });
+  mkdirSync(join(f.root, '.claude/skills/demo'), { recursive: true });
+  writeFileSync(join(f.root, '.agents/skills/demo/SKILL.md'), 'same\n');
+  writeFileSync(join(f.root, '.claude/skills/demo/SKILL.md'), 'same\n');
+  writeFileSync(
+    join(f.root, 'README.md'),
+    [
+      'new', 'prime', 'tick', 'defer', 'step', 'checkpoint', 'run', 'create', 'start',
+      'log', 'handoff', 'resume', 'pack', 'review', 'check', 'lint', 'ship', 'pr', 'done',
+      'overview', 'hook', 'adr', 'exec', 'wt', 'recall', 'archive', 'doctor', 'verify',
+      'hygiene', 'switch', 'split', 'fleet', 'wave',
+    ].join(' '),
+  );
+  writeFileSync(join(f.root, 'package.json'), JSON.stringify({ name: 'test', dependencies: {} }));
+  f.git('init', '-b', 'main');
+  f.git('config', 'user.name', 'Test');
+  f.git('config', 'user.email', 'test@example.invalid');
+  f.git('add', '.');
+  f.git('commit', '-m', 'init');
+
+  // All invariants pass initially
+  const passCheck = f.run('check');
+  assert.equal(passCheck.status, 0, passCheck.stderr);
+
+  const docRes = f.run('doctor', [], [], { omitPlan: true });
+  assert.equal(docRes.status, 0, docRes.stderr);
+  assert.match(docRes.stdout, /Invariants: 5\/5 passed/);
+
+  // Break mirrorDirs
+  writeFileSync(join(f.root, '.claude/skills/demo/SKILL.md'), 'drifted\n');
+  const failMirror = f.run('check');
+  assert.notEqual(failMirror.status, 0);
+  assert.match(failMirror.stderr, /mirrorDirs mismatch|content differs/);
+  writeFileSync(join(f.root, '.claude/skills/demo/SKILL.md'), 'same\n');
+
+  // Break zeroDependencies
+  writeFileSync(join(f.root, 'package.json'), JSON.stringify({ dependencies: { lodash: '^4.0.0' } }));
+  const failDeps = f.run('check');
+  assert.notEqual(failDeps.status, 0);
+  assert.match(failDeps.stderr, /zeroDependencies/);
+  writeFileSync(join(f.root, 'package.json'), JSON.stringify({ dependencies: {} }));
+
+  // Break noSecretsPatterns
+  writeFileSync(join(f.root, 'leak.txt'), 'token=ntn_test_12345678\n');
+  f.git('add', 'leak.txt');
+  const failSecret = f.run('check');
+  assert.notEqual(failSecret.status, 0);
+  assert.match(failSecret.stderr, /noSecretsPatterns/);
+});
+
+test('T2.1: lint catches placeholders, open questions, task verbs, vague words, and uncovered AC# IDs', (t) => {
+  const f = fixture(t, '', [], { tracker: 'local', requireReview: false });
+  const planPath = join(f.root, 'docs/plans/FO-Plan-Test.plan.md');
+  writeFileSync(
+    planPath,
+    [
+      '---',
+      'title: Plan - Feature: Lint Target',
+      'status: draft',
+      '---',
+      '# Lint Target',
+      '',
+      '## Summary',
+      'Test lint diagnostics.',
+      '',
+      '## Open questions',
+      '- [ ] Unresolved assumption?',
+      '',
+      '## Acceptance criteria',
+      '- [ ] AC1: Implement parser cleanly',
+      '- [ ] AC2: Output is valid JSON',
+      '',
+      '## Steps',
+      '- [ ] Build parser (AC1)',
+      '',
+      '## Risks',
+      '<Pre-mortem: placeholder>',
+      '',
+      '## Out of scope',
+      'Nothing else.',
+      '',
+    ].join('\n'),
+  );
+
+  // lint --json reports errors + warnings + uncoveredAc
+  const lintJson = f.run('lint', ['--json']);
+  assert.notEqual(lintJson.status, 0);
+  const parsed = JSON.parse(lintJson.stdout);
+  assert.equal(parsed.ok, false);
+  assert.ok(parsed.errors.some((e) => /Open questions/i.test(e)));
+  assert.ok(parsed.errors.some((e) => /Risks.*placeholder/i.test(e)));
+  assert.ok(parsed.warnings.some((w) => /task verb/i.test(w)));
+  assert.ok(parsed.warnings.some((w) => /vague/i.test(w)));
+  assert.deepEqual(parsed.uncoveredAc, ['AC2']);
+
+  // create aborts when lint has errors
+  const createFail = f.run('create', ['--agent', 'Gemini']);
+  assert.notEqual(createFail.status, 0);
+  assert.match(createFail.stderr, /plan lint failed/);
+
+  // Fix errors & warnings -> lint --strict passes
+  writeFileSync(
+    planPath,
+    [
+      '---',
+      'title: Plan - Feature: Lint Target',
+      'status: draft',
+      '---',
+      '# Lint Target',
+      '',
+      '## Summary',
+      'Test lint diagnostics.',
+      '',
+      '## Open questions',
+      'None',
+      '',
+      '## Acceptance criteria',
+      '- [ ] AC1: WHEN input is valid THE SYSTEM SHALL parse fields',
+      '- [ ] AC2: Output is valid JSON',
+      '',
+      '## Steps',
+      '- [ ] Build parser (AC1, AC2)',
+      '',
+      '## Risks',
+      'Malformed input returns exit 1.',
+      '',
+      '## Out of scope',
+      'Nothing else.',
+      '',
+    ].join('\n'),
+  );
+  const lintStrict = f.run('lint', ['--strict']);
+  assert.equal(lintStrict.status, 0, lintStrict.stderr);
+  assert.match(lintStrict.stdout, /Plan lint clean/);
 });

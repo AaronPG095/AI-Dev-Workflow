@@ -44,6 +44,9 @@
       "verifyTier": "test"
     },
     "requireReview": false,
+    "invariants": {
+      "mirrorDirs": [[".agents/skills", ".claude/skills"]]
+    },
     "appetite": {
       "S": { "maxLines": 150, "maxFiles": 5 },
       "M": { "maxLines": 450, "maxFiles": 12 },
