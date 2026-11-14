@@ -1,7 +1,7 @@
 ---
 title: Plan - Feature: Versioning And Release Trains
 ticket: local://ADW:ADW-Plan-Versioning-And-Release-Trains-2026-11
-status: in-progress
+status: shipped
 priority: high
 state: flow
 due: 
@@ -15,6 +15,7 @@ reviewedBy: Gemini
 reviewVerdict: pass
 reviewSelfReason: Single-session approved implementation verified with 87 hermetic tests
 reviewFingerprint: 8d9cad958a2b50565b626374572e50e32183fae63e9cbf934500331c34c37849
+pr: https://github.com/AaronPG095/AI-Dev-Workflow/pull/33
 ---
 # Versioning And Release Trains
 
