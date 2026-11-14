@@ -2920,7 +2920,7 @@ test('T1.5: runInvariants enforces mirrorDirs, readmeCliSync, zeroDependencies, 
       'new', 'prime', 'tick', 'defer', 'step', 'checkpoint', 'run', 'create', 'start',
       'log', 'handoff', 'resume', 'pack', 'review', 'check', 'lint', 'ship', 'pr', 'done',
       'overview', 'hook', 'adr', 'exec', 'wt', 'recall', 'archive', 'doctor', 'verify',
-      'hygiene', 'switch', 'split', 'fleet', 'wave',
+      'hygiene', 'switch', 'split', 'fleet', 'wave', 'lesson', 'stats',
     ].join(' '),
   );
   writeFileSync(join(f.root, 'package.json'), JSON.stringify({ name: 'test', dependencies: {} }));
@@ -3044,4 +3044,209 @@ test('T2.1: lint catches placeholders, open questions, task verbs, vague words, 
   const lintStrict = f.run('lint', ['--strict']);
   assert.equal(lintStrict.status, 0, lintStrict.stderr);
   assert.match(lintStrict.stdout, /Plan lint clean/);
+});
+
+test('T2.2: stats aggregates active/archive plans, cycle time median/p90, review/deferral/retry metrics, and 14d escaped defects', (t) => {
+  const f = fixture(t, '', [], { tracker: 'local', requireReview: false });
+  f.git('init', '-b', 'main');
+  f.git('config', 'user.name', 'Test');
+  f.git('config', 'user.email', 'test@example.invalid');
+
+  const dayIso = (daysAgo) =>
+    new Date(Date.now() - daysAgo * 86400000).toISOString().slice(0, 10);
+
+  // Clean out default FO-Plan-Test so counts match fixture plans cleanly
+  rmSync(join(f.root, 'docs/plans/FO-Plan-Test.plan.md'));
+  mkdirSync(join(f.root, 'docs/plans/archive/2026-11'), { recursive: true });
+  mkdirSync(join(f.root, 'src'), { recursive: true });
+
+  // Feature plan #1 (archived, 2d cycle time, block + pass review, 1 deferral)
+  writeFileSync(join(f.root, 'src/parser.js'), 'export const parse = () => 1;\n');
+  writeFileSync(
+    join(f.root, 'docs/plans/archive/2026-11/FO-Plan-Feat1.plan.md'),
+    [
+      '---',
+      'title: Plan - Feature: Parser V1',
+      'ticket: local://FO:FO-Plan-Feat1',
+      'status: done',
+      `startedAt: ${dayIso(10)}`,
+      `completedAt: ${dayIso(8)}`,
+      'retryCount: 2',
+      '---',
+      '# Parser V1',
+      '',
+      '## Summary',
+      'Initial parser.',
+      '',
+      '## Acceptance criteria',
+      '- [x] Parses numbers verified: test passes',
+      '- [ ] Handles streaming deferred: phase 2',
+      '',
+      '## Steps',
+      '- [x] Add parser',
+      '',
+      '## Progress log',
+      '- 2026-11-01 10:00 UTC, Codex (review: block): missing edge case',
+      '- 2026-11-01 11:00 UTC, Claude (review: pass): fixed [self-review: solo]',
+      '',
+    ].join('\n'),
+  );
+  f.git('add', '.');
+  f.git('commit', '-m', 'feat: Parser V1', '--date', `${dayIso(8)}T12:00:00Z`);
+
+  // Bug plan within 14d touching src/parser.js -> potential escaped defect!
+  writeFileSync(join(f.root, 'src/parser.js'), 'export const parse = () => 2;\n');
+  writeFileSync(
+    join(f.root, 'docs/plans/FO-Plan-FixParser.plan.md'),
+    [
+      '---',
+      'title: Debug - Bug: Fix Parser Crash',
+      'ticket: local://FO:FO-Plan-FixParser',
+      'status: in-progress',
+      `startedAt: ${dayIso(4)}`,
+      '---',
+      '# Fix Parser Crash',
+      '',
+      '## Summary',
+      'Fixes crash in parser.',
+      '',
+      '## Acceptance criteria',
+      '- [x] No crash verified: test',
+      '',
+      '## Steps',
+      '- [x] Fix bug',
+      '',
+      '## Progress log',
+      '- 2026-11-05 09:00 UTC, Gemini (review: warn): check callers',
+      '',
+    ].join('\n'),
+  );
+  f.git('add', '.');
+  f.git('commit', '-m', 'fix: Fix Parser Crash', '--date', `${dayIso(4)}T12:00:00Z`);
+
+  // Feature plan #2 + immediate Revert commit on src/cache.js -> escaped defect #2
+  writeFileSync(join(f.root, 'src/cache.js'), 'export const cache = true;\n');
+  writeFileSync(
+    join(f.root, 'docs/plans/FO-Plan-Feat2.plan.md'),
+    [
+      '---',
+      'title: Plan - Feature: Cache Layer',
+      'ticket: local://FO:FO-Plan-Feat2',
+      'status: done',
+      `startedAt: ${dayIso(12)}`,
+      `completedAt: ${dayIso(6)}`,
+      '---',
+      '# Cache Layer',
+      '',
+      '## Summary',
+      'Add cache.',
+      '',
+      '## Acceptance criteria',
+      '- [x] Cached verified: test',
+      '',
+      '## Steps',
+      '- [x] Write cache',
+      '',
+    ].join('\n'),
+  );
+  f.git('add', '.');
+  f.git('commit', '-m', 'feat: Cache Layer', '--date', `${dayIso(6)}T12:00:00Z`);
+
+  // Revert touching src/cache.js within 14d of Feat2
+  writeFileSync(join(f.root, 'src/cache.js'), 'export const cache = false;\n');
+  f.git('add', 'src/cache.js');
+  f.git('commit', '-m', 'Revert "feat: Cache Layer"', '--date', `${dayIso(2)}T12:00:00Z`);
+
+  const statsJson = f.run('stats', ['--json'], [], { omitPlan: true });
+  assert.equal(statsJson.status, 0, statsJson.stderr);
+  const s = JSON.parse(statsJson.stdout);
+
+  assert.equal(s.totalPlans, 3);
+  assert.equal(s.byStatus.done, 2);
+  assert.equal(s.byStatus['in-progress'], 1);
+  assert.equal(s.byType.Feature, 2);
+  assert.equal(s.byType.Bug, 1);
+  assert.equal(s.cycleTimeDays.sampleSize, 2);
+  assert.equal(s.cycleTimeDays.median, 4); // median of [2, 6]
+  assert.equal(s.cycleTimeDays.p90, 6);
+  assert.equal(s.reviews.total, 3);
+  assert.equal(s.reviews.pass, 1);
+  assert.equal(s.reviews.warn, 1);
+  assert.equal(s.reviews.block, 1);
+  assert.equal(s.reviews.selfReviews, 1);
+  assert.equal(s.checkboxes.deferred, 1);
+  assert.equal(s.retries.totalRetries, 2);
+  assert.ok(
+    s.escapedDefects.some((d) => d.kind === 'bug-plan' && d.sourcePlan.includes('Feat1')),
+    `Expected bug-plan escaped defect for Feat1, got: ${JSON.stringify(s.escapedDefects)}`,
+  );
+  assert.ok(
+    s.escapedDefects.some((d) => d.kind === 'revert' && d.sourcePlan.includes('Feat2')),
+    `Expected revert escaped defect for Feat2, got: ${JSON.stringify(s.escapedDefects)}`,
+  );
+
+  const statsText = f.run('stats', [], [], { omitPlan: true });
+  assert.equal(statsText.status, 0, statsText.stderr);
+  assert.match(statsText.stdout, /Escaped defects: 2 potential within 14d/);
+});
+
+test('T2.7: lesson capture, ship --retro, recall --lessons, review --prompt, and step reviewer lessons', (t) => {
+  const f = fixture(
+    t,
+    'ticket: local://FO:FO-Plan-Test\nreviewVerdict: pass\nreviewedBy: Other\n',
+    [],
+    { tracker: 'local', requireReview: false, verifyCommand: 'node -e "process.exit(0)"' },
+  );
+  // Close out plan so ship passes
+  const planPath = join(f.root, 'docs/plans/FO-Plan-Test.plan.md');
+  writeFileSync(
+    planPath,
+    readFileSync(planPath, 'utf8')
+      .replace('## Summary', '## Summary\nGuard cache timeout.\n')
+      .replace('- [ ] First criterion', '- [x] First criterion verified: test')
+      .replace('- [ ] First step', '- [x] First step'),
+  );
+
+  // 1. Capture standalone lesson
+  const l1 = f.run(
+    'lesson',
+    ['Always escape PowerShell && in scripts', '--tags', 'windows,cli', '--plan', 'docs/plans/FO-Plan-Test.plan.md'],
+    [],
+    { omitPlan: true },
+  );
+  assert.equal(l1.status, 0, l1.stderr);
+  const lessonsContent = readFileSync(join(f.root, 'docs/lessons.md'), 'utf8');
+  assert.match(lessonsContent, /windows, cli · docs\/plans\/FO-Plan-Test\.plan\.md \| Always escape PowerShell && in scripts/);
+
+  // 2. ship --retro appends second lesson
+  const shipRes = f.run('ship', [
+    '--pr',
+    'https://github.com/example/repo/pull/99',
+    '--retro',
+    'Cache timeout tests need fake timers to avoid flake',
+  ]);
+  assert.equal(shipRes.status, 0, shipRes.stderr);
+  const lessonsAfterShip = readFileSync(join(f.root, 'docs/lessons.md'), 'utf8');
+  assert.match(lessonsAfterShip, /Cache timeout tests need fake timers to avoid flake/);
+
+  // 3. recall searches docs/lessons.md and recall --lessons filters strictly
+  const recallAll = f.run('recall', ['Cache'], [], { omitPlan: true });
+  assert.equal(recallAll.status, 0, recallAll.stderr);
+  assert.match(recallAll.stdout, /\[Lesson\] docs\/lessons\.md/);
+
+  const recallLessonsOnly = f.run('recall', ['--lessons'], [], { omitPlan: true });
+  assert.equal(recallLessonsOnly.status, 0, recallLessonsOnly.stderr);
+  assert.match(recallLessonsOnly.stdout, /\[Lesson\] docs\/lessons\.md/);
+  assert.doesNotMatch(recallLessonsOnly.stdout, /\[Plan\]/);
+
+  // 4. review --prompt and step --role reviewer surface relevant lessons
+  const promptRes = f.run('review', ['--prompt']);
+  assert.equal(promptRes.status, 0, promptRes.stderr);
+  assert.match(promptRes.stdout, /## Recent & Relevant Lessons/);
+  assert.match(promptRes.stdout, /Cache timeout tests need fake timers/);
+
+  const stepReviewer = f.run('step', ['--role', 'reviewer']);
+  assert.equal(stepReviewer.status, 0, stepReviewer.stderr);
+  assert.match(stepReviewer.stdout, /## Recent & Relevant Lessons/);
+  assert.match(stepReviewer.stdout, /Cache timeout tests need fake timers/);
 });

@@ -150,6 +150,7 @@ const BOOLEAN_FLAGS = new Set([
   '--no-review',
   '--check',
   '--prune',
+  '--lessons',
 ]);
 for (let i = 0; i < rest.length; i++) {
   const a = rest[i];
@@ -1615,6 +1616,421 @@ function resolveStepContext(plan, { tier, maxRetries: maxRetriesOpt } = {}) {
   };
 }
 
+function loadLessons(dir = repoRoot) {
+  const lessonsPath = join(dir, 'docs', 'lessons.md');
+  if (!existsSync(lessonsPath)) return [];
+  const raw = readFileSync(lessonsPath, 'utf8');
+  const lines = raw.split('\n');
+  const entries = [];
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = lines[i].trim();
+    if (!trimmed.startsWith('- ')) continue;
+    const m = trimmed.match(/^-\s+(\d{4}-\d{2}-\d{2})\s*\|\s*([^|]*)\|\s*(.+)$/);
+    if (m) {
+      entries.push({
+        date: m[1].trim(),
+        meta: m[2].trim(),
+        text: m[3].trim(),
+        line: i + 1,
+        raw: trimmed,
+      });
+    } else {
+      entries.push({
+        date: '',
+        meta: 'general',
+        text: trimmed.slice(2).trim(),
+        line: i + 1,
+        raw: trimmed,
+      });
+    }
+  }
+  return entries;
+}
+
+function appendLesson({ text, tags = [], planRel = '', dir = repoRoot }) {
+  const cleanText = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!cleanText) fail('lesson text cannot be empty');
+  const tagList = (Array.isArray(tags) ? tags : String(tags || '').split(','))
+    .map((t) => t.trim())
+    .filter(Boolean);
+  const metaParts = [];
+  if (tagList.length) metaParts.push(tagList.join(', '));
+  if (planRel) metaParts.push(planRel.replace(/\\/g, '/'));
+  const metaCol = metaParts.join(' · ') || 'general';
+  const entryLine = `- ${today()} | ${metaCol} | ${cleanText}`;
+
+  const lessonsPath = join(dir, 'docs', 'lessons.md');
+  mkdirSync(dirname(lessonsPath), { recursive: true });
+  if (!existsSync(lessonsPath)) {
+    const header = [
+      '# Workflow Lessons',
+      '',
+      '<!-- Captured via `node scripts/ticket.mjs lesson` or `--retro` on `ship`/`pr`. Surfaced by `recall`, `review --prompt`, and `step --role reviewer`. -->',
+      '',
+    ].join('\n');
+    writeFileSync(lessonsPath, `${header}${entryLine}\n`, 'utf8');
+  } else {
+    const existing = readFileSync(lessonsPath, 'utf8').trimEnd();
+    writeFileSync(lessonsPath, `${existing}\n${entryLine}\n`, 'utf8');
+  }
+  return { path: lessonsPath, line: entryLine };
+}
+
+function selectRelevantLessons(plan, { dir = repoRoot, limit = 5 } = {}) {
+  const entries = loadLessons(dir);
+  if (!entries.length) return [];
+  const stopWords = new Set(['with', 'from', 'that', 'this', 'when', 'shall', 'system', 'none', 'plan', 'step']);
+  const sourceText = [
+    plan?.meta?.title || '',
+    section(plan?.body || '', 'Summary'),
+    section(plan?.body || '', 'Context'),
+    section(plan?.body || '', 'Risks'),
+  ]
+    .join(' ')
+    .toLowerCase();
+  const keywords = new Set(
+    (sourceText.match(/[a-z0-9_-]{4,}/g) || []).filter((w) => !stopWords.has(w)),
+  );
+
+  const scored = entries.map((entry, idx) => {
+    const hay = `${entry.meta} ${entry.text}`.toLowerCase();
+    let score = 0;
+    for (const kw of keywords) {
+      if (hay.includes(kw)) score += 1;
+    }
+    return { entry, score, idx };
+  });
+
+  scored.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    return b.idx - a.idx;
+  });
+
+  return scored.slice(0, limit).map((s) => s.entry);
+}
+
+function scanPlansIncludingArchive(dir = repoRoot) {
+  const plansRoot = join(dir, config.plansDir || 'docs/plans');
+  if (!existsSync(plansRoot)) return [];
+  const results = [];
+  function walk(current) {
+    for (const entry of readdirSync(current, { withFileTypes: true })) {
+      const full = join(current, entry.name);
+      if (entry.isDirectory()) {
+        walk(full);
+      } else if (
+        entry.isFile() &&
+        entry.name.endsWith('.plan.md') &&
+        !entry.name.startsWith('_')
+      ) {
+        const raw = readFileSync(full, 'utf8');
+        if (!raw.startsWith('---')) continue;
+        results.push(worktreePlan(full, dir));
+      }
+    }
+  }
+  walk(plansRoot);
+  return results;
+}
+
+function parsePlanTypeFromMeta(meta) {
+  const title = (meta?.title || '').trim();
+  const m = title.match(/^(?:Plan|Debug|Ask)\s*-\s*([^:]+):/i);
+  if (m) return m[1].trim();
+  if (/^Debug\b/i.test(title)) return 'Debug';
+  return 'Unknown';
+}
+
+function parseIsoDayOrMs(value) {
+  const s = String(value || '').trim();
+  if (!s) return null;
+  const ms = Date.parse(s.length === 10 ? `${s}T00:00:00Z` : s);
+  return Number.isNaN(ms) ? null : ms;
+}
+
+function parseGitCommitLog(dir, days = 90) {
+  const args = ['log', '--name-only', '--format=__COMMIT__%H|%cI|%s'];
+  if (days > 0) args.push(`--since=${days} days ago`);
+  let out = '';
+  try {
+    out = worktreeGit(dir, args);
+  } catch {
+    return [];
+  }
+  const commits = [];
+  let cur = null;
+  for (const rawLine of out.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (line.startsWith('__COMMIT__')) {
+      if (cur) commits.push(cur);
+      const rest = line.slice('__COMMIT__'.length);
+      const firstSep = rest.indexOf('|');
+      const secondSep = rest.indexOf('|', firstSep + 1);
+      const hash = firstSep >= 0 ? rest.slice(0, firstSep) : rest;
+      const dateStr =
+        firstSep >= 0 && secondSep >= 0 ? rest.slice(firstSep + 1, secondSep) : '';
+      const subject = secondSep >= 0 ? rest.slice(secondSep + 1) : '';
+      cur = {
+        hash,
+        dateMs: parseIsoDayOrMs(dateStr) || 0,
+        subject,
+        files: [],
+      };
+    } else if (line && cur) {
+      cur.files.push(line.replace(/\\/g, '/'));
+    }
+  }
+  if (cur) commits.push(cur);
+  return commits;
+}
+
+function percentile(sortedNums, p) {
+  if (!sortedNums.length) return null;
+  if (sortedNums.length === 1) return sortedNums[0];
+  if (p === 0.5) {
+    const mid = Math.floor(sortedNums.length / 2);
+    return sortedNums.length % 2 === 1
+      ? sortedNums[mid]
+      : Number(((sortedNums[mid - 1] + sortedNums[mid]) / 2).toFixed(2));
+  }
+  const idx = Math.min(sortedNums.length - 1, Math.ceil(p * sortedNums.length) - 1);
+  return sortedNums[idx];
+}
+
+function round1(n) {
+  return Number(n.toFixed(1));
+}
+
+function collectRepoStats(dir = repoRoot, { days = 90, filterDays = false } = {}) {
+  const allFoundPlans = scanPlansIncludingArchive(dir);
+  const commits = parseGitCommitLog(dir, days);
+  const nowMs = Date.now();
+  const cutoffMs = days > 0 ? nowMs - days * 86400000 : 0;
+
+  const commitDateByFile = new Map();
+  for (const c of commits) {
+    for (const f of c.files) {
+      const prev = commitDateByFile.get(f);
+      if (!prev || c.dateMs > prev) commitDateByFile.set(f, c.dateMs);
+    }
+  }
+
+  const plans = filterDays && days > 0
+    ? allFoundPlans.filter((p) => {
+        const d =
+          parseIsoDayOrMs(p.meta.completedAt) ||
+          parseIsoDayOrMs(p.meta.startedAt) ||
+          commitDateByFile.get(p.rel);
+        return !d || d >= cutoffMs;
+      })
+    : allFoundPlans;
+
+  const byStatus = {};
+  const byType = {};
+  const cycleTimes = [];
+  let reviewsTotal = 0;
+  let reviewsPass = 0;
+  let reviewsWarn = 0;
+  let reviewsBlock = 0;
+  let selfReviews = 0;
+  let totalItems = 0;
+  let checkedItems = 0;
+  let deferredItems = 0;
+  let totalRetries = 0;
+  let circuitBreakers = 0;
+
+  const enrichedPlans = [];
+
+  for (const p of plans) {
+    const st = (p.meta.status || 'draft').toLowerCase();
+    byStatus[st] = (byStatus[st] || 0) + 1;
+
+    const pType = parsePlanTypeFromMeta(p.meta);
+    byType[pType] = (byType[pType] || 0) + 1;
+
+    const startMs = parseIsoDayOrMs(p.meta.startedAt);
+    const endMs =
+      parseIsoDayOrMs(p.meta.completedAt) ||
+      (st === 'done' || st === 'shipped' || st === 'merged'
+        ? commitDateByFile.get(p.rel) || null
+        : null);
+    if (startMs && endMs && endMs >= startMs) {
+      cycleTimes.push(Number(((endMs - startMs) / 86400000).toFixed(2)));
+    }
+
+    const logText = section(p.body, 'Progress log') || '';
+    const reviewMatches = [
+      ...logText.matchAll(/\(review:\s*(pass|warn|block)[^)]*\)/gi),
+    ];
+    if (reviewMatches.length) {
+      for (const m of reviewMatches) {
+        reviewsTotal += 1;
+        const v = m[1].toLowerCase();
+        if (v === 'pass') reviewsPass += 1;
+        else if (v === 'warn') reviewsWarn += 1;
+        else if (v === 'block') reviewsBlock += 1;
+      }
+    } else if (p.meta.reviewVerdict) {
+      reviewsTotal += 1;
+      const v = p.meta.reviewVerdict.toLowerCase();
+      if (v === 'pass') reviewsPass += 1;
+      else if (v === 'warn') reviewsWarn += 1;
+      else if (v === 'block') reviewsBlock += 1;
+    }
+
+    const selfMatches = logText.match(/\[self-review:/gi) || [];
+    if (selfMatches.length) {
+      selfReviews += selfMatches.length;
+    } else if (p.meta.reviewSelfReason) {
+      selfReviews += 1;
+    }
+
+    const { items } = findCheckboxes(p.body);
+    totalItems += items.length;
+    for (const it of items) {
+      if (it.isChecked) checkedItems += 1;
+      else if (/\sdeferred:\s*\S/i.test(it.text)) deferredItems += 1;
+    }
+
+    const metaRetries = parseInt(p.meta.retryCount || '0', 10) || 0;
+    totalRetries += metaRetries;
+    if (st === 'blocked' || /circuit[- ]breaker/i.test(logText)) {
+      circuitBreakers += 1;
+    }
+
+    // Collect commits and code files associated with this plan for escaped-defect correlation
+    const matchingCommitIdxs = [];
+    for (let i = 0; i < commits.length; i++) {
+      const c = commits[i];
+      if (
+        c.files.includes(p.rel) ||
+        (p.meta.branch && c.subject.includes(p.meta.branch))
+      ) {
+        matchingCommitIdxs.push(i);
+      }
+    }
+    const touchedCodeFiles = new Set();
+    const plansPrefix = `${(config.plansDir || 'docs/plans').replace(/\\/g, '/')}/`;
+    if (matchingCommitIdxs.length) {
+      const minIdx = Math.min(...matchingCommitIdxs);
+      const maxIdx = Math.max(...matchingCommitIdxs);
+      // Include direct commits touching the plan and sequential commits between first & last plan commit
+      const spanTouchesOtherPlans = commits
+        .slice(minIdx, maxIdx + 1)
+        .some((c) => c.files.some((f) => f.endsWith('.plan.md') && f !== p.rel));
+      const slice = spanTouchesOtherPlans
+        ? matchingCommitIdxs.map((idx) => commits[idx])
+        : commits.slice(minIdx, maxIdx + 1);
+      for (const c of slice) {
+        for (const f of c.files) {
+          if (!f.startsWith(plansPrefix) && !f.endsWith('.plan.md')) {
+            touchedCodeFiles.add(f);
+          }
+        }
+      }
+    }
+
+    enrichedPlans.push({
+      plan: p,
+      type: pType,
+      status: st,
+      startMs,
+      endMs: endMs || commitDateByFile.get(p.rel) || null,
+      touchedCodeFiles,
+    });
+  }
+
+  // AC2: Escaped defect detection (14-day window after Feature/Refactor completion)
+  const escapedDefects = [];
+  const windowMs = 14 * 86400000;
+  const featurePlans = enrichedPlans.filter(
+    (ep) =>
+      /^(?:feature|refactor)$/i.test(ep.type) &&
+      ep.endMs &&
+      ep.touchedCodeFiles.size > 0,
+  );
+  const bugPlans = enrichedPlans.filter((ep) =>
+    /^(?:bug|debug)$/i.test(ep.type),
+  );
+  const revertCommits = commits.filter((c) => /^Revert\b/i.test(c.subject));
+
+  for (const fp of featurePlans) {
+    for (const bp of bugPlans) {
+      if (bp.plan.rel === fp.plan.rel) continue;
+      const bpDate = bp.startMs || bp.endMs;
+      if (!bpDate || bpDate < fp.endMs || bpDate - fp.endMs > windowMs) continue;
+      const overlap = [...bp.touchedCodeFiles].filter((f) =>
+        fp.touchedCodeFiles.has(f),
+      );
+      if (overlap.length) {
+        escapedDefects.push({
+          kind: 'bug-plan',
+          sourcePlan: fp.plan.rel,
+          defectRef: bp.plan.rel,
+          subject: bp.plan.meta.title || bp.plan.rel,
+          daysAfter: round1((bpDate - fp.endMs) / 86400000),
+          overlappingFiles: overlap,
+        });
+      }
+    }
+    for (const rc of revertCommits) {
+      if (!rc.dateMs || rc.dateMs < fp.endMs || rc.dateMs - fp.endMs > windowMs) {
+        continue;
+      }
+      const overlap = rc.files.filter((f) => fp.touchedCodeFiles.has(f));
+      if (overlap.length) {
+        escapedDefects.push({
+          kind: 'revert',
+          sourcePlan: fp.plan.rel,
+          defectRef: rc.hash.slice(0, 7),
+          subject: rc.subject,
+          daysAfter: round1((rc.dateMs - fp.endMs) / 86400000),
+          overlappingFiles: overlap,
+        });
+      }
+    }
+  }
+
+  cycleTimes.sort((a, b) => a - b);
+  return {
+    repo: basename(dir),
+    dir,
+    days,
+    totalPlans: plans.length,
+    byStatus,
+    byType,
+    cycleTimeDays: {
+      sampleSize: cycleTimes.length,
+      median: percentile(cycleTimes, 0.5),
+      p90: percentile(cycleTimes, 0.9),
+      samples: cycleTimes,
+    },
+    reviews: {
+      total: reviewsTotal,
+      pass: reviewsPass,
+      warn: reviewsWarn,
+      block: reviewsBlock,
+      selfReviews,
+      passRate: reviewsTotal ? round1((reviewsPass / reviewsTotal) * 100) : 0,
+      warnRate: reviewsTotal ? round1((reviewsWarn / reviewsTotal) * 100) : 0,
+      blockRate: reviewsTotal ? round1((reviewsBlock / reviewsTotal) * 100) : 0,
+      selfReviewRate: reviewsTotal ? round1((selfReviews / reviewsTotal) * 100) : 0,
+    },
+    checkboxes: {
+      total: totalItems,
+      checked: checkedItems,
+      deferred: deferredItems,
+      deferralRate: totalItems ? round1((deferredItems / totalItems) * 100) : 0,
+    },
+    retries: {
+      totalRetries,
+      circuitBreakers,
+    },
+    lessonsCount: loadLessons(dir).length,
+    escapedDefects,
+  };
+}
+
 function buildStepBrief(
   plan,
   ctx,
@@ -1683,7 +2099,8 @@ function buildStepBrief(
   if (normalizedRole === 'reviewer') {
     const criteriaList =
       section(plan.body, 'Acceptance criteria') || '(none)';
-    return [
+    const lessons = selectRelevantLessons(plan, { limit: 5 });
+    const lines = [
       `# Adversarial Review Brief: ${plan.meta.title || plan.rel}`,
       `Plan: ${plan.rel} | Branch: ${plan.meta.branch || branch}`,
       '',
@@ -1693,6 +2110,15 @@ function buildStepBrief(
       '',
       '## Acceptance Criteria to Verify',
       criteriaList,
+    ];
+    if (lessons.length) {
+      lines.push(
+        '',
+        '## Recent & Relevant Lessons',
+        ...lessons.map((l) => l.raw),
+      );
+    }
+    lines.push(
       '',
       '## Evaluation Rubric',
       '- Spec Fidelity: Does the code fulfill every criterion accurately?',
@@ -1702,7 +2128,8 @@ function buildStepBrief(
       '',
       '## Verdict Command',
       `node scripts/ticket.mjs review ${plan.rel} --agent <you> --verdict <pass|warn|block> --summary "<concise findings>"`,
-    ].join('\n');
+    );
+    return lines.join('\n');
   }
 
   if (normalizedRole === 'fixer') {
@@ -3181,14 +3608,24 @@ const commands = {
         ? resolvedVerify.cmd
         : config.verifyCommand || 'npm test';
       const criteria = section(plan.body, 'Acceptance criteria') || '(none)';
+      const lessons = selectRelevantLessons(plan, { limit: 5 });
 
-      const promptText = [
+      const promptLines = [
         `# Single-Pass Review Request: ${plan.meta.title || plan.rel}`,
         `Plan: ${plan.rel} | Branch: ${branch}`,
         `Verify Command: \`${verifyCmd}\``,
         '',
         '## Acceptance Criteria to Verify',
         criteria,
+      ];
+      if (lessons.length) {
+        promptLines.push(
+          '',
+          '## Recent & Relevant Lessons',
+          ...lessons.map((l) => l.raw),
+        );
+      }
+      promptLines.push(
         '',
         '## Review Rubric',
         '1. Spec Fidelity: Does the implementation satisfy every acceptance criterion above?',
@@ -3199,9 +3636,9 @@ const commands = {
         '## Verdict Stamp Instructions',
         `Run: node scripts/ticket.mjs review ${plan.rel} --agent <you> --verdict <pass|warn|block> --summary "<concise findings>"`,
         'Or dual-pass: --standards <pass|warn|block> --spec <pass|warn|block>',
-      ].join('\n');
+      );
 
-      console.log(promptText);
+      console.log(promptLines.join('\n'));
       return;
     }
 
@@ -3399,6 +3836,11 @@ const commands = {
     if (!/^https:\/\//.test(opts.pr || ''))
       fail('ship needs --pr <pull request URL>; open the PR first.');
     await linkPullRequest(plan, opts.pr);
+    if ((opts.retro || '').trim()) {
+      const tagList = (opts.tags || 'retro').split(',').map((t) => t.trim()).filter(Boolean);
+      const res = appendLesson({ text: opts.retro, tags: tagList, planRel: plan.rel });
+      console.log(`Retro lesson recorded in docs/lessons.md: ${res.line}`);
+    }
   },
 
   async pr() {
@@ -3469,13 +3911,21 @@ const commands = {
       fail('GitHub CLI did not return a pull request URL; retry to look up the existing PR');
 
     assertPrSnapshot(branch, head);
-    const linkedHead = await linkPullRequest(plan, prUrl, { branch, head });
-    if (linkedHead !== head) pushPrCommit(branch, linkedHead);
+    let finalHead = (await linkPullRequest(plan, prUrl, { branch, head })) || head;
+    if ((opts.retro || '').trim()) {
+      const tagList = (opts.tags || 'retro').split(',').map((t) => t.trim()).filter(Boolean);
+      const res = appendLesson({ text: opts.retro, tags: tagList, planRel: plan.rel });
+      git(['add', '--', 'docs/lessons.md']);
+      git(['--literal-pathspecs', 'commit', '--only', '-m', 'chore(retro): record workflow lesson', '--', 'docs/lessons.md']);
+      finalHead = git(['rev-parse', 'HEAD']);
+      console.log(`Retro lesson recorded in docs/lessons.md: ${res.line}`);
+    }
+    if (finalHead !== head) pushPrCommit(branch, finalHead);
 
     if (opts.auto) {
       prCommand('gh', [
         'pr', 'merge', prUrl, '--auto', '--squash', '--delete-branch',
-        '--match-head-commit', linkedHead,
+        '--match-head-commit', finalHead,
       ], 'could not enable auto-merge');
       console.log(`Auto-merge enabled for ${prUrl}.`);
     }
@@ -4034,16 +4484,43 @@ const commands = {
 
   async recall() {
     const query = (opts.files.join(' ') || opts.query || '').trim();
-    if (!query) {
-      fail('usage: node scripts/ticket.mjs recall "<keyword>" [--fleet]');
+    if (!query && !opts.lessons) {
+      fail('usage: node scripts/ticket.mjs recall "<keyword>" [--lessons] [--fleet]');
     }
     const qLower = query.toLowerCase();
-    const queryTerms = qLower.split(/\s+/).filter(Boolean);
+    const queryTerms = qLower ? qLower.split(/\s+/).filter(Boolean) : [];
     const dirs = opts.fleet ? getKnownRepoDirs() : [repoRoot];
 
     const results = [];
     for (const dir of dirs) {
       const repoName = basename(dir);
+
+      const lessonEntries = loadLessons(dir);
+      if (lessonEntries.length) {
+        const matchedLessons = [];
+        for (const entry of lessonEntries) {
+          const lineLower = entry.raw.toLowerCase();
+          const lineMatches =
+            !queryTerms.length ||
+            lineLower.includes(qLower) ||
+            queryTerms.every((term) => lineLower.includes(term));
+          if (lineMatches) {
+            matchedLessons.push({ line: entry.line, text: entry.raw });
+          }
+        }
+        if (matchedLessons.length) {
+          results.push({
+            repo: repoName,
+            type: 'Lesson',
+            file: 'docs/lessons.md',
+            title: 'Workflow Lessons',
+            matches: matchedLessons.slice(0, 12),
+          });
+        }
+      }
+
+      if (opts.lessons) continue;
+
       const searchDirs = [
         join(dir, 'docs', 'decisions'),
         join(dir, 'docs', 'plans'),
@@ -4104,11 +4581,15 @@ const commands = {
     }
 
     if (!results.length) {
-      return console.log(`No records found matching "${query}".`);
+      return console.log(
+        query
+          ? `No records found matching "${query}".`
+          : 'No workflow lessons found in docs/lessons.md.',
+      );
     }
 
     console.log(
-      `=== Recall: "${query}" (${results.length} match${results.length === 1 ? '' : 'es'}${opts.fleet ? ' across fleet' : ''}) ===\n`,
+      `=== Recall${query ? `: "${query}"` : ' (lessons)'} (${results.length} match${results.length === 1 ? '' : 'es'}${opts.fleet ? ' across fleet' : ''}) ===\n`,
     );
     for (const r of results) {
       console.log(
@@ -5097,7 +5578,165 @@ const commands = {
     console.log('  node scripts/ticket.mjs wave --prune [--dry-run]');
     console.log('  node scripts/ticket.mjs step --role builder');
   },
+
+  async lesson() {
+    const textVal = (opts.files.join(' ') || opts.text || '').trim();
+    if (!textVal) {
+      fail('usage: node scripts/ticket.mjs lesson "<takeaway>" [--tags <a,b>] [--plan <path>]');
+    }
+    const tags = (opts.tags || '')
+      .split(',')
+      .map((t) => t.trim())
+      .filter(Boolean);
+    const planRel = opts.plan ? relative(repoRoot, resolve(repoRoot, opts.plan)).replace(/\\/g, '/') : '';
+    const res = appendLesson({ text: textVal, tags, planRel });
+    console.log(`Lesson recorded in docs/lessons.md: ${res.line}`);
+  },
+
+  async stats() {
+    const explicitDays = opts.days !== undefined;
+    const days = explicitDays ? Math.max(0, parseInt(opts.days, 10) || 0) : 90;
+    const dirs = opts.fleet ? getKnownRepoDirs() : [repoRoot];
+    const perRepo = dirs.map((d) => collectRepoStats(d, { days, filterDays: explicitDays }));
+
+    if (perRepo.length === 1) {
+      const s = perRepo[0];
+      if (opts.json) {
+        return console.log(JSON.stringify(s, null, 2));
+      }
+      printRepoStatsReport(s);
+      return;
+    }
+
+    const combinedStatus = {};
+    const combinedType = {};
+    const allSamples = [];
+    let totalPlans = 0;
+    let reviewsTotal = 0;
+    let reviewsPass = 0;
+    let reviewsWarn = 0;
+    let reviewsBlock = 0;
+    let selfReviews = 0;
+    let cbTotal = 0;
+    let cbChecked = 0;
+    let cbDeferred = 0;
+    let totalRetries = 0;
+    let circuitBreakers = 0;
+    let lessonsCount = 0;
+    const allEscaped = [];
+
+    for (const r of perRepo) {
+      totalPlans += r.totalPlans;
+      for (const [k, v] of Object.entries(r.byStatus)) {
+        combinedStatus[k] = (combinedStatus[k] || 0) + v;
+      }
+      for (const [k, v] of Object.entries(r.byType)) {
+        combinedType[k] = (combinedType[k] || 0) + v;
+      }
+      allSamples.push(...r.cycleTimeDays.samples);
+      reviewsTotal += r.reviews.total;
+      reviewsPass += r.reviews.pass;
+      reviewsWarn += r.reviews.warn;
+      reviewsBlock += r.reviews.block;
+      selfReviews += r.reviews.selfReviews;
+      cbTotal += r.checkboxes.total;
+      cbChecked += r.checkboxes.checked;
+      cbDeferred += r.checkboxes.deferred;
+      totalRetries += r.retries.totalRetries;
+      circuitBreakers += r.retries.circuitBreakers;
+      lessonsCount += r.lessonsCount;
+      for (const ed of r.escapedDefects) {
+        allEscaped.push({ repo: r.repo, ...ed });
+      }
+    }
+    allSamples.sort((a, b) => a - b);
+
+    const fleetSummary = {
+      fleet: true,
+      days,
+      repoCount: perRepo.length,
+      totalPlans,
+      byStatus: combinedStatus,
+      byType: combinedType,
+      cycleTimeDays: {
+        sampleSize: allSamples.length,
+        median: percentile(allSamples, 0.5),
+        p90: percentile(allSamples, 0.9),
+      },
+      reviews: {
+        total: reviewsTotal,
+        pass: reviewsPass,
+        warn: reviewsWarn,
+        block: reviewsBlock,
+        selfReviews,
+        passRate: reviewsTotal ? round1((reviewsPass / reviewsTotal) * 100) : 0,
+        warnRate: reviewsTotal ? round1((reviewsWarn / reviewsTotal) * 100) : 0,
+        blockRate: reviewsTotal ? round1((reviewsBlock / reviewsTotal) * 100) : 0,
+        selfReviewRate: reviewsTotal ? round1((selfReviews / reviewsTotal) * 100) : 0,
+      },
+      checkboxes: {
+        total: cbTotal,
+        checked: cbChecked,
+        deferred: cbDeferred,
+        deferralRate: cbTotal ? round1((cbDeferred / cbTotal) * 100) : 0,
+      },
+      retries: {
+        totalRetries,
+        circuitBreakers,
+      },
+      lessonsCount,
+      escapedDefects: allEscaped,
+      repos: perRepo,
+    };
+
+    if (opts.json) {
+      return console.log(JSON.stringify(fleetSummary, null, 2));
+    }
+    printRepoStatsReport(fleetSummary, { isFleet: true });
+  },
 };
+
+function printRepoStatsReport(s, { isFleet = false } = {}) {
+  const header = isFleet
+    ? `=== Fleet Workflow Stats (${s.repoCount} repos, window: ${s.days || 'all'}d) ===`
+    : `=== Workflow Stats: ${s.repo} (window: ${s.days || 'all'}d) ===`;
+  console.log(header);
+  const statusStr = Object.entries(s.byStatus)
+    .map(([k, v]) => `${k}=${v}`)
+    .join(', ') || 'none';
+  const typeStr = Object.entries(s.byType)
+    .map(([k, v]) => `${k}=${v}`)
+    .join(', ') || 'none';
+  console.log(`Plans:           ${s.totalPlans} (${statusStr})`);
+  console.log(`Types:           ${typeStr}`);
+  const ct = s.cycleTimeDays;
+  console.log(
+    `Cycle time:      ${ct.sampleSize ? `median ${ct.median}d, p90 ${ct.p90}d (n=${ct.sampleSize})` : 'n/a'}`,
+  );
+  const rv = s.reviews;
+  console.log(
+    `Reviews:         ${rv.total} total (pass ${rv.passRate}%, warn ${rv.warnRate}%, block ${rv.blockRate}%, self-review ${rv.selfReviewRate}%)`,
+  );
+  const cb = s.checkboxes;
+  console.log(
+    `Checkboxes:      ${cb.checked}/${cb.total} ticked, ${cb.deferred} deferred (${cb.deferralRate}%)`,
+  );
+  console.log(
+    `Retries/Breaks:  ${s.retries.totalRetries} retry(ies), ${s.retries.circuitBreakers} circuit-breaker(s)`,
+  );
+  console.log(`Lessons logged:  ${s.lessonsCount}`);
+  if (s.escapedDefects.length) {
+    console.log(`Escaped defects: ${s.escapedDefects.length} potential within 14d:`);
+    for (const ed of s.escapedDefects) {
+      const prefix = ed.repo ? `[${ed.repo}] ` : '';
+      console.log(
+        `  - ${prefix}${ed.kind}: ${ed.defectRef} -> ${ed.sourcePlan} (+${ed.daysAfter}d, files: ${ed.overlappingFiles.join(', ')})`,
+      );
+    }
+  } else {
+    console.log('Escaped defects: 0 detected');
+  }
+}
 
 if (!commands[command])
   fail(
