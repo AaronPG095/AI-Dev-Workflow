@@ -1,7 +1,7 @@
 ---
 title: Plan - Feature: Hooks Boot Ritual And Evidence Modes
 ticket: local://ADW:ADW-Plan-Hooks-Boot-Ritual-And-Evidence-Modes-2026-11
-status: in-progress
+status: shipped
 priority: 
 state: 
 due: 
@@ -14,6 +14,7 @@ startedAt: 2026-11-14
 reviewedBy: Other
 reviewVerdict: pass
 reviewFingerprint: 3e674757ebbaa6e6e75ffcb2d96a1dc583009c631c86b311fb7df672e0818c1f
+pr: https://github.com/AaronPG095/AI-Dev-Workflow/pull/31
 ---
 # Hooks Boot Ritual And Evidence Modes
 
