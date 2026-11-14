@@ -1,7 +1,7 @@
 ---
 title: Plan - Feature: Workflow Stats And Lessons
 ticket: local://ADW:ADW-Plan-Workflow-Stats-And-Lessons-2026-11
-status: in-progress
+status: shipped
 priority: 
 state: 
 due: 
@@ -14,6 +14,7 @@ startedAt: 2026-11-14
 reviewedBy: Other
 reviewVerdict: pass
 reviewFingerprint: 2c61a928f926a3663e2599fe6e00c946da35645bdf43ca12c01360f8ca94bd31
+pr: https://github.com/AaronPG095/AI-Dev-Workflow/pull/30
 ---
 # Workflow Stats And Lessons
 
