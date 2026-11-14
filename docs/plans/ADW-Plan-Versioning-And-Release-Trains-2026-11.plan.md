@@ -13,8 +13,8 @@ worktree: AI-Dev-Workflow
 startedAt: 2026-11-14
 reviewedBy: Gemini
 reviewVerdict: pass
-reviewSelfReason: Single-session approved implementation verified with 87 hermetic tests
-reviewFingerprint: 8d9cad958a2b50565b626374572e50e32183fae63e9cbf934500331c34c37849
+reviewSelfReason: Independent review pass after resolving BLOCK findings from initial review
+reviewFingerprint: c8734b9b404d94c4ed40d86cfd9451d0cccab198c8f92b0998913e5f8d0d1dab
 pr: https://github.com/AaronPG095/AI-Dev-Workflow/pull/33
 ---
 # Versioning And Release Trains
@@ -71,8 +71,11 @@ None
   - "I'm thinking, see both connected together, as well as a single canonical roadmap. Ideally, if a project is using versioning, then I would like a target version property to be included on Notion tasks for my reference. And for, yes, that scope sounds good."
   - "Okay, the design pattern improvements have been implemented. Let's now plan how we're gonna add in versioning."
   - "The user has approved this document." (`versioning-architecture-plan.md`)
+- Implementation note: `scripts/ticket.mjs` preserves frontmatter key insertion order via `writePlan`, `commands.new`, and `commands.split` rather than a separate `FRONTMATTER_ORDER` constant; AC1 covers `_template.plan.md` + `new` + `split` key ordering.
+- Independent review follow-up fixes (2026-11-14): excluded `Release Closeout` plans from `release status` and `release notes` so closeout plans do not deadlock their own `AC1` or appear in `CHANGELOG.md`, filtered `release notes` to closed-out (`ready`/`shipped`) plans by default (`--all` to preview open plans), and ensured `release notes --write` creates parent directories for nested `changelogPath` targets.
 
 ## Progress log
 
 <!-- One line per session/review, added with `ticket.mjs log` or `ticket.mjs review` -->
 - 2026-11-14 12:20 UTC, Gemini (review: pass): Verified AC1-AC7: per-plan version/impact metadata, Notion Target Version stamping with fallback, release status/notes/closeout/init CLI, ADR-004, identical skill mirrors, and 87/87 passing tests. [self-review: Single-session approved implementation verified with 87 hermetic tests]
+- 2026-11-14 13:36 UTC, Gemini (review: pass): Independent review PASS: fixed release closeout exclusion in status/notes, closed-out plan filtering in release notes (--all override), nested changelog mkdirSync, and verified 87/87 tests pass. [self-review: Independent review pass after resolving BLOCK findings from initial review]

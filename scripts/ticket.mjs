@@ -6085,6 +6085,10 @@ const commands = {
         st === 'shipped' ||
         st === 'merged' ||
         (openCheckboxes === 0 && Boolean(p.meta.pr || p.meta.reviewedBy));
+      const title = p.meta.title || basename(p.rel, '.plan.md');
+      const isCloseout =
+        /^(?:Plan\s*-\s*Process:\s*)?Release Closeout\b/i.test(title) ||
+        /(?:^|\/)[^/]*-Plan-Release-Closeout-/i.test(p.rel);
 
       let releaseState = 'planned';
       if (isClosedOut) {
@@ -6094,8 +6098,8 @@ const commands = {
       }
       return {
         rel: p.rel,
-        title: p.meta.title || basename(p.rel, '.plan.md'),
-        shortTitle: (p.meta.title || basename(p.rel, '.plan.md'))
+        title,
+        shortTitle: title
           .replace(/^(?:Plan|Debug|Ask)\s*-\s*[^:]+:\s*/i, '')
           .trim(),
         type: parsePlanTypeFromMeta(p.meta),
@@ -6103,6 +6107,7 @@ const commands = {
         releaseState,
         version: ver,
         impact: (p.meta.impact || 'none').toLowerCase(),
+        isCloseout,
         pr: p.meta.pr || '',
         ticket: p.meta.ticket || '',
         summary: section(p.body, 'Summary') || '',
@@ -6122,14 +6127,31 @@ const commands = {
       const targetVer = normalizeVer(verArg || verCfg.activeTrain);
       if (!targetVer) {
         fail(
-          'usage: node scripts/ticket.mjs release notes <version> [--write]',
+          'usage: node scripts/ticket.mjs release notes <version> [--write] [--all]',
         );
       }
-      const matching = allFound
+      const allForVer = allFound
         .map(classifyPlan)
-        .filter((p) => p.version === targetVer);
+        .filter((p) => p.version === targetVer && !p.isCloseout);
+      const closedForVer = allForVer.filter((p) =>
+        ['ready', 'shipped'].includes(p.releaseState),
+      );
+      const openForVer = allForVer.filter(
+        (p) => !['ready', 'shipped'].includes(p.releaseState),
+      );
+      const matching = opts.all ? allForVer : closedForVer;
       if (!matching.length) {
+        if (!opts.all && openForVer.length) {
+          fail(
+            `no closed-out plans found targeting version "${targetVer}" (${openForVer.length} still open; close them out or pass --all to preview)`,
+          );
+        }
         fail(`no plans found targeting version "${targetVer}"`);
+      }
+      if (!opts.all && openForVer.length) {
+        console.warn(
+          `Warning: skipping ${openForVer.length} unclosed plan(s) for ${targetVer} (${openForVer.map((p) => basename(p.rel)).join(', ')}); pass --all to include.`,
+        );
       }
 
       const added = [];
@@ -6169,6 +6191,7 @@ const commands = {
       const notesBlock = noteLines.join('\n');
 
       if (opts.write) {
+        mkdirSync(dirname(changelogFull), { recursive: true });
         if (!existsSync(changelogFull)) {
           const initCl = [
             '# Changelog',
@@ -6215,7 +6238,7 @@ const commands = {
       }
       const matching = allFound
         .map(classifyPlan)
-        .filter((p) => p.version === targetVer);
+        .filter((p) => p.version === targetVer && !p.isCloseout);
       const openPlans = matching.filter(
         (p) => p.releaseState !== 'ready' && p.releaseState !== 'shipped',
       );
@@ -6323,7 +6346,7 @@ const commands = {
     const classified = allFound
       .map(classifyPlan)
       .filter((p) => {
-        if (!p.version) return false;
+        if (!p.version || p.isCloseout) return false;
         if (!opts.all && ['none', 'internal'].includes(p.version.toLowerCase())) {
           return false;
         }

@@ -137,7 +137,7 @@ AI-Dev-Workflow/
 │   │   └── adw-hook.mjs           # Opt-in runtime hook handler (PreToolUse, PostToolUse, Stop)
 │   ├── ticket.mjs                 # Zero-dependency workflow & review CLI (Node 22+)
 │   ├── ticket.config.json         # Repository configuration (local mode default)
-│   ├── ticket.test.mjs            # 84 hermetic unit & integration tests (node:test)
+│   ├── ticket.test.mjs            # 87 hermetic unit & integration tests (node:test)
 │   ├── workflow-manifest.json     # Versioned distribution manifest for sync & installers
 │   ├── sync.mjs                   # Cross-platform sync and drift engine (--remote & local)
 │   ├── sync-repos.ps1             # PowerShell wrapper for multi-repo sync
@@ -293,8 +293,8 @@ node scripts/ticket.mjs wave --prune [--dry-run] [--all]
 # Inspect release train status across active + archived plans (shipped, ready, in-progress, planned) and docs/ROADMAP.md
 node scripts/ticket.mjs release [status] [<version>] [--json] [--all]
 
-# Generate Keep-a-Changelog Markdown section from plans targeting <version> (or write directly to CHANGELOG.md)
-node scripts/ticket.mjs release notes [<version>] [--write]
+# Generate Keep-a-Changelog Markdown section from closed-out plans targeting <version> (--all includes open plans; --write updates CHANGELOG.md)
+node scripts/ticket.mjs release notes [<version>] [--write] [--all]
 
 # Scaffold a release closeout plan for <version>
 node scripts/ticket.mjs release closeout <version> [--branch]

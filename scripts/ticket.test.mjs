@@ -3660,6 +3660,62 @@ test('T3.3: release init, status, notes (--write), closeout, and prime/resume/pa
   const lintCloseout = f.run('lint', [`docs/plans/${closeoutFile}`], [], { omitPlan: true });
   assert.equal(lintCloseout.status, 0, lintCloseout.stderr);
 
+  // 4b. release status and release notes exclude closeout plans and skip draft/open plans by default
+  writeFileSync(
+    join(f.root, 'docs/plans/FO-Plan-Draft-Future-Work-2026-11.plan.md'),
+    [
+      '---',
+      'title: Plan - Feature: Unfinished Draft Feature',
+      'ticket:',
+      'status: draft',
+      'version: 1.2.0',
+      'impact: minor',
+      '---',
+      '# Unfinished Draft Feature',
+      '',
+      '## Summary',
+      'Should not appear in CHANGELOG until closed out.',
+      '',
+      '## Acceptance criteria',
+      '- [ ] AC1: Pending',
+      '',
+      '## Steps',
+      '- [ ] Pending step (AC1)',
+      '',
+    ].join('\n'),
+  );
+  const postCloseoutStatus = f.run('release', ['status', '1.2.0', '--json'], [], { omitPlan: true });
+  assert.equal(postCloseoutStatus.status, 0, postCloseoutStatus.stderr);
+  const postCloseoutJson = JSON.parse(postCloseoutStatus.stdout);
+  assert.equal(postCloseoutJson.trains[0].totalPlans, 3); // 2 done + 1 draft; closeout excluded
+  assert.equal(postCloseoutJson.trains[0].counts.ready, 2);
+  assert.equal(postCloseoutJson.trains[0].counts.planned, 1);
+
+  const notesDefault = f.run('release', ['notes', '1.2.0'], [], { omitPlan: true });
+  assert.equal(notesDefault.status, 0, notesDefault.stderr);
+  assert.doesNotMatch(notesDefault.stdout, /Release Closeout/);
+  assert.doesNotMatch(notesDefault.stdout, /Unfinished Draft Feature/);
+  assert.match(notesDefault.stderr, /skipping 1 unclosed plan/);
+
+  const notesAll = f.run('release', ['notes', '1.2.0', '--all'], [], { omitPlan: true });
+  assert.equal(notesAll.status, 0, notesAll.stderr);
+  assert.doesNotMatch(notesAll.stdout, /Release Closeout/);
+  assert.match(notesAll.stdout, /Unfinished Draft Feature/);
+
+  // 4c. release notes --write creates nested changelogPath parent directories automatically
+  const cfgPath = join(f.root, 'scripts/ticket.config.json');
+  const prevCfg = JSON.parse(readFileSync(cfgPath, 'utf8'));
+  writeFileSync(
+    cfgPath,
+    JSON.stringify({ ...prevCfg, versioning: { ...prevCfg.versioning, changelogPath: 'docs/releases/CHANGELOG.md' } }, null, 2),
+  );
+  const nestedWrite = f.run('release', ['notes', '1.2.0', '--write'], [], { omitPlan: true });
+  assert.equal(nestedWrite.status, 0, nestedWrite.stderr);
+  assert.ok(existsSync(join(f.root, 'docs/releases/CHANGELOG.md')));
+  // Restore changelogPath & remove extra draft plan before single-plan prime/resume/pack checks
+  writeFileSync(cfgPath, JSON.stringify(prevCfg, null, 2));
+  rmSync(join(f.root, 'docs/plans/FO-Plan-Draft-Future-Work-2026-11.plan.md'), { force: true });
+
   // 5. prime, resume, pack, doctor, and stats surface version metadata
   const primeRes = f.run('prime');
   assert.equal(primeRes.status, 0, primeRes.stderr);
