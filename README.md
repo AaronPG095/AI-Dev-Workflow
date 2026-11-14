@@ -133,9 +133,11 @@ AI-Dev-Workflow/
 │   └── plans/
 │       └── _template.plan.md      # Canonical plan template
 ├── scripts/
+│   ├── hooks/
+│   │   └── adw-hook.mjs           # Opt-in runtime hook handler (PreToolUse, PostToolUse, Stop)
 │   ├── ticket.mjs                 # Zero-dependency workflow & review CLI (Node 22+)
 │   ├── ticket.config.json         # Repository configuration (local mode default)
-│   ├── ticket.test.mjs            # 72 hermetic unit & integration tests (node:test)
+│   ├── ticket.test.mjs            # 84 hermetic unit & integration tests (node:test)
 │   ├── workflow-manifest.json     # Versioned distribution manifest for sync & installers
 │   ├── sync.mjs                   # Cross-platform sync and drift engine (--remote & local)
 │   ├── sync-repos.ps1             # PowerShell wrapper for multi-repo sync
@@ -171,24 +173,25 @@ node scripts/ticket.mjs create docs/plans/ADW-Plan-Example-2026-11.plan.md --age
 node scripts/ticket.mjs start [--create]
 
 # 3. Agent Session Ignition, Worktree Switching & Handoff
-# Prints a compact ~20-line context primer with numbered [1], [2] checkboxes for fresh chat sessions
-node scripts/ticket.mjs prime
+# Prints a compact ~20-line context primer with numbered [1], [2] checkboxes (--verify runs fast/test baseline health check first)
+node scripts/ticket.mjs prime [--verify]
 
 # Instant context switching into an isolated worktree with .env setup (or return to main)
 node scripts/ticket.mjs switch [<plan|branch>] [--path]
 # Shell navigation alias helper:
 cd $(node scripts/ticket.mjs switch <branch> --path)
 
-# Tick checkboxes by index or substring without editing markdown files (enforces --verified or --verify-cmd on criteria)
+# Tick checkboxes by index or substring without editing markdown files (enforces --verified or --verify-cmd on criteria; --red records failing reproduction before fixing)
 node scripts/ticket.mjs tick 1 --verified "tests pass"
 node scripts/ticket.mjs tick 1 --verify-cmd "npm test" [--evidence-type test|cmd|manual|inspect]
+node scripts/ticket.mjs tick 1 --red "node --test scripts/failing.test.mjs"
 node scripts/ticket.mjs defer 2 --reason "covered in follow-up"
 
 # Record structured handoff between AI models (Gemini -> Claude -> Codex)
 node scripts/ticket.mjs handoff --agent Gemini --done "Built parser" --next "Write tests" --open "none"
 
-# Resume session with dirty tree check and next pending action
-node scripts/ticket.mjs resume
+# Resume session with dirty tree check, optional baseline health check, and next pending action
+node scripts/ticket.mjs resume [--verify]
 
 # View active plans and branch status across all known repositories
 node scripts/ticket.mjs overview
@@ -259,9 +262,9 @@ node scripts/ticket.mjs fleet verify [--tier <name>|--all]
 # Execute command across all local repositories in parallel
 node scripts/ticket.mjs exec "git status --short"
 
-# Install, check, or remove the pure shell pre-push hook (single repo or across all known fleet repos)
+# Install, check, or remove the pre-push hook or opt-in AI client runtime hooks (.claude/settings.json -> scripts/hooks/adw-hook.mjs)
 node scripts/ticket.mjs hook install
-node scripts/ticket.mjs hook [install|uninstall|status] [--fleet]
+node scripts/ticket.mjs hook [install|uninstall|status] [--agent-hooks] [--fleet]
 
 # 7. Layer 2: Modular Agentic Coding Engine (Levels A, B, C)
 # Level A: Get the next unticked step, verify command, and retry budget
@@ -291,6 +294,11 @@ node --test scripts/ticket.test.mjs
 ```
 
 Wave uses Git's registered worktrees. A worker owns its plan after creation, and rerunning spawn preserves its progress. Dry runs leave the repository and worktrees untouched. Prune considers clean, unlocked, inactive worktrees under the primary checkout's `.worktrees` directory.
+
+### Runtime Hooks & Boot Verification Config (`scripts/ticket.config.json`)
+- `bootVerifyTier`: Verification tier executed by `prime --verify` and `resume --verify` (defaults to `fast`, falling back to `test` or `full`).
+- `hooks.postToolVerify`: Set `true` in `ticket.config.json` to run bounded `fast`/`test` verification after edit tools in `scripts/hooks/adw-hook.mjs post-tool`.
+- `hooks.postToolStrict`: Set `true` to exit `2` (blocking) when `post-tool` verification fails instead of warning cleanly.
 
 
 ---

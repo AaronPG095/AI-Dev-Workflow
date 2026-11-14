@@ -4,6 +4,7 @@
     "scripts/workflow-manifest.json",
     "scripts/ticket.mjs",
     "scripts/ticket.test.mjs",
+    "scripts/hooks/adw-hook.mjs",
     "scripts/sync.mjs",
     "scripts/sync-repos.ps1",
     "scripts/install.ps1",
