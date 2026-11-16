@@ -1,7 +1,7 @@
 ---
 title: Plan - Process: Streamline GitHub Actions Workflows
 ticket: local://ADW:ADW-Plan-Streamline-GitHub-Actions-Workflows-2026-11
-status: planned
+status: in-progress
 priority: 
 state: 
 due: 
@@ -10,6 +10,13 @@ version: none
 impact: none
 devTicketKey: ADW:ADW-Plan-Streamline-GitHub-Actions-Workflows-2026-11
 agent: Gemini
+branch: gemini/streamline-github-actions-workflows
+worktree: AI-Dev-Workflow
+startedAt: 2026-11-16
+reviewedBy: Gemini
+reviewVerdict: pass
+reviewSelfReason: Streamlined workflow changes verified with 87/87 tests and 4/4 invariants
+reviewFingerprint: 27de14921c946d896fccefb4f14767d5ce9708e97d8542bd6cd5acec0be0cd95
 ---
 # Streamline GitHub Actions Workflows
 
@@ -27,22 +34,22 @@ None
 
 ## Acceptance criteria
 
-- [ ] AC1: .github/workflows/workflow-sync.yml is removed from the repository
-- [ ] manifest
-- [ ] WORKFLOW_FILES
-- [ ] and docs.
-- [ ] AC2: .github/workflows/plan-check.yml runs ci-check on all PRs and runs ticket.test.mjs only when scripts/ticket.mjs or scripts/ticket.test.mjs changes.
-- [ ] AC3: node --test scripts/ticket.test.mjs and node scripts/ticket.mjs check pass with 4/4 invariants.
+- [x] AC1: .github/workflows/workflow-sync.yml is removed from the repository verified(test): git rm .github/workflows/workflow-sync.yml deleted workflow-sync.yml cleanly
+- [x] manifest verified(test): scripts/workflow-manifest.json copy list no longer contains workflow-sync.yml
+- [x] WORKFLOW_FILES verified(test): WORKFLOW_FILES in ticket.mjs and adw-hook.mjs no longer lists workflow-sync.yml
+- [x] and docs. verified(test): README.md and setup-other-repos.md updated; 4/4 invariants pass
+- [x] AC2: .github/workflows/plan-check.yml runs ci-check on all PRs and runs ticket.test.mjs only when scripts/ticket.mjs or scripts/ticket.test.mjs changes. verified(test): .github/workflows/plan-check.yml gates ticket.test.mjs behind git diff check on ticket.mjs/ticket.test.mjs
+- [x] AC3: node --test scripts/ticket.test.mjs and node scripts/ticket.mjs check pass with 4/4 invariants. verified(test): node --test scripts/ticket.test.mjs passes 87/87 and ticket.mjs check passes
 
 ## Steps
 
-- [ ] Remove workflow-sync.yml and references in manifest
-- [ ] ticket.mjs
-- [ ] adw-hook.mjs
-- [ ] README.md
-- [ ] and setup-other-repos.md (AC1)
-- [ ] Update .github/workflows/plan-check.yml to conditionally run ticket.test.mjs only on ticket CLI/test changes (AC2)
-- [ ] Run node --test scripts/ticket.test.mjs and node scripts/ticket.mjs check (AC3)
+- [x] Remove workflow-sync.yml and references in manifest
+- [x] ticket.mjs
+- [x] adw-hook.mjs
+- [x] README.md
+- [x] and setup-other-repos.md (AC1)
+- [x] Update .github/workflows/plan-check.yml to conditionally run ticket.test.mjs only on ticket CLI/test changes (AC2)
+- [x] Run node --test scripts/ticket.test.mjs and node scripts/ticket.mjs check (AC3)
 
 ## Risks
 
@@ -59,3 +66,4 @@ ci.yml in AI-Dev-Workflow and ticket-done.yml merge closure.
 ## Progress log
 
 <!-- One line per session/review, added with `ticket.mjs log` or `ticket.mjs review` -->
+- 2026-11-16 11:36 UTC, Gemini (review: pass): Removed weekly workflow-sync.yml across bundle/docs and gated ticket.test.mjs in plan-check.yml to modified script changes; 87/87 tests pass. [self-review: Streamlined workflow changes verified with 87/87 tests and 4/4 invariants]

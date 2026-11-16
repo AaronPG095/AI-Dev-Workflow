@@ -123,8 +123,7 @@ AI-Dev-Workflow/
 │   ├── workflows/
 │   │   ├── ci.yml                 # Runs the test suite on push/PR
 │   │   ├── plan-check.yml         # Blocks PRs with unclosed plans or unverified criteria
-│   │   ├── ticket-done.yml        # Closes Notion tickets from the full merged PR file list
-│   │   └── workflow-sync.yml      # Weekly automated drift check and sync PR generator
+│   │   └── ticket-done.yml        # Closes Notion tickets from the full merged PR file list
 │   └── pull_request_template.md
 ├── docs/
 │   ├── decisions/                 # In-repo Architecture Decision Records (ADRs)
@@ -347,9 +346,5 @@ When developing locally with sibling repositories in the same parent folder:
 Both installers and `sync.mjs` use the same versioned manifest. Remote sync resolves its ref to one Git commit before loading files. Use `--branch <commit-sha>` for an exact release. Existing `scripts/ticket.config.json` files are preserved. To upgrade an older copy without the manifest, run the current installer from GitHub in the target repo.
 
 `--check` exits with **0** when current, **1** for managed-file drift or absence, and **2** for an incomplete check such as missing config or a failed download. `--check --bundle-only` checks the manifest-managed files without checking generated agent documentation. Doctor uses this mode against the local bundle.
-
-### Scheduled drift check (`workflow-sync.yml`)
-
-The downstream workflow checks weekly or via `workflow_dispatch`. If it reports drift, run sync on a branch and open a PR with an approved plan.
 
 See [`docs/dev-workflow/setup-other-repos.md`](docs/dev-workflow/setup-other-repos.md) for full details on Local vs. Notion configuration.
