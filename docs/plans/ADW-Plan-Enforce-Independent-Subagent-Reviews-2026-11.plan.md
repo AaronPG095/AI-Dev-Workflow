@@ -1,7 +1,7 @@
 ---
 title: Plan - Feature: Enforce Independent Subagent Reviews
 ticket: local://ADW:ADW-Plan-Enforce-Independent-Subagent-Reviews-2026-11
-status: in-progress
+status: shipped
 priority: 
 state: 
 due: 
@@ -17,6 +17,7 @@ reviewedBy: Gemini
 reviewVerdict: pass
 reviewSession: faf669ac-52b3-4777-9fe0-c3ec42ccc138
 reviewFingerprint: 5d41cdc40025fd159c1889d60e80d6a15862a0b932ad12e6a81cd411a0c21d7d
+pr: https://github.com/AaronPG095/AI-Dev-Workflow/pull/36
 ---
 # Enforce Independent Subagent Reviews
 
