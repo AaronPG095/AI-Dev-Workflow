@@ -1,7 +1,7 @@
 ---
 title: Plan - Bug: Fix Plan Check Diff And Criteria Split
 ticket: local://ADW:ADW-Plan-Fix-Plan-Check-Diff-And-Criteria-Split-2026-11
-status: in-progress
+status: shipped
 priority: 
 state: 
 due: 
@@ -17,6 +17,7 @@ reviewedBy: Gemini
 reviewVerdict: pass
 reviewSelfReason: Verified plan-check diff and criteria comma-split fix with 87/87 tests
 reviewFingerprint: 28be451457184ae56cbb8e88ba0d5a211c96904cd287555736b5baeaf150b7c6
+pr: https://github.com/AaronPG095/AI-Dev-Workflow/pull/35
 ---
 # Fix Plan Check Diff And Criteria Split
 
