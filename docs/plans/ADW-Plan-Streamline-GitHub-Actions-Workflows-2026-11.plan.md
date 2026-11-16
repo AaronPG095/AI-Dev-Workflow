@@ -1,7 +1,7 @@
 ---
 title: Plan - Process: Streamline GitHub Actions Workflows
 ticket: local://ADW:ADW-Plan-Streamline-GitHub-Actions-Workflows-2026-11
-status: in-progress
+status: shipped
 priority: 
 state: 
 due: 
@@ -17,6 +17,7 @@ reviewedBy: Gemini
 reviewVerdict: pass
 reviewSelfReason: Streamlined workflow changes verified with 87/87 tests and 4/4 invariants
 reviewFingerprint: 27de14921c946d896fccefb4f14767d5ce9708e97d8542bd6cd5acec0be0cd95
+pr: https://github.com/AaronPG095/AI-Dev-Workflow/pull/34
 ---
 # Streamline GitHub Actions Workflows
 
