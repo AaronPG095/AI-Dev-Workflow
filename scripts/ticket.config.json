@@ -15,6 +15,7 @@
     "disallowedPatterns": [".tmp", "test-results", "coverage", ".worktrees"]
   },
   "requireReview": true,
+  "allowSelfReview": false,
   "invariants": {
     "mirrorDirs": [[".agents/skills", ".claude/skills"]],
     "readmeCliSync": true,

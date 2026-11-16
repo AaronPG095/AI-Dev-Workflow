@@ -92,15 +92,15 @@ Trivial changes (`<= 40` changed lines, no new files in the main source folder, 
 5. **Review (`pack` & `review`)** — Run `node scripts/ticket.mjs pack [--test]` (0 LLM tokens, embeds test results with `--test`) to produce a compact review packet.
    - Verify specific tiers with `node scripts/ticket.mjs verify [--tier <name>|--all]`.
    - Generate structured subagent prompts with `node scripts/ticket.mjs review --prompt`.
-   - Run a single-pass or dual-pass review (via `quick-review`, fresh session, or second AI) and stamp the result:
+   - Run an **independent sub-agent, fresh-session, or second-model review** (`requireReview: true`, `allowSelfReview: false` by default) and stamp the result:
    ```powershell
-   node scripts/ticket.mjs review --agent <client> --verdict <pass|warn|block> --summary "<findings>"
-   # Or dual-pass review:
+   node scripts/ticket.mjs review --agent <client> --reviewer-id <subagent-id> --verdict <pass|warn|block> --summary "<findings>"
+   # Or dual-pass review from a second model:
    node scripts/ticket.mjs review --agent <client> --standards pass --spec pass --summary "<findings>"
    ```
 6. **Finish (`check` & `ship`)** — Verify close-out and working-tree hygiene with `node scripts/ticket.mjs check [--strict]`, open the PR, and link it via `node scripts/ticket.mjs ship --pr <url>` (or run `node scripts/ticket.mjs pr [--verify] [--auto]`). GitHub Actions evaluates committed PR files with the base branch's validator. It rejects reused closed plans, removed or replaced checkboxes, empty evidence, committed artifacts matching the hygiene patterns, and a `block` or stale review verdict.
 
-Stage new files before preparing a review. The review records a fingerprint of the diff and plan requirements. Code or requirement edits require a new review. PR linking and progress log updates preserve the fingerprint. Set `requireReview: true` to require a passing or warning review before close-out.
+Stage new files before preparing a review. The review records a fingerprint of the diff and plan requirements. Code or requirement edits require a new review. PR linking and progress log updates preserve the fingerprint. `requireReview` defaults to `true` and `allowSelfReview` defaults to `false` (require an independent `--agent` or `--reviewer-id <subagent-id>`).
 
 `pr` requires a clean committed working tree. With `--verify`, it runs the configured verification on the commit it will push and stops if verification changes the checkout. If shipping fails after opening the PR, retry the command to reuse the open PR on that branch. The link commit contains only the selected plan.
 
@@ -136,7 +136,7 @@ AI-Dev-Workflow/
 │   │   └── adw-hook.mjs           # Opt-in runtime hook handler (PreToolUse, PostToolUse, Stop)
 │   ├── ticket.mjs                 # Zero-dependency workflow & review CLI (Node 22+)
 │   ├── ticket.config.json         # Repository configuration (local mode default)
-│   ├── ticket.test.mjs            # 87 hermetic unit & integration tests (node:test)
+│   ├── ticket.test.mjs            # 88 hermetic unit & integration tests (node:test)
 │   ├── workflow-manifest.json     # Versioned distribution manifest for sync & installers
 │   ├── sync.mjs                   # Cross-platform sync and drift engine (--remote & local)
 │   ├── sync-repos.ps1             # PowerShell wrapper for multi-repo sync
@@ -208,10 +208,10 @@ node scripts/ticket.mjs pack [--test] [--tier <name>]
 # Generate a structured review prompt for sub-agents or secondary models
 node scripts/ticket.mjs review --prompt
 
-# Record a single-pass or dual-pass code review verdict (pass | warn | block)
-# Under requireReview: true, self-review requires --self-review "<reason>"; test drops require --allow-test-drop "<reason>"
+# Record a single-pass or dual-pass independent review verdict (pass | warn | block)
+# requireReview defaults to true and allowSelfReview defaults to false; pass --reviewer-id <id> for same-provider sub-agents; test drops require --allow-test-drop "<reason>"
 node scripts/ticket.mjs review --agent Codex --verdict pass --summary "Criteria verified, clean hygiene"
-node scripts/ticket.mjs review --agent Gemini --standards pass --spec pass --summary "Dual-pass pass" [--self-review "<reason>"]
+node scripts/ticket.mjs review --agent Gemini --reviewer-id subagent-61f13605 --standards pass --spec pass --summary "Independent sub-agent dual-pass pass"
 
 # 5. Finish & Gatekeeper
 # Verify all checkboxes are closed, invariants pass, and working tree hygiene is clean (--strict also requires non-manual proof when verifyCommand is configured)
