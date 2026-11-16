@@ -19,7 +19,8 @@
     "maxFileSizeKB": 1024,
     "disallowedPatterns": [".tmp", "test-results", "coverage", ".worktrees"]
   },
-  "requireReview": false,
+  "requireReview": true,
+  "allowSelfReview": false,
   "knownRepos": [
     "my-backend",
     "my-frontend",

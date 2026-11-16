@@ -62,7 +62,8 @@ Works immediately offline and in public repositories:
     "maxRetries": 3,
     "verifyTier": "test"
   },
-  "requireReview": false,
+  "requireReview": true,
+  "allowSelfReview": false,
   "noPlan": {
     "maxChangedLines": 40,
     "noNewFilesUnder": ["src"]
@@ -99,7 +100,8 @@ Connects plans to a Notion Tasks database (`NOTION_TOKEN` in environment, `.env`
     "maxRetries": 3,
     "verifyTier": "test"
   },
-  "requireReview": false,
+  "requireReview": true,
+  "allowSelfReview": false,
   "noPlan": {
     "maxChangedLines": 40,
     "noNewFilesUnder": ["src"]
