@@ -1,7 +1,7 @@
 ---
 title: Plan - Feature: Minimize Actions Consumption With Local Verify And Merge
 ticket: local://ADW:ADW-Plan-Minimize-Actions-Consumption-With-Local-Verify-And-Merge-2026-11
-status: in-progress
+status: shipped
 priority: 
 state: 
 due: 
@@ -17,6 +17,7 @@ reviewedBy: Gemini
 reviewVerdict: pass
 reviewSession: ade7ad01-9f2f-4651-b44c-ca71368dd67c
 reviewFingerprint: b3d8eb97643e9c5df43ba18c992ac6aec7c4cae49aec1a21f91610ddb4b6cefa
+pr: https://github.com/AaronPG095/AI-Dev-Workflow/pull/37
 ---
 # Minimize Actions Consumption With Local Verify And Merge
 
