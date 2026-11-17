@@ -1,7 +1,7 @@
 ---
 title: Plan - Bug: Keep Manual Ticket Done Workflow
 ticket: local://ADW:ADW-Plan-Keep-Manual-Ticket-Done-Workflow-2026-11
-status: in-progress
+status: shipped
 priority: 
 state: 
 due: 
@@ -17,6 +17,7 @@ reviewedBy: Gemini
 reviewVerdict: pass
 reviewSession: 6cfe9bbc-8d15-449e-a932-3dfb17687031
 reviewFingerprint: 93b37c460507cefa306e92ff8209dce4033ae18e4f18e9d0e2f607ac5cd2d88c
+pr: https://github.com/AaronPG095/AI-Dev-Workflow/pull/38
 ---
 # Keep Manual Ticket Done Workflow
 
