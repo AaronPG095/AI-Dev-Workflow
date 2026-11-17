@@ -1,7 +1,7 @@
 ---
 title: Plan - Bug: Keep Manual Ticket Done Workflow
 ticket: local://ADW:ADW-Plan-Keep-Manual-Ticket-Done-Workflow-2026-11
-status: planned
+status: in-progress
 priority: 
 state: 
 due: 
@@ -10,6 +10,13 @@ version: none
 impact: none
 devTicketKey: ADW:ADW-Plan-Keep-Manual-Ticket-Done-Workflow-2026-11
 agent: Gemini
+branch: feat/keep-manual-ticket-done-workflow
+worktree: AI-Dev-Workflow
+startedAt: 2026-11-17
+reviewedBy: Gemini
+reviewVerdict: pass
+reviewSession: 6cfe9bbc-8d15-449e-a932-3dfb17687031
+reviewFingerprint: 93b37c460507cefa306e92ff8209dce4033ae18e4f18e9d0e2f607ac5cd2d88c
 ---
 # Keep Manual Ticket Done Workflow
 
@@ -28,13 +35,13 @@ None
 
 ## Acceptance criteria
 
-- [ ] AC1: `scripts/sync.mjs` preserves `.github/workflows/ticket-done.yml` on disk and rewrites its `on:` trigger block to `workflow_dispatch:` when `cfg.ci?.ticketDoneWorkflow === false`, while gracefully handling `workflow_dispatch:` `ticket-done.yml` when acting as a downstream `BUNDLE_ROOT`.
-- [ ] AC2: `T3.5` in `scripts/ticket.test.mjs` verifies the `workflow_dispatch:` rewrite (zero `pull_request:` trigger) and `89/89` tests pass in both `AI-Dev-Workflow` and `AI-Cortex` (`FluentOverlay` verify suite).
+- [x] AC1: `scripts/sync.mjs` preserves `.github/workflows/ticket-done.yml` on disk and rewrites its `on:` trigger block to `workflow_dispatch:` when `cfg.ci?.ticketDoneWorkflow === false`, while gracefully handling `workflow_dispatch:` `ticket-done.yml` when acting as a downstream `BUNDLE_ROOT`. verified(test): sync.mjs rewrites ticket-done.yml on: block to workflow_dispatch: when ci.ticketDoneWorkflow=false and accepts workflow_dispatch: downstream
+- [x] AC2: `T3.5` in `scripts/ticket.test.mjs` verifies the `workflow_dispatch:` rewrite (zero `pull_request:` trigger) and `89/89` tests pass in both `AI-Dev-Workflow` and `AI-Cortex` (`FluentOverlay` verify suite). verified(test): 89/89 tests pass in AI-Dev-Workflow and AI-Cortex with T3.5 verifying workflow_dispatch: rewrite and --bundle-only check
 
 ## Steps
 
-- [ ] Update `scripts/sync.mjs` to replace `on:` with `workflow_dispatch:` for `.github/workflows/ticket-done.yml` when `ci.ticketDoneWorkflow === false`. (AC1)
-- [ ] Update `T3.5` in `scripts/ticket.test.mjs` and run full `node --test scripts/ticket.test.mjs` across `AI-Dev-Workflow` and downstream repos, then obtain independent subagent review. (AC2)
+- [x] Update `scripts/sync.mjs` to replace `on:` with `workflow_dispatch:` for `.github/workflows/ticket-done.yml` when `ci.ticketDoneWorkflow === false`. (AC1)
+- [x] Update `T3.5` in `scripts/ticket.test.mjs` and run full `node --test scripts/ticket.test.mjs` across `AI-Dev-Workflow` and downstream repos, then obtain independent subagent review. (AC2)
 
 ## Risks
 
@@ -51,3 +58,4 @@ None
 ## Progress log
 
 <!-- One line per session/review, added with `ticket.mjs log` or `ticket.mjs review` -->
+- 2026-11-17 11:33 UTC, Gemini (review: pass): scripts/sync.mjs cleanly converts .github/workflows/ticket-done.yml to on: workflow_dispatch: when ci.ticketDoneWorkflow=false, accepts workflow_dispatch:-only downstream bundles, and removes dead deletion logic; pack --test exit 0 and 89/89 pass in AI-Dev-Workflow and AI-Cortex. [reviewer: 6cfe9bbc-8d15-449e-a932-3dfb17687031]
