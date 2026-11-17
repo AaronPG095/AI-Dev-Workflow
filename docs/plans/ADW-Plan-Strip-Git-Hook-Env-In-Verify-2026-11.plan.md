@@ -1,7 +1,7 @@
 ---
 title: Plan - Bug: Strip Git Hook Env In Verify
 ticket: local://ADW:ADW-Plan-Strip-Git-Hook-Env-In-Verify-2026-11
-status: planned
+status: in-progress
 priority: 
 state: 
 due: 
@@ -10,6 +10,13 @@ version: none
 impact: none
 devTicketKey: ADW:ADW-Plan-Strip-Git-Hook-Env-In-Verify-2026-11
 agent: Gemini
+branch: feat/strip-git-hook-env-in-verify
+worktree: AI-Dev-Workflow
+startedAt: 2026-11-17
+reviewedBy: Gemini
+reviewVerdict: pass
+reviewSession: d7edea1f-0fc3-420b-bb26-cddc6abf9515
+reviewFingerprint: 6e74058161f7c3f61e071686697964592e38254abb1446395d0eaff882b02194
 ---
 # Strip Git Hook Env In Verify
 
@@ -28,13 +35,13 @@ None
 
 ## Acceptance criteria
 
-- [ ] AC1: `scripts/ticket.mjs` uses `verifyExecEnv()` (stripping `GIT_DIR` and sibling Git hook env vars) across all verification execution paths (`verify`, `runVerifyCmd`, `pack --test`, `pr --verify`, `fleet verify`).
-- [ ] AC2: `T3.5` in `scripts/ticket.test.mjs` verifies `verify --pre-push` runs cleanly even when `GIT_DIR` is set to a dummy path, `node --test scripts/ticket.test.mjs` passes all 89 tests, and independent subagent review passes.
+- [x] AC1: `scripts/ticket.mjs` uses `verifyExecEnv()` (stripping `GIT_DIR` and sibling Git hook env vars) across all verification execution paths (`verify`, `runVerifyCmd`, `pack --test`, `pr --verify`, `fleet verify`). verified(inspect): verifyExecEnv() deletes GIT_DIR/GIT_WORK_TREE/etc. across all 7 verify/pack/pr/fleet child process calls
+- [x] AC2: `T3.5` in `scripts/ticket.test.mjs` verifies `verify --pre-push` runs cleanly even when `GIT_DIR` is set to a dummy path, `node --test scripts/ticket.test.mjs` passes all 89 tests, and independent subagent review passes. verified(test): T3.5 passes with dummy GIT_DIR/GIT_WORK_TREE set during verify --pre-push; full 89/89 ticket.test.mjs pass
 
 ## Steps
 
-- [ ] Add `verifyExecEnv()` and wire it into verification command invocations in `scripts/ticket.mjs`. (AC1)
-- [ ] Add regression assertion in `T3.5` (`scripts/ticket.test.mjs`), run full test suite, and obtain independent subagent review (`--reviewer-id`). (AC2)
+- [x] Add `verifyExecEnv()` and wire it into verification command invocations in `scripts/ticket.mjs`. (AC1)
+- [x] Add regression assertion in `T3.5` (`scripts/ticket.test.mjs`), run full test suite, and obtain independent subagent review (`--reviewer-id`). (AC2)
 
 ## Risks
 
@@ -51,3 +58,4 @@ None
 ## Progress log
 
 <!-- One line per session/review, added with `ticket.mjs log` or `ticket.mjs review` -->
+- 2026-11-17 12:06 UTC, Gemini (review: pass): Verified verifyExecEnv() strips all 8 Git hook env vars across all 7 verification call sites in scripts/ticket.mjs, T3.5 covers dummy GIT_DIR/GIT_WORK_TREE under verify --pre-push, and pack --test (# fail 0) plus doctor (4/4 invariants) pass cleanly. [reviewer: d7edea1f-0fc3-420b-bb26-cddc6abf9515]
