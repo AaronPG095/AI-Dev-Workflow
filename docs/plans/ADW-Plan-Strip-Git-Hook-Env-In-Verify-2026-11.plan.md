@@ -1,7 +1,7 @@
 ---
 title: Plan - Bug: Strip Git Hook Env In Verify
 ticket: local://ADW:ADW-Plan-Strip-Git-Hook-Env-In-Verify-2026-11
-status: in-progress
+status: shipped
 priority: 
 state: 
 due: 
@@ -17,6 +17,7 @@ reviewedBy: Gemini
 reviewVerdict: pass
 reviewSession: d7edea1f-0fc3-420b-bb26-cddc6abf9515
 reviewFingerprint: 6e74058161f7c3f61e071686697964592e38254abb1446395d0eaff882b02194
+pr: https://github.com/AaronPG095/AI-Dev-Workflow/pull/39
 ---
 # Strip Git Hook Env In Verify
 
