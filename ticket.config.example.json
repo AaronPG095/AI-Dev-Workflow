@@ -15,6 +15,11 @@
     "full": "npm run build && npm test"
   },
   "verifyCommand": "npm test",
+  "prePushVerify": false,
+  "ciSkipTicketTests": false,
+  "ci": {
+    "ticketDoneWorkflow": true
+  },
   "hygiene": {
     "maxFileSizeKB": 1024,
     "disallowedPatterns": [".tmp", "test-results", "coverage", ".worktrees"]

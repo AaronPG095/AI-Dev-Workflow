@@ -41,7 +41,7 @@ Most AI coding workflows fail in one of two ways:
 - **Layer 1 (Deterministic Core):** Enforces plan fidelity, verified criteria evidence, zero-token context ignition (`prime`), zero-token review digests (`pack`), and strict pre-push/CI gates.
 - **Layer 2 (Modular Agentic Engine):** Enables autonomous self-healing loops with retry circuit breakers (`step` / `run`), verification-gated atomic git checkpoints (`checkpoint`), adversarial role briefs (`--role builder|reviewer|fixer`), and parallel git worktree waves (`wave`).
 - **One canonical process in `AGENTS.md`** (loaded natively by Codex, Antigravity/Gemini, Cursor, and via `@AGENTS.md` in Claude Code).
-- **One zero-dependency CLI (`scripts/ticket.mjs`)** with 72 hermetic tests running across macOS, Linux, and Windows for plan scaffolding, session ignition, local or Notion ticket tracking, handoff logs, deterministic review packets, git guardrails, and GitHub Actions CI gates.
+- **One zero-dependency CLI (`scripts/ticket.mjs`)** with 89 hermetic tests running across macOS, Linux, and Windows for plan scaffolding, session ignition, local or Notion ticket tracking, handoff logs, deterministic review packets, git guardrails, and GitHub Actions CI gates.
 - **Zero-token session ignition (`ticket.mjs prime`)** that prints a compact ~20-line context primer for fresh agent chat sessions (active plan, branch, open criteria, next steps, tiered verify commands).
 - **Zero-token review preparation (`ticket.mjs pack`)** that replaces 6+ exploratory tool calls with a single compact digest (plan criteria + working-tree hygiene + lockfile-filtered git diff + optional test verification proof via `--test`).
 - **Instant context switching & worktrees (`ticket.mjs switch`)** to jump between main and isolated worktrees on-demand with automatic `.env` inheritance.
@@ -98,15 +98,15 @@ Trivial changes (`<= 40` changed lines, no new files in the main source folder, 
    # Or dual-pass review from a second model:
    node scripts/ticket.mjs review --agent <client> --standards pass --spec pass --summary "<findings>"
    ```
-6. **Finish (`check` & `ship`)** — Verify close-out and working-tree hygiene with `node scripts/ticket.mjs check [--strict]`, open the PR, and link it via `node scripts/ticket.mjs ship --pr <url>` (or run `node scripts/ticket.mjs pr [--verify] [--auto]`). GitHub Actions evaluates committed PR files with the base branch's validator. It rejects reused closed plans, removed or replaced checkboxes, empty evidence, committed artifacts matching the hygiene patterns, and a `block` or stale review verdict.
+6. **Finish (`check`, `ship`, `merge`)** — Verify close-out and working-tree hygiene with `node scripts/ticket.mjs check [--strict]`, open the PR, and link it via `node scripts/ticket.mjs ship --pr <url>` (or run `node scripts/ticket.mjs pr [--verify] [--auto] [--draft]`). Once approved, run `node scripts/ticket.mjs merge [<plan>]` to merge via `gh pr merge` and close out the Notion Task locally with zero GitHub Actions minutes (or let `ticket-done.yml` close it on merge). `plan-check.yml` skips Draft PRs (`draft == false`, re-triggering on `ready_for_review`), skips redundant `ticket.test.mjs` CI runs when `ciSkipTicketTests: true` in the base config, and evaluates committed PR files with the base branch's validator.
 
 Stage new files before preparing a review. The review records a fingerprint of the diff and plan requirements. Code or requirement edits require a new review. PR linking and progress log updates preserve the fingerprint. `requireReview` defaults to `true` and `allowSelfReview` defaults to `false` (require an independent `--agent` or `--reviewer-id <subagent-id>`).
 
 `pr` requires a clean committed working tree. With `--verify`, it runs the configured verification on the commit it will push and stops if verification changes the checkout. If shipping fails after opening the PR, retry the command to reuse the open PR on that branch. The link commit contains only the selected plan.
 
-The merge workflow passes a complete PR file list to `ci-done`, so ticket closure covers merge commits, squash merges, and rebase merges. For a manual retry, pass `--base <pre-merge-sha> --head <merged-sha>` to identify the full range. Notion mode requires `dataSourceId` and reports missing credentials when a ticket needs closing. Local mode derives closure from protected branch history.
+For repositories using `ticket-done.yml`, the merge workflow passes a complete PR file list to `ci-done`, so ticket closure covers merge commits, squash merges, and rebase merges. Private or cost-minimized repositories can set `"ci": { "ticketDoneWorkflow": false }` in `scripts/ticket.config.json` (plus `ciSkipTicketTests: true` and `prePushVerify: true`) and rely on local `ticket.mjs merge` / `done` instead. For a manual retry, pass `--base <pre-merge-sha> --head <merged-sha>` to identify the full range. Notion mode requires `dataSourceId` and reports missing credentials when a ticket needs closing. Local mode derives closure from protected branch history.
 
-*(Optional safety guardrail: run `node scripts/ticket.mjs hook install` to block accidental direct pushes to protected branches like `main`.)*
+*(Safety guardrail: run `node scripts/ticket.mjs hook install` to block accidental direct pushes to protected branches like `main`, and automatically run `verify --pre-push` before pushes when `prePushVerify` is configured.)*
 
 ---
 
@@ -136,7 +136,7 @@ AI-Dev-Workflow/
 │   │   └── adw-hook.mjs           # Opt-in runtime hook handler (PreToolUse, PostToolUse, Stop)
 │   ├── ticket.mjs                 # Zero-dependency workflow & review CLI (Node 22+)
 │   ├── ticket.config.json         # Repository configuration (local mode default)
-│   ├── ticket.test.mjs            # 88 hermetic unit & integration tests (node:test)
+│   ├── ticket.test.mjs            # 89 hermetic unit & integration tests (node:test)
 │   ├── workflow-manifest.json     # Versioned distribution manifest for sync & installers
 │   ├── sync.mjs                   # Cross-platform sync and drift engine (--remote & local)
 │   ├── sync-repos.ps1             # PowerShell wrapper for multi-repo sync
@@ -225,6 +225,12 @@ node scripts/ticket.mjs pr [--verify] [--auto] [--draft] [--retro "<takeaway>"]
 
 # Or link an already-opened PR manually:
 node scripts/ticket.mjs ship --pr https://github.com/owner/repo/pull/1 [--retro "<takeaway>"]
+
+# Merge PR via GitHub CLI and close the Notion Task locally (0 Actions minutes):
+node scripts/ticket.mjs merge [<plan>] [--squash|--merge|--rebase] [--keep-branch]
+
+# Run configured verification tier (or pre-push check when prePushVerify is enabled):
+node scripts/ticket.mjs verify [--tier fast|test|full] [--all] [--pre-push]
 
 # 6. Technical Memory, Metrics, Worktrees & Safety
 # Scaffold in-repo Architecture Decision Record in docs/decisions/
