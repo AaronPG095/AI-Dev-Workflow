@@ -1,7 +1,7 @@
 ---
 title: Plan - Feature: Minimize Actions Consumption With Local Verify And Merge
 ticket: local://ADW:ADW-Plan-Minimize-Actions-Consumption-With-Local-Verify-And-Merge-2026-11
-status: planned
+status: in-progress
 priority: 
 state: 
 due: 
@@ -10,6 +10,13 @@ version: none
 impact: none
 devTicketKey: ADW:ADW-Plan-Minimize-Actions-Consumption-With-Local-Verify-And-Merge-2026-11
 agent: Gemini
+branch: feat/minimize-actions-consumption-with-local-verify-and-merge
+worktree: AI-Dev-Workflow
+startedAt: 2026-11-17
+reviewedBy: Gemini
+reviewVerdict: pass
+reviewSession: ade7ad01-9f2f-4651-b44c-ca71368dd67c
+reviewFingerprint: b3d8eb97643e9c5df43ba18c992ac6aec7c4cae49aec1a21f91610ddb4b6cefa
 ---
 # Minimize Actions Consumption With Local Verify And Merge
 
@@ -29,18 +36,18 @@ None
 
 ## Acceptance criteria
 
-- [ ] AC1: `.github/workflows/plan-check.yml` skips Draft PRs (`if: github.event.pull_request.draft == false`), adds `ready_for_review` trigger, and skips `node --test scripts/ticket.test.mjs` when `$BASE_SHA` `scripts/ticket.config.json` sets `ciSkipTicketTests: true`.
-- [ ] AC2: `scripts/sync.mjs` supports `ci.ticketDoneWorkflow: false` in `scripts/ticket.config.json` to skip requiring `.github/workflows/ticket-done.yml` (Option A local closeout) while continuing to enforce it when true or omitted.
-- [ ] AC3: `scripts/ticket.mjs` adds `verify [--tier <fast|test|full>] [--pre-push]` and `merge [<plan>] [--squash|--merge|--rebase] [--keep-branch]` (merging via `gh pr merge` and calling `done` locally), and `hook install` runs `node scripts/ticket.mjs verify --pre-push` when `prePushVerify` is configured (surfaced in `doctor`).
-- [ ] AC4: `README.md`, `AGENTS.md`, `scripts/sync.mjs`, `ticket.config.example.json`, `scripts/workflow-manifest.json`, `.agents/skills/`, `.claude/skills/`, and `scripts/ticket.test.mjs` document and verify AC1-AC3 with `node --test scripts/ticket.test.mjs` passing and an independent subagent review recorded via `--reviewer-id`.
+- [x] AC1: `.github/workflows/plan-check.yml` skips Draft PRs (`if: github.event.pull_request.draft == false`), adds `ready_for_review` trigger, and skips `node --test scripts/ticket.test.mjs` when `$BASE_SHA` `scripts/ticket.config.json` sets `ciSkipTicketTests: true`. verified(inspect): plan-check.yml updated with draft == false, ready_for_review, and $BASE_SHA ciSkipTicketTests check
+- [x] AC2: `scripts/sync.mjs` supports `ci.ticketDoneWorkflow: false` in `scripts/ticket.config.json` to skip requiring `.github/workflows/ticket-done.yml` (Option A local closeout) while continuing to enforce it when true or omitted. verified(test): T3.5 passes verifying sync --check [EXTRA], sync [REMOVED], and default enforcement
+- [x] AC3: `scripts/ticket.mjs` adds `verify [--tier <fast|test|full>] [--pre-push]` and `merge [<plan>] [--squash|--merge|--rebase] [--keep-branch]` (merging via `gh pr merge` and calling `done` locally), and `hook install` runs `node scripts/ticket.mjs verify --pre-push` when `prePushVerify` is configured (surfaced in `doctor`). verified(test): T3.5 passes verifying verify --pre-push, hook install, doctor surfacing, and merge Notion closeout
+- [x] AC4: `README.md`, `AGENTS.md`, `scripts/sync.mjs`, `ticket.config.example.json`, `scripts/workflow-manifest.json`, `.agents/skills/`, `.claude/skills/`, and `scripts/ticket.test.mjs` document and verify AC1-AC3 with `node --test scripts/ticket.test.mjs` passing and an independent subagent review recorded via `--reviewer-id`. verified(test): README.md, AGENTS.md, skills mirrors (3/3 identical), ticket.config.example.json, and T3.5 verified via 89/89 passing tests + subagent ade7ad01
 
 ## Steps
 
-- [ ] Update `.github/workflows/plan-check.yml` to skip Draft PRs, include `ready_for_review`, and honor `ciSkipTicketTests` from `$BASE_SHA` `scripts/ticket.config.json`. (AC1)
-- [ ] Update `scripts/sync.mjs` to support optional `ci.ticketDoneWorkflow: false` in target `scripts/ticket.config.json` and update `renderDevProcessSection` / `AGENTS.md`. (AC2, AC4)
-- [ ] Implement `verify` (`--pre-push`, `--tier`), `merge` (`--squash|--merge|--rebase`, `--keep-branch`), `prePushVerify` in `hook install`, and `doctor` surfacing in `scripts/ticket.mjs`. (AC3)
-- [ ] Update `README.md`, `ticket.config.example.json`, `scripts/workflow-manifest.json`, and identical `.agents/skills/` + `.claude/skills/` copies (`dev-workflow`, `quick-review`), plus add automated unit/integration tests in `scripts/ticket.test.mjs`. (AC3, AC4)
-- [ ] Run full test suite (`node --test scripts/ticket.test.mjs`), sync and configure all downstream repositories under Option A, and obtain independent subagent review (`--reviewer-id`). (AC4)
+- [x] Update `.github/workflows/plan-check.yml` to skip Draft PRs, include `ready_for_review`, and honor `ciSkipTicketTests` from `$BASE_SHA` `scripts/ticket.config.json`. (AC1)
+- [x] Update `scripts/sync.mjs` to support optional `ci.ticketDoneWorkflow: false` in target `scripts/ticket.config.json` and update `renderDevProcessSection` / `AGENTS.md`. (AC2, AC4)
+- [x] Implement `verify` (`--pre-push`, `--tier`), `merge` (`--squash|--merge|--rebase`, `--keep-branch`), `prePushVerify` in `hook install`, and `doctor` surfacing in `scripts/ticket.mjs`. (AC3)
+- [x] Update `README.md`, `ticket.config.example.json`, `scripts/workflow-manifest.json`, and identical `.agents/skills/` + `.claude/skills/` copies (`dev-workflow`, `quick-review`), plus add automated unit/integration tests in `scripts/ticket.test.mjs`. (AC3, AC4)
+- [x] Run full test suite (`node --test scripts/ticket.test.mjs`), sync and configure all downstream repositories under Option A, and obtain independent subagent review (`--reviewer-id`). (AC4)
 
 ## Risks
 
@@ -60,3 +67,4 @@ None
 ## Progress log
 
 <!-- One line per session/review, added with `ticket.mjs log` or `ticket.mjs review` -->
+- 2026-11-17 11:17 UTC, Gemini (review: pass): Independent read-only review passed: plan-check.yml base-SHA ciSkipTicketTests & draft gating, sync.mjs ci.ticketDoneWorkflow removal/drift checks, ticket.mjs verify --pre-push / merge / hook / doctor, docs/skills parity, T3.5 & full pack --test suite (0 failures), and all 6 downstream Option A checkouts verified. [reviewer: ade7ad01-9f2f-4651-b44c-ca71368dd67c]
