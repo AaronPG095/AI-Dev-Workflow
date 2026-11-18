@@ -1,7 +1,7 @@
 ---
 title: Plan - Bug: Trust CI and review evidence
 ticket: local://ADW:ADW-Plan-Trust-CI-And-Review-2026-11
-status: in-progress
+status: shipped
 appetite: M
 version: none
 impact: patch
@@ -14,6 +14,7 @@ reviewedBy: Codex
 reviewVerdict: warn
 reviewSession: /root/review_ci
 reviewFingerprint: bc7fab6ac1764f96a1cca964c78c34ea3ade0614bccac9dbb48c8f984446bd6a
+pr: https://github.com/AaronPG095/AI-Dev-Workflow/pull/40
 ---
 # Trust CI and review evidence
 
