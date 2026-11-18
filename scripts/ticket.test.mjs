@@ -521,7 +521,7 @@ test('auto-resolves active plan when plan argument is omitted', (t) => {
 });
 
 test('review command records verdict and blocks check when verdict is block', (t) => {
-  const f = fixture(t, `ticket: ${url}\n`, [], { requireReview: true });
+  const f = fixture(t, `ticket: ${url}\nagent: Gemini\n`, [], { requireReview: true });
   f.git('init', '-b', 'main');
   f.git('config', 'user.name', 'Test');
   f.git('config', 'user.email', 'test@example.invalid');
@@ -1024,7 +1024,7 @@ test('ci-check accepts the canonical Notion app page URL only on a trusted host'
 });
 
 test('ci-check validates committed plan identity, evidence, hygiene, and review scope', (t) => {
-  const f = fixture(t, 'ticket: local://FO:FO-Plan-Test\n', [], {
+  const f = fixture(t, 'ticket: local://FO:FO-Plan-Test\nagent: Gemini\n', [], {
     tracker: 'local',
     requireReview: true,
   });
@@ -1068,6 +1068,36 @@ test('ci-check validates committed plan identity, evidence, hygiene, and review 
   assert.equal(check().status, 0, check().stderr);
   writeFileSync(planPath, 'invalid working-copy plan');
   assert.equal(check().status, 0, check().stderr);
+
+  const head = f.git('rev-parse', 'HEAD');
+  const approvals = join(f.root, 'reviews.json');
+  const approvedReview = {
+    state: 'APPROVED', author_association: 'COLLABORATOR', commit_id: head,
+    user: { login: 'reviewer' },
+  };
+  const checkApproval = (pages) => {
+    writeFileSync(approvals, JSON.stringify(pages));
+    return f.run('ci-check', [
+      '--base', base, '--head', head, '--github-reviews', approvals, '--pr-author', 'author',
+    ], [], { omitPlan: true });
+  };
+  for (const pages of [
+    [[]],
+    [[{ ...approvedReview, commit_id: base }]],
+    [[{ ...approvedReview, user: { login: 'Author' } }]],
+    [[{ ...approvedReview, author_association: 'CONTRIBUTOR' }]],
+    [[approvedReview], [{ ...approvedReview, state: 'DISMISSED' }]],
+    [[approvedReview], [{ ...approvedReview, state: 'CHANGES_REQUESTED' }]],
+  ]) assert.match(checkApproval(pages).stderr, /current PR head needs an approving GitHub review/);
+  const accepted = checkApproval([[approvedReview, { ...approvedReview, state: 'COMMENTED' }]]);
+  assert.equal(accepted.status, 0, accepted.stderr);
+  rmSync(approvals);
+  for (const field of ['agent', 'reviewedBy']) {
+    writeFileSync(planPath, reviewed.replace(new RegExp(`^${field}:.*\\n`, 'm'), ''));
+    f.git('add', '--', plan);
+    f.git('commit', '-m', `remove ${field}`);
+    assert.match(check().stderr, /configured implementing agent and reviewer/);
+  }
 
   writeFileSync(planPath, reviewed.replace('local://FO:FO-Plan-Current', 'local://'));
   commit();
@@ -2445,13 +2475,16 @@ test('fleet/overview active-plan parity, ci-check archive validation/exemption, 
   assert.equal(existsSync(join(repoB, '.githooks/pre-push')), false);
 
   // Part 2: ci-check closed-archive validation and no-plan maxChangedLines exemption
-  const ci = fixture(t, '', [], { tracker: 'local' });
+  const ci = fixture(t, '', [], {
+    tracker: 'local', invariants: { noSecretsPatterns: ['forbidden-fixture-marker'], excludePaths: ['scripts/ticket.config.json'] },
+  });
   ci.git('init');
   ci.git('config', 'user.name', 'Test');
   ci.git('config', 'user.email', 'test@example.com');
   ci.git('checkout', '-B', 'main');
   const filler = Array.from({ length: 24 }, (_, i) => `- [x] Item ${i + 1} verified: ok`).join('\n');
   writeFileSync(join(ci.root, 'README.md'), '# Repo\n');
+  writeFileSync(join(ci.root, 'large-baseline.txt'), 'x'.repeat(1024 * 1024 + 1));
   writeFileSync(
     join(ci.root, 'docs/plans/FO-Plan-Old-1.plan.md'),
     `---\ntitle: Plan - Feature: Old 1\nticket: local://FO:Old1\nstatus: done\n---\n# Old 1\n\n## Acceptance criteria\n${filler}\n\n## Steps\n- [x] Done\n`,
@@ -2495,6 +2528,24 @@ test('fleet/overview active-plan parity, ci-check archive validation/exemption, 
   });
   assert.equal(comboWithLabel.status, 0, comboWithLabel.stderr);
 
+  for (const [start, name, file, label] of [
+    [headPure, 'archive', 'docs/plans/archive/2026-11/FO-Plan-Old-1.plan.md', '0'],
+    [headCombo, 'trivial', 'README.md', '1'],
+  ]) {
+    ci.git('switch', '-c', `test/invariants-${name}`, start);
+    const path = join(ci.root, file);
+    const cleanText = readFileSync(path, 'utf8');
+    writeFileSync(path, cleanText + '\nforbidden-fixture-marker\n');
+    ci.git('add', file);
+    ci.git('commit', '-m', `add ${name} invariant fixture`);
+    writeFileSync(path, cleanText);
+    const rejected = ci.run('ci-check', ['--base', base, '--head', 'HEAD'], [], {
+      omitPlan: true, envOverrides: { NO_PLAN: label },
+    });
+    assert.match(rejected.stderr, /noSecretsPatterns: potential secret/);
+    ci.git('restore', '--', file);
+  }
+
   ci.git('checkout', '-b', 'chore/bad-archive', base);
   mkdirSync(join(ci.root, 'docs/plans/archive/2026-11'), { recursive: true });
   writeFileSync(
@@ -2513,7 +2564,7 @@ test('fleet/overview active-plan parity, ci-check archive validation/exemption, 
   assert.match(badRes.stderr, /archived plan is not closed out/);
 });
 
-test('ci-check allows verified upstream workflow sync under no-plan and rejects tampered or mixed syncs', (t) => {
+test('ci-check requires a plan for a legitimate workflow sync', (t) => {
   const f = fixture(t);
   f.git('init', '-b', 'main');
   f.git('config', 'user.name', 'Test');
@@ -2522,7 +2573,6 @@ test('ci-check allows verified upstream workflow sync under no-plan and rejects 
   f.git('commit', '-m', 'init');
   const baseSha = f.git('rev-parse', 'HEAD');
 
-  // 1. Pure verified sync from upstream bundle passes with NO_PLAN=1
   f.git('checkout', '-b', 'chore/verified-sync', baseSha);
   copyFileSync(join(process.cwd(), 'scripts/sync.mjs'), join(f.root, 'scripts/sync.mjs'));
   execFileSync(
@@ -2534,41 +2584,12 @@ test('ci-check allows verified upstream workflow sync under no-plan and rejects 
   f.git('commit', '-m', 'chore: verified workflow sync');
   const syncHead = f.git('rev-parse', 'HEAD');
 
-  const okRes = f.run('ci-check', ['--base', baseSha, '--head', syncHead], [], {
+  const rejected = f.run('ci-check', ['--base', baseSha, '--head', syncHead], [], {
     omitPlan: true,
-    envOverrides: { NO_PLAN: '1', ADW_TEST_SYNC_SOURCE: process.cwd() },
+    envOverrides: { NO_PLAN: '1' },
   });
-  assert.equal(okRes.status, 0, okRes.stderr);
-  assert.match(okRes.stdout, /Verified upstream workflow sync/);
-
-  // 2. Tampering with a managed file fails even with NO_PLAN=1
-  f.git('checkout', '-b', 'chore/tampered-sync', syncHead);
-  writeFileSync(join(f.root, 'AGENTS.md'), '# Tampered\n');
-  f.git('add', 'AGENTS.md');
-  f.git('commit', '-m', 'tamper AGENTS.md');
-  const tamperedHead = f.git('rev-parse', 'HEAD');
-
-  const tamperedRes = f.run('ci-check', ['--base', baseSha, '--head', tamperedHead], [], {
-    omitPlan: true,
-    envOverrides: { NO_PLAN: '1', ADW_TEST_SYNC_SOURCE: process.cwd() },
-  });
-  assert.notEqual(tamperedRes.status, 0);
-  assert.match(tamperedRes.stderr, /no workflow policy changes/);
-
-  // 3. Mixing a source file with a synced workflow file fails even with NO_PLAN=1
-  f.git('checkout', '-b', 'chore/mixed-sync', syncHead);
-  mkdirSync(join(f.root, 'src'), { recursive: true });
-  writeFileSync(join(f.root, 'src/extra.js'), 'export const x = 1;\n');
-  f.git('add', 'src/extra.js');
-  f.git('commit', '-m', 'mix src change');
-  const mixedHead = f.git('rev-parse', 'HEAD');
-
-  const mixedRes = f.run('ci-check', ['--base', baseSha, '--head', mixedHead], [], {
-    omitPlan: true,
-    envOverrides: { NO_PLAN: '1', ADW_TEST_SYNC_SOURCE: process.cwd() },
-  });
-  assert.notEqual(mixedRes.status, 0);
-  assert.match(mixedRes.stderr, /no workflow policy changes/);
+  assert.notEqual(rejected.status, 0);
+  assert.match(rejected.stderr, /no workflow policy changes/);
 });
 
 test('T1.1: requireReview enforces independent subagent or second-model review and gates --self-review behind allowSelfReview', (t) => {

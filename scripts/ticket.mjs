@@ -190,6 +190,9 @@ const isRequireReview = (cfg = config) => cfg.requireReview !== false;
 const isAllowSelfReview = (cfg = config) => cfg.allowSelfReview === true;
 const hasIndependentReviewSession = (meta) =>
   Boolean((meta?.reviewSession || '').trim().length >= 4);
+const isReviewAgent = (agent) => config.captureSources?.some(
+  (source) => source.toLowerCase() === (agent || '').toLowerCase(),
+);
 
 function getVerifyTiers(cfg = config) {
   if (
@@ -460,22 +463,16 @@ function problems(plan, { requireTicket = true, ignoreReview = false, base, head
     ) {
       found.push('review does not cover this change; run pack and review again');
     }
-    if (
-      reqReview &&
-      ['pass', 'warn'].includes(verdict) &&
-      plan.meta.agent &&
-      plan.meta.reviewedBy &&
-      plan.meta.agent.toLowerCase() === plan.meta.reviewedBy.toLowerCase() &&
-      !hasIndependentReviewSession(plan.meta)
-    ) {
-      if (!isAllowSelfReview(config)) {
-        found.push(
-          `self-review blocked (reviewedBy matches agent "${plan.meta.agent}" without reviewSession); independent sub-agent (--reviewer-id <subagent-id>) or second-model review is required`,
-        );
-      } else if (!(plan.meta.reviewSelfReason || '').trim()) {
-        found.push(
-          `self-review blocked (reviewedBy matches agent "${plan.meta.agent}"); run review with a different agent, pass --reviewer-id <subagent-id>, or pass --self-review "<reason>"`,
-        );
+    if (reqReview && ['pass', 'warn'].includes(verdict)) {
+      if (!isReviewAgent(plan.meta.agent) || !isReviewAgent(plan.meta.reviewedBy)) {
+        found.push('required review needs a configured implementing agent and reviewer in the plan');
+      } else if (plan.meta.agent.toLowerCase() === plan.meta.reviewedBy.toLowerCase() &&
+          !hasIndependentReviewSession(plan.meta)) {
+        if (!isAllowSelfReview(config) || !(plan.meta.reviewSelfReason || '').trim()) {
+          found.push(
+            `self-review blocked (reviewedBy matches agent "${plan.meta.agent}"); an independent sub-agent (--reviewer-id <subagent-id>) or second-model review is required`,
+          );
+        }
       }
     }
   }
@@ -512,11 +509,12 @@ function bodyOf(text) {
   return m ? norm.slice(m[0].length) : norm;
 }
 
-function git(args, { allowFail = false, trim = true, cwd = repoRoot } = {}) {
+function git(args, { allowFail = false, trim = true, cwd = repoRoot, maxBuffer } = {}) {
   try {
     const output = execFileSync('git', args, {
       cwd,
       encoding: 'utf8',
+      maxBuffer,
       stdio: ['ignore', 'pipe', 'ignore'],
     });
     return trim ? output.trim() : output;
@@ -626,34 +624,53 @@ function listFilesRel(rootDir, baseDir = rootDir) {
   return out.sort();
 }
 
-function runInvariants(cfg = config, dir = repoRoot) {
+function runInvariants(cfg = config, dir = repoRoot, tree) {
   const inv = cfg.invariants;
   if (!inv || typeof inv !== 'object') {
     return { total: 0, passed: true, failures: [] };
   }
   let total = 0;
   const failures = [];
+  const blobs = tree && new Map(git(['ls-tree', '-r', '-l', '-z', tree], {
+    cwd: dir, maxBuffer: 64 * 1024 * 1024,
+  }).split('\0').flatMap((entry) => {
+    const match = entry.match(/^100(?:644|755) blob [\da-f]+\s+(\d+)\t([\s\S]+)$/);
+    return match ? [[match[2], Number(match[1])]] : [];
+  }));
+  const treeFiles = blobs && [...blobs.keys()];
+  const hasFile = (path) => blobs ? blobs.has(path) : existsSync(join(dir, path));
+  const readText = (path) => tree
+    ? git(['show', `${tree}:${path}`], {
+      cwd: dir, trim: false, maxBuffer: Math.max(1024 * 1024, blobs.get(path) + 64),
+    })
+    : readFileSync(join(dir, path), 'utf8');
+  const filesUnder = (path) => {
+    if (!treeFiles) return listFilesRel(join(dir, path));
+    return treeFiles.filter((file) => file.startsWith(path)).map((file) => file.slice(path.length));
+  };
 
   if (Array.isArray(inv.mirrorDirs)) {
     for (const pair of inv.mirrorDirs) {
       if (!Array.isArray(pair) || pair.length !== 2) continue;
       total++;
       const [dirA, dirB] = pair;
-      const fullA = join(dir, dirA);
-      const fullB = join(dir, dirB);
-      const filesA = listFilesRel(fullA);
-      const filesB = listFilesRel(fullB);
+      const [prefixA, prefixB] = pair.map((path) => {
+        const relativeDir = relative(dir, join(dir, path)).replace(/\\/g, '/');
+        return relativeDir ? `${relativeDir}/` : '';
+      });
+      const filesA = filesUnder(prefixA);
+      const filesB = filesUnder(prefixB);
       const all = new Set([...filesA, ...filesB]);
       for (const rel of all) {
-        const pA = join(fullA, rel);
-        const pB = join(fullB, rel);
-        if (!existsSync(pA)) {
+        const pA = prefixA + rel;
+        const pB = prefixB + rel;
+        if (!hasFile(pA)) {
           failures.push(`mirrorDirs (${dirA} <-> ${dirB}): missing in ${dirA}: ${rel}`);
-        } else if (!existsSync(pB)) {
+        } else if (!hasFile(pB)) {
           failures.push(`mirrorDirs (${dirA} <-> ${dirB}): missing in ${dirB}: ${rel}`);
         } else {
-          const a = readFileSync(pA, 'utf8').replace(/\r\n/g, '\n');
-          const b = readFileSync(pB, 'utf8').replace(/\r\n/g, '\n');
+          const a = readText(pA).replace(/\r\n/g, '\n');
+          const b = readText(pB).replace(/\r\n/g, '\n');
           if (a !== b) {
             failures.push(`mirrorDirs (${dirA} <-> ${dirB}): content differs for ${rel}`);
           }
@@ -664,11 +681,10 @@ function runInvariants(cfg = config, dir = repoRoot) {
 
   if (inv.readmeCliSync) {
     total++;
-    const readmePath = join(dir, 'README.md');
-    if (!existsSync(readmePath)) {
+    if (!hasFile('README.md')) {
       failures.push('readmeCliSync: README.md is missing');
     } else {
-      const readme = readFileSync(readmePath, 'utf8');
+      const readme = readText('README.md');
       const excluded = new Set([
         'ci-check',
         'ci-done',
@@ -685,10 +701,9 @@ function runInvariants(cfg = config, dir = repoRoot) {
 
   if (inv.zeroDependencies) {
     total++;
-    const pkgPath = join(dir, 'package.json');
-    if (existsSync(pkgPath)) {
+    if (hasFile('package.json')) {
       try {
-        const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
+        const pkg = JSON.parse(readText('package.json'));
         const deps = Object.keys(pkg.dependencies || {});
         const devDeps = Object.keys(pkg.devDependencies || {});
         if (deps.length || devDeps.length) {
@@ -705,17 +720,16 @@ function runInvariants(cfg = config, dir = repoRoot) {
   if (Array.isArray(inv.noSecretsPatterns) && inv.noSecretsPatterns.length) {
     total++;
     const exclude = new Set(Array.isArray(inv.excludePaths) ? inv.excludePaths : []);
-    const tracked = git(['ls-files', '-z'], { allowFail: true, cwd: dir })
-      .split('\0')
-      .filter((f) => f && !exclude.has(f.replace(/\\/g, '/')));
+    const tracked = treeFiles || git(['ls-files', '-z'], { allowFail: true, cwd: dir })
+      .split('\0').filter(Boolean);
     const regexes = inv.noSecretsPatterns.map((p) => new RegExp(p));
     for (const file of tracked) {
-      const full = join(dir, file);
-      if (!existsSync(full)) continue;
+      if (exclude.has(file.replace(/\\/g, '/')) || !hasFile(file)) continue;
       let textContent = '';
       try {
-        textContent = readFileSync(full, 'utf8');
-      } catch {
+        textContent = readText(file);
+      } catch (error) {
+        if (tree) failures.push(`noSecretsPatterns: could not inspect committed file ${file}: ${error.code || 'read failure'}`);
         continue;
       }
       const lines = textContent.split('\n');
@@ -1293,6 +1307,22 @@ function reviewFingerprint(plan, base, head, dir = repoRoot) {
   const scope = ['Summary', 'Acceptance criteria', 'Steps', 'Out of scope']
     .map((heading) => section(plan.body, heading));
   return createHash('sha256').update(JSON.stringify(scope)).update(diff).digest('hex');
+}
+
+function checkGitHubApproval(reviewsPath, author, head) {
+  const pages = JSON.parse(readFileSync(reviewsPath, 'utf8'));
+  if (!author || !Array.isArray(pages) || !pages.every(Array.isArray))
+    fail('GitHub approval check requires the PR author and the complete GitHub review list');
+  const latest = new Map();
+  for (const review of pages.flat()) {
+    const login = review.user?.login?.toLowerCase();
+    if (!login || login === author.toLowerCase() ||
+        !['OWNER', 'MEMBER', 'COLLABORATOR'].includes(review.author_association) ||
+        !['APPROVED', 'CHANGES_REQUESTED', 'DISMISSED'].includes(review.state)) continue;
+    latest.set(login, review);
+  }
+  if (![...latest.values()].some((review) => review.state === 'APPROVED' && review.commit_id === head))
+    fail('the current PR head needs an approving GitHub review from another repository collaborator');
 }
 
 function isTestFile(filePath, cfg = config) {
@@ -3942,6 +3972,8 @@ const commands = {
           : `cannot stamp review verdict "${verdict}": self-review blocked (reviewedBy "${agent}" matches plan agent "${plan.meta.agent}"). Independent sub-agent (--reviewer-id <id>) or second-model review is required.`,
       );
     }
+    if (isRequireReview(config) && verdict !== 'block' && !isReviewAgent(plan.meta.agent))
+      fail('required review needs a configured implementing agent in the plan');
 
     // Guardrail: if stamping "pass", verify criteria, test integrity & hygiene
     if (verdict === 'pass' && !opts.force) {
@@ -4270,6 +4302,10 @@ const commands = {
     const patterns = artifactPatterns();
     const debris = changedPaths.filter((file) => isArtifact(file, patterns));
     if (debris.length) fail(`committed hygiene issues:\n- ${debris.join('\n- ')}`);
+    const verifyInvariants = () => {
+      const inv = runInvariants(config, repoRoot, opts.head);
+      if (!inv.passed) fail(`repository invariants failed:\n- ${inv.failures.join('\n- ')}`);
+    };
     const isPlanPath = (file) => file.startsWith(`${config.plansDir}/`) &&
         file.endsWith('.plan.md') && !basename(file).startsWith('_') &&
         !file.startsWith(`${config.plansDir}/archive/`);
@@ -4318,6 +4354,7 @@ const commands = {
         changedPaths.every((file) => isArchiveMovePath(file)) &&
         removedPaths.every((file) => isArchiveMovePath(file));
       if (isPureArchiveMove) {
+        verifyInvariants();
         return console.log(
           `Closed-plan archive PR (${verifiedArchiveMoves.size} archived plan(s)); no new plan required.`,
         );
@@ -4350,37 +4387,12 @@ const commands = {
         .filter((file) => !verifiedArchiveMoves.has(file));
       const policyChanged = [...changedPaths, ...removedPaths]
         .some((file) => WORKFLOW_FILES.has(file) || file.startsWith('.github/workflows/'));
-      if (policyChanged) {
-        const allManagedSyncFiles =
-          removedPaths.length === 0 &&
-          changedPaths.length > 0 &&
-          changedPaths.every(
-            (file) =>
-              WORKFLOW_FILES.has(file) && file !== 'scripts/ticket.config.json',
-          );
-        const syncScript = join(repoRoot, 'scripts', 'sync.mjs');
-        if (allManagedSyncFiles && existsSync(syncScript)) {
-          try {
-            execFileSync(
-              process.execPath,
-              [syncScript, repoRoot, '--remote', '--check'],
-              {
-                cwd: repoRoot,
-                encoding: 'utf8',
-                stdio: ['ignore', 'pipe', 'pipe'],
-              },
-            );
-            return console.log(
-              `Verified upstream workflow sync (${changedPaths.length} managed file(s)); allowed under no-plan.`,
-            );
-          } catch {}
-        }
-      }
       if (policyChanged || changed > maxChangedLines || newFiles.length) {
         fail(
           `the no-plan label only covers trivial changes (at most ${maxChangedLines} changed lines, no new files under ${noNewFilesUnder.join(', ')}, and no workflow policy changes). Add a plan instead.`,
         );
       }
+      verifyInvariants();
       return console.log(
         `No plan in this PR; allowed by the no-plan label (${changed} changed lines).`,
       );
@@ -4416,10 +4428,9 @@ const commands = {
       fail(
         'close out the plan(s) above: tick every item or mark it "deferred: <reason>".',
       );
-    const inv = runInvariants(config, repoRoot);
-    if (!inv.passed) {
-      fail(`repository invariants failed:\n- ${inv.failures.join('\n- ')}`);
-    }
+    if (isRequireReview(config) && opts.githubReviews)
+      checkGitHubApproval(opts.githubReviews, opts.prAuthor, git(['rev-parse', opts.head]));
+    verifyInvariants();
   },
 
   async 'ci-done'() {
