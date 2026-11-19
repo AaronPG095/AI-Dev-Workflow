@@ -1,7 +1,7 @@
 ---
 title: Plan - Bug: Guard Downstream Missing Example Config In Role Routing Test
 ticket: local://ADW:ADW-Plan-Guard-Downstream-Missing-Example-Config-In-Role-Routing-Test-2026-11
-status: planned
+status: in-progress
 priority: 
 state: 
 due: 
@@ -10,6 +10,14 @@ version: none
 impact: none
 devTicketKey: ADW:ADW-Plan-Guard-Downstream-Missing-Example-Config-In-Role-Routing-Test-2026-11
 agent: Gemini
+branch: feat/guard-downstream-missing-example-config-in-role-routing-test
+worktree: fix-role-routing-test
+startedAt: 2026-11-19
+reviewedBy: Gemini
+reviewVerdict: pass
+reviewSession: 3ad994e1-8acd-40e4-9cbd-06fa94295f12
+baseBranch: main
+reviewFingerprint: 694ff48c759cc106d4a9cfb26d7e213ef87322945e45058ee8cfa811d1ad4768
 ---
 # Guard Downstream Missing Example Config In Role Routing Test
 
@@ -28,12 +36,12 @@ None
 
 ## Acceptance criteria
 
-- [ ] AC1: `scripts/ticket.test.mjs:4265-4269` skips `ticket.config.example.json` only when absent (`!existsSync(fullCfg)`) while still validating `scripts/ticket.config.json` and `ticket.config.example.json` whenever present, and `93/93` tests pass in `AI-Dev-Workflow` and `AI-Cortex`.
+- [x] AC1: `scripts/ticket.test.mjs:4265-4269` skips `ticket.config.example.json` only when absent (`!existsSync(fullCfg)`) while still validating `scripts/ticket.config.json` and `ticket.config.example.json` whenever present, and `93/93` tests pass in `AI-Dev-Workflow` and `AI-Cortex`. verified(test): role-to-model routing skips absent ticket.config.example.json cleanly and 93/93 tests + 4/4 invariants pass
 
 ## Steps
 
-- [ ] Guard `!existsSync(fullCfg)` in the `role-to-model routing` loop in `scripts/ticket.test.mjs`. (AC1)
-- [ ] Run `node --test scripts/ticket.test.mjs` (`93/93`) and obtain independent subagent review (`--reviewer-id`). (AC1)
+- [x] Guard `!existsSync(fullCfg)` in the `role-to-model routing` loop in `scripts/ticket.test.mjs`. (AC1)
+- [x] Run `node --test scripts/ticket.test.mjs` (`93/93`) and obtain independent subagent review (`--reviewer-id`). (AC1)
 
 ## Risks
 
@@ -46,3 +54,7 @@ None
 ## Notes
 
 - Plan approved by Aaron (2026-11-19): "Yes, do this." (downstreams rollout uncovered test failure on `verify --pre-push` in `AI-Cortex`).
+
+## Progress log
+
+- 2026-11-19 17:00 UTC, Gemini (review: pass): Guards absent ticket.config.example.json in role-to-model routing test; pack --test passes (0 failures) and diff matches plan. [reviewer: 3ad994e1-8acd-40e4-9cbd-06fa94295f12]
