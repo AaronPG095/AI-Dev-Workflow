@@ -13,7 +13,7 @@ startedAt: 2026-11-18
 reviewedBy: Codex
 reviewVerdict: pass
 reviewSession: /root/review_closeout
-reviewFingerprint: d1825a077c943c049a5e961cf916a627897305ba2e81bd76c905ae77bfebcc21
+reviewFingerprint: 9874fad11ac331957522b76278f2d6207a1b6dfd6aba22b3dc64f9e0bbf12ea9
 pr: https://github.com/AaronPG095/AI-Dev-Workflow/pull/41
 ---
 # Bind PR and Notion close-out
@@ -60,3 +60,5 @@ Aaron approved the review's fixes by saying “Implement your fixes.”
 - 2026-11-19 08:01 UTC, Codex (review: pass): Independent review verified the authoritative Notion provenance line and protected GitHub event and merge checks; 11 targeted fixtures passed. [reviewer: /root/review_closeout]
 - 2026-11-19 08:20 UTC, Codex (handoff): Done: Corrected inherited Actions fixture environment; 11 focused tests passed with a simulated outer GitHub repository.; Next: Push to the existing PR and confirm hosted checks.; Open: none; Tree: 2 dirty file(s)
 - 2026-11-19 08:20 UTC, Codex (review: pass): Independent follow-up confirmed Actions fixture isolation and retained Notion provenance validation; all 11 focused tests passed in a simulated Actions environment. [reviewer: /root/review_closeout]
+- 2026-11-19 08:25 UTC, Codex (handoff): Done: Renamed the merge fixture commit variable to compose with the pre-push fixture.; Next: Re-run the combined suite and hosted CI.; Open: none; Tree: 1 dirty file(s)
+- 2026-11-19 08:25 UTC, Codex (review: pass): Independent review confirmed the integration-only fixture rename updates all references and preserves the reviewed-SHA assertion. [reviewer: /root/review_closeout]

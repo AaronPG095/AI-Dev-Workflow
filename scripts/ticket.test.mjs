@@ -4048,10 +4048,10 @@ test('T3.5: verify --pre-push, prePushVerify hook/doctor, merge local Notion clo
   assert.equal(revMergeRes.status, 0, revMergeRes.stderr);
   fMerge.git('add', '.');
   fMerge.git('commit', '-m', 'reviewed');
-  const head = fMerge.git('rev-parse', 'HEAD');
+  const reviewedHead = fMerge.git('rev-parse', 'HEAD');
   const prFiles = [[{ ...changedPlan, status: 'modified' }]];
-  const merged = mergedPull(99, head, {
-    head: { sha: head, ref: 'feature' },
+  const merged = mergedPull(99, reviewedHead, {
+    head: { sha: reviewedHead, ref: 'feature' },
     base: { ref: 'main', repo: { full_name: 'example/repo' }, sha: base },
   });
   const open = { ...merged, merged: false, state: 'open' };
@@ -4091,7 +4091,7 @@ test('T3.5: verify --pre-push, prePushVerify hook/doctor, merge local Notion clo
   assert.match(mergeRes.stdout, /Merged pull request:/);
   assert.match(mergeRes.stdout, /Ticket set to Done:/);
   assert.deepEqual(mergeRes.ghCalls.find((args) => args[1] === 'merge'),
-    ['pr', 'merge', prUrl, '--squash', '--delete-branch', '--match-head-commit', head]);
+    ['pr', 'merge', prUrl, '--squash', '--delete-branch', '--match-head-commit', reviewedHead]);
   const donePatch = mergeRes.calls.find(
     (r) => r.method === 'PATCH' && r.url.includes(taskId) && r.body?.properties?.Status?.status?.name === 'Done',
   );
