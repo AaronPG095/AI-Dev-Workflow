@@ -41,7 +41,7 @@ Most AI coding workflows fail in one of two ways:
 - **Layer 1 (Deterministic Core):** Enforces plan fidelity, verified criteria evidence, zero-token context ignition (`prime`), zero-token review digests (`pack`), and strict pre-push/CI gates.
 - **Layer 2 (Modular Agentic Engine):** Enables autonomous self-healing loops with retry circuit breakers (`step` / `run`), verification-gated atomic git checkpoints (`checkpoint`), adversarial role briefs (`--role builder|reviewer|fixer`), and parallel git worktree waves (`wave`).
 - **One canonical process in `AGENTS.md`** (loaded natively by Codex, Antigravity/Gemini, Cursor, and via `@AGENTS.md` in Claude Code).
-- **One zero-dependency CLI (`scripts/ticket.mjs`)** with 89 hermetic tests running across macOS, Linux, and Windows for plan scaffolding, session ignition, local or Notion ticket tracking, handoff logs, deterministic review packets, git guardrails, and GitHub Actions CI gates.
+- **One zero-dependency CLI (`scripts/ticket.mjs`)** with hermetic tests for plan scaffolding, session ignition, local or Notion ticket tracking, handoff logs, review packets, git guardrails, and GitHub Actions CI gates.
 - **Zero-token session ignition (`ticket.mjs prime`)** that prints a compact ~20-line context primer for fresh agent chat sessions (active plan, branch, open criteria, next steps, tiered verify commands).
 - **Zero-token review preparation (`ticket.mjs pack`)** that replaces 6+ exploratory tool calls with a single compact digest (plan criteria + working-tree hygiene + lockfile-filtered git diff + optional test verification proof via `--test`).
 - **Instant context switching & worktrees (`ticket.mjs switch`)** to jump between main and isolated worktrees on-demand with automatic `.env` inheritance.
@@ -102,11 +102,13 @@ Trivial changes (`<= 40` changed lines, no new files in the main source folder, 
 
 Stage new files before preparing a review. The review records a fingerprint of the diff and plan requirements. Code or requirement edits require a new review. PR linking and progress log updates preserve the fingerprint. `requireReview` defaults to `true` and `allowSelfReview` defaults to `false` (require an independent `--agent` or `--reviewer-id <subagent-id>`).
 
-`pr` requires a clean committed working tree. With `--verify`, it runs the configured verification on the commit it will push and stops if verification changes the checkout. If shipping fails after opening the PR, retry the command to reuse the open PR on that branch. The link commit contains only the selected plan.
+`pr` requires a clean committed working tree. With `--verify`, it tests the initial commit and any new plan-link commit before pushing each revision. It stops if verification changes the checkout. If shipping fails after opening the PR, retry the command to reuse the open PR on that branch. The link commit contains only the selected plan.
+
+Use `review --base <protected branch>` when the PR targets a secondary branch. The review records that base for subsequent `pack`, `check`, and `pr` runs. The `pr` command uses it on GitHub and rejects a reused PR with a different base. With `pr --retro` or `ship --retro`, the takeaway goes in the plan's progress log and preserves the code review. Use `lesson` for a shared entry in `docs/lessons.md`.
 
 For repositories using `ticket-done.yml`, the merge workflow passes a complete PR file list to `ci-done`, so ticket closure covers merge commits, squash merges, and rebase merges. Private or cost-minimized repositories can set `"ci": { "ticketDoneWorkflow": false }` in `scripts/ticket.config.json` (plus `ciSkipTicketTests: true` and `prePushVerify: true`) and rely on local `ticket.mjs merge` / `done` instead. For a manual retry, pass `--base <pre-merge-sha> --head <merged-sha>` to identify the full range. Notion mode requires `dataSourceId` and reports missing credentials when a ticket needs closing. Local mode derives closure from protected branch history.
 
-*(Safety guardrail: run `node scripts/ticket.mjs hook install` to block accidental direct pushes to protected branches like `main`, and automatically run `verify --pre-push` before pushes when `prePushVerify` is configured.)*
+Run `node scripts/ticket.mjs hook install` to block accidental direct pushes to protected branches and install the current hook. With `prePushVerify` configured, the hook requires a clean checkout of the commit being pushed. Push different commits separately. The hook checks the checkout again after verification.
 
 ---
 
@@ -136,7 +138,7 @@ AI-Dev-Workflow/
 │   │   └── adw-hook.mjs           # Opt-in runtime hook handler (PreToolUse, PostToolUse, Stop)
 │   ├── ticket.mjs                 # Zero-dependency workflow & review CLI (Node 22+)
 │   ├── ticket.config.json         # Repository configuration (local mode default)
-│   ├── ticket.test.mjs            # 89 hermetic unit & integration tests (node:test)
+│   ├── ticket.test.mjs            # Hermetic unit and integration tests (node:test)
 │   ├── workflow-manifest.json     # Versioned distribution manifest for sync & installers
 │   ├── sync.mjs                   # Cross-platform sync and drift engine (--remote & local)
 │   ├── sync-repos.ps1             # PowerShell wrapper for multi-repo sync
@@ -210,7 +212,7 @@ node scripts/ticket.mjs review --prompt
 
 # Record a single-pass or dual-pass independent review verdict (pass | warn | block)
 # requireReview defaults to true and allowSelfReview defaults to false; pass --reviewer-id <id> for same-provider sub-agents; test drops require --allow-test-drop "<reason>"
-node scripts/ticket.mjs review --agent Codex --verdict pass --summary "Criteria verified, clean hygiene"
+node scripts/ticket.mjs review [--base <protected-branch>] --agent Codex --verdict pass --summary "Criteria verified, clean hygiene"
 node scripts/ticket.mjs review --agent Gemini --reviewer-id subagent-61f13605 --standards pass --spec pass --summary "Independent sub-agent dual-pass pass"
 
 # 5. Finish & Gatekeeper
@@ -220,8 +222,8 @@ node scripts/ticket.mjs check [--strict]
 # Lint a plan for placeholders, unresolved open questions, vague criteria, and uncovered AC# IDs (0 tokens)
 node scripts/ticket.mjs lint [<plan>] [--strict] [--json]
 
-# Automated PR creation & ticket shipping in one command (pushes branch, verifies, opens PR, auto-merges; optionally records a retro lesson)
-node scripts/ticket.mjs pr [--verify] [--auto] [--draft] [--retro "<takeaway>"]
+# Automated PR creation and ticket shipping, with optional verification and retrospective
+node scripts/ticket.mjs pr [--base <protected-branch>] [--verify] [--auto] [--draft] [--retro "<takeaway>"]
 
 # Or link an already-opened PR manually:
 node scripts/ticket.mjs ship --pr https://github.com/owner/repo/pull/1 [--retro "<takeaway>"]
@@ -231,6 +233,7 @@ node scripts/ticket.mjs merge [<plan>] [--squash|--merge|--rebase] [--keep-branc
 
 # Run configured verification tier (or pre-push check when prePushVerify is enabled):
 node scripts/ticket.mjs verify [--tier fast|test|full] [--all] [--pre-push]
+# The installed hook supplies --pushed-head <sha> to bind --pre-push to the outgoing commit.
 
 # 6. Technical Memory, Metrics, Worktrees & Safety
 # Scaffold in-repo Architecture Decision Record in docs/decisions/
