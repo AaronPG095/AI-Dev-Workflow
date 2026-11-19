@@ -33,20 +33,20 @@ None
 
 ## Acceptance criteria
 
-- [ ] AC1: WHEN running `node scripts/ticket.mjs blueprint "<Topic>" [--version <ver>]` THE SYSTEM SHALL scaffold `docs/architecture/<PREFIX>-Blueprint-<KebabTopic>.md` with frontmatter (`title`, `status: active`, optional `version`, `plannerModel`, `created`) and sections (`Goal & Non-Goals`, `Architecture & Boundaries`, `Contracts & Invariants`, `PR Slice Breakdown`, `Living Updates & ADRs`), and running `blueprint` with no topic SHALL list existing blueprints under `docs/architecture/`.
-- [ ] AC2: WHEN running `node scripts/ticket.mjs new "<Slice>" --blueprint <path>` THE SYSTEM SHALL validate the blueprint file exists, stamp `blueprint: <path>` in the child plan's frontmatter, and reference it in `## Context` when `--context` is not provided; standalone `new` without `--blueprint` remains unchanged.
-- [ ] AC3: WHEN a plan declares `blueprint: <path>` in frontmatter, `prime`, `step` (text briefs for `planner`, `builder`, `fixer`, `reviewer` and `--json`), and `pack` SHALL surface the blueprint path (and builder/fixer/reviewer briefs SHALL instruct preserving its contracts/invariants).
-- [ ] AC4: WHEN running `lint` on a plan with `blueprint: <path>`, THE SYSTEM SHALL fail with a clear error if the referenced file does not exist; AND `recall "<query>" [--fleet]` SHALL index `docs/architecture/*.md` as type `Blueprint`.
-- [ ] AC5: `README.md`, `AGENTS.md`, `docs/plans/_template.plan.md`, `.agents/skills/dev-workflow/SKILL.md`, and `.claude/skills/dev-workflow/SKILL.md` document the opt-in blueprint step for new projects and multi-PR initiatives and pass all configured invariants (`mirrorDirs`, `readmeCliSync`, `zeroDependencies`).
-- [ ] AC6: Regression tests in `scripts/ticket.test.mjs` cover `blueprint`, `new --blueprint`, `prime`/`step`/`pack` surfacing, `lint` missing-blueprint validation, and `recall` indexing, and `node --test scripts/ticket.test.mjs` passes with 0 failures.
+- [x] AC1: WHEN running `node scripts/ticket.mjs blueprint "<Topic>" [--version <ver>]` THE SYSTEM SHALL scaffold `docs/architecture/<PREFIX>-Blueprint-<KebabTopic>.md` with frontmatter (`title`, `status: active`, optional `version`, `plannerModel`, `created`) and sections (`Goal & Non-Goals`, `Architecture & Boundaries`, `Contracts & Invariants`, `PR Slice Breakdown`, `Living Updates & ADRs`), and running `blueprint` with no topic SHALL list existing blueprints under `docs/architecture/`. verified: node --test scripts/ticket.test.mjs (architecture blueprints test passes: scaffold, --version, --force, list)
+- [x] AC2: WHEN running `node scripts/ticket.mjs new "<Slice>" --blueprint <path>` THE SYSTEM SHALL validate the blueprint file exists, stamp `blueprint: <path>` in the child plan's frontmatter, and reference it in `## Context` when `--context` is not provided; standalone `new` without `--blueprint` remains unchanged. verified: node --test scripts/ticket.test.mjs (new --blueprint valid/missing/standalone cases pass)
+- [x] AC3: WHEN a plan declares `blueprint: <path>` in frontmatter, `prime`, `step` (text briefs for `planner`, `builder`, `fixer`, `reviewer` and `--json`), and `pack` SHALL surface the blueprint path (and builder/fixer/reviewer briefs SHALL instruct preserving its contracts/invariants). verified: node --test scripts/ticket.test.mjs (prime, step all roles + --json, pack surface Blueprint:)
+- [x] AC4: WHEN running `lint` on a plan with `blueprint: <path>`, THE SYSTEM SHALL fail with a clear error if the referenced file does not exist; AND `recall "<query>" [--fleet]` SHALL index `docs/architecture/*.md` as type `Blueprint`. verified: node --test scripts/ticket.test.mjs (lint missing-blueprint error and recall [Blueprint] pass)
+- [x] AC5: `README.md`, `AGENTS.md`, `docs/plans/_template.plan.md`, `.agents/skills/dev-workflow/SKILL.md`, and `.claude/skills/dev-workflow/SKILL.md` document the opt-in blueprint step for new projects and multi-PR initiatives and pass all configured invariants (`mirrorDirs`, `readmeCliSync`, `zeroDependencies`). verified: Updated README.md, AGENTS.md, _template.plan.md, and both SKILL.md mirrors; invariants pass in ticket.test.mjs
+- [x] AC6: Regression tests in `scripts/ticket.test.mjs` cover `blueprint`, `new --blueprint`, `prime`/`step`/`pack` surfacing, `lint` missing-blueprint validation, and `recall` indexing, and `node --test scripts/ticket.test.mjs` passes with 0 failures. verified: node --test scripts/ticket.test.mjs passed 94/94 (0 failures)
 
 ## Steps
 
-- [ ] Add `commands.blueprint()` (scaffold + list) in `scripts/ticket.mjs` (AC1)
-- [ ] Add `--blueprint` flag handling in `commands.new()` and `blueprint:` existence validation in `lintPlan()` (AC2, AC4)
-- [ ] Surface `plan.meta.blueprint` in `prime`, `step` (`--json` + `buildStepBrief`), and `pack`, and add `docs/architecture` to `recall` (AC3, AC4)
-- [ ] Update `README.md`, `AGENTS.md`, `docs/plans/_template.plan.md`, `.agents/skills/dev-workflow/SKILL.md`, and `.claude/skills/dev-workflow/SKILL.md` (AC5)
-- [ ] Add regression tests in `scripts/ticket.test.mjs` and run `node --test scripts/ticket.test.mjs` and `node scripts/ticket.mjs pack --test` (AC6)
+- [x] Add `commands.blueprint()` (scaffold + list) in `scripts/ticket.mjs` (AC1)
+- [x] Add `--blueprint` flag handling in `commands.new()` and `blueprint:` existence validation in `lintPlan()` (AC2, AC4)
+- [x] Surface `plan.meta.blueprint` in `prime`, `step` (`--json` + `buildStepBrief`), and `pack`, and add `docs/architecture` to `recall` (AC3, AC4)
+- [x] Update `README.md`, `AGENTS.md`, `docs/plans/_template.plan.md`, `.agents/skills/dev-workflow/SKILL.md`, and `.claude/skills/dev-workflow/SKILL.md` (AC5)
+- [x] Add regression tests in `scripts/ticket.test.mjs` and run `node --test scripts/ticket.test.mjs` and `node scripts/ticket.mjs pack --test` (AC6)
 
 ## Risks
 

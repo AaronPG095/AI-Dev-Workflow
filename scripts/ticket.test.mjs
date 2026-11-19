@@ -3166,7 +3166,7 @@ test('T1.5: runInvariants enforces mirrorDirs, readmeCliSync, zeroDependencies, 
       'new', 'prime', 'tick', 'defer', 'step', 'checkpoint', 'run', 'create', 'start',
       'log', 'handoff', 'resume', 'pack', 'review', 'check', 'lint', 'ship', 'pr', 'merge', 'done',
       'overview', 'hook', 'adr', 'exec', 'wt', 'recall', 'archive', 'doctor', 'verify',
-      'hygiene', 'switch', 'split', 'fleet', 'wave', 'lesson', 'stats', 'release',
+      'hygiene', 'switch', 'split', 'fleet', 'wave', 'lesson', 'stats', 'release', 'blueprint',
     ].join(' '),
   );
   writeFileSync(join(f.root, 'package.json'), JSON.stringify({ name: 'test', dependencies: {} }));
@@ -4428,5 +4428,141 @@ if (process.env.ADW_ROLE === 'reviewer') {
   assert.doesNotMatch(dryRunNoModels.stdout, /^Models:/m);
   assert.doesNotMatch(dryRunNoModels.stdout, /^Model:/m);
 });
+
+test('architecture blueprints: scaffold, list, new --blueprint, prime/step/pack surfacing, lint validation, and recall indexing', (t) => {
+  const f = fixture(
+    t,
+    'ticket: local://FO:FO-Plan-Test\nagent: Gemini\n',
+    [],
+    {
+      tracker: 'local',
+      agentic: { models: { planner: 'gemini-4-neon-medium', builder: 'gemini-4-hydrogen-medium', reviewer: 'gemini-4-neon-low', fixer: 'gemini-4-hydrogen-medium' } },
+      verify: { test: 'node -e "process.exit(0)"' },
+    },
+  );
+  f.git('init', '-b', 'feat/blueprint-test');
+  f.git('config', 'user.name', 'Test');
+  f.git('config', 'user.email', 'test@example.invalid');
+  f.git('add', '.');
+  f.git('commit', '-m', 'init');
+
+  // 1. Empty blueprint list prints helpful message
+  const emptyList = f.run('blueprint', [], [], { omitPlan: true });
+  assert.equal(emptyList.status, 0, emptyList.stderr);
+  assert.match(emptyList.stdout, /No architecture blueprints found/);
+
+  // 2. Scaffold blueprint with --version and plannerModel
+  const createBp = f.run('blueprint', ['Auth Architecture', '--version', '1.2.0'], [], { omitPlan: true });
+  assert.equal(createBp.status, 0, createBp.stderr);
+  const bpRel = 'docs/architecture/FO-Blueprint-Auth-Architecture.md';
+  const bpFull = join(f.root, bpRel);
+  assert.ok(existsSync(bpFull), 'blueprint file should exist');
+  const bpText = readFileSync(bpFull, 'utf8');
+  assert.match(bpText, /^title: Blueprint: Auth Architecture$/m);
+  assert.match(bpText, /^status: active$/m);
+  assert.match(bpText, /^version: 1\.2\.0$/m);
+  assert.match(bpText, /^plannerModel: gemini-4-neon-medium$/m);
+  assert.match(bpText, /^created: \d{4}-\d{2}-\d{2}$/m);
+  for (const heading of [
+    '## Goal & Non-Goals',
+    '## Architecture & Boundaries',
+    '## Contracts & Invariants',
+    '## PR Slice Breakdown',
+    '## Living Updates & ADRs',
+  ]) {
+    assert.ok(bpText.includes(heading), `missing section ${heading}`);
+  }
+
+  // 3. Duplicate guard and --force overwrite
+  const dupBp = f.run('blueprint', ['Auth Architecture'], [], { omitPlan: true });
+  assert.notEqual(dupBp.status, 0);
+  assert.match(dupBp.stderr, /already exists/);
+
+  const forceBp = f.run('blueprint', ['Auth Architecture', '--version', '1.3.0', '--force'], [], { omitPlan: true });
+  assert.equal(forceBp.status, 0, forceBp.stderr);
+  assert.match(readFileSync(bpFull, 'utf8'), /^version: 1\.3\.0$/m);
+
+  // 4. List blueprints (no args and explicit 'list', ignoring _ files)
+  writeFileSync(join(f.root, 'docs/architecture/_template.md'), '# Ignore\n');
+  for (const args of [[], ['list']]) {
+    const listRes = f.run('blueprint', args, [], { omitPlan: true });
+    assert.equal(listRes.status, 0, listRes.stderr);
+    assert.match(listRes.stdout, /FO-Blueprint-Auth-Architecture\.md/);
+    assert.match(listRes.stdout, /status: active/);
+    assert.match(listRes.stdout, /version: 1\.3\.0/);
+    assert.match(listRes.stdout, /Blueprint: Auth Architecture/);
+    assert.doesNotMatch(listRes.stdout, /_template\.md/);
+  }
+
+  // 5. new --blueprint (valid, custom --context, missing error, standalone unchanged)
+  const badNew = f.run('new', ['Bad Slice', '--blueprint', 'docs/architecture/missing.md'], [], { omitPlan: true });
+  assert.notEqual(badNew.status, 0);
+  assert.match(badNew.stderr, /blueprint not found/);
+
+  const childRes = f.run('new', ['Auth Slice', '--blueprint', bpRel], [], { omitPlan: true });
+  assert.equal(childRes.status, 0, childRes.stderr);
+  const childPlanFile = readdirSync(join(f.root, 'docs/plans')).find((n) => n.includes('Auth-Slice'));
+  assert.ok(childPlanFile, 'child plan should be created');
+  const childRel = `docs/plans/${childPlanFile}`;
+  const childText = readFileSync(join(f.root, childRel), 'utf8');
+  assert.match(childText, new RegExp(`^blueprint: ${bpRel}$`, 'm'));
+  assert.match(childText, new RegExp(`See architecture blueprint: \`${bpRel}\``));
+
+  const standaloneRes = f.run('new', ['Standalone Slice'], [], { omitPlan: true });
+  assert.equal(standaloneRes.status, 0, standaloneRes.stderr);
+  const standaloneFile = readdirSync(join(f.root, 'docs/plans')).find((n) => n.includes('Standalone-Slice'));
+  const standaloneText = readFileSync(join(f.root, 'docs/plans', standaloneFile), 'utf8');
+  assert.doesNotMatch(standaloneText, /^blueprint:/m);
+
+  // Remove extra plans so onePlan() resolves cleanly to a blueprint-linked plan
+  rmSync(join(f.root, 'docs/plans/FO-Plan-Test.plan.md'));
+  rmSync(join(f.root, 'docs/plans', standaloneFile));
+  // Fill required sections in child plan so lint passes
+  const filledChild = childText
+    .replace(/<2-3 sentences:[^>]*>/, 'Implement auth slice 1.')
+    .replace(/<Unresolved assumptions[^>]*>/, 'None')
+    .replace(/<Pre-mortem:[^>]*>/, 'None noted.')
+    .replace(/<What this plan deliberately[^>]*>/, 'None noted.')
+    .replace(/- \[ \] AC1: <Observable outcome>/, '- [ ] AC1: WHEN auth runs THE SYSTEM SHALL succeed')
+    .replace(/- \[ \] <Step> \(AC1\)/, '- [ ] Add auth handler (AC1)');
+  writeFileSync(join(f.root, childRel), filledChild);
+
+  // 6. prime, step (all roles + --json), and pack surface Blueprint:
+  const primeRes = f.run('prime', [], [], { omitPlan: true });
+  assert.equal(primeRes.status, 0, primeRes.stderr);
+  assert.match(primeRes.stdout, new RegExp(`^Blueprint: ${bpRel}$`, 'm'));
+
+  for (const role of ['planner', 'builder', 'fixer', 'reviewer']) {
+    const stepRes = f.run('step', ['--role', role], [], { omitPlan: true });
+    assert.equal(stepRes.status, 0, stepRes.stderr);
+    assert.match(stepRes.stdout, new RegExp(`^Blueprint: ${bpRel}$`, 'm'));
+    if (['builder', 'fixer', 'reviewer'].includes(role)) {
+      assert.match(stepRes.stdout, /contracts and invariants/i);
+    }
+  }
+  const stepJsonRes = f.run('step', ['--role', 'builder', '--json'], [], { omitPlan: true });
+  assert.equal(stepJsonRes.status, 0, stepJsonRes.stderr);
+  assert.equal(JSON.parse(stepJsonRes.stdout).blueprint, bpRel);
+
+  const packRes = f.run('pack', [], [], { omitPlan: true });
+  assert.equal(packRes.status, 0, packRes.stderr);
+  assert.match(packRes.stdout, new RegExp(`^Blueprint: ${bpRel}$`, 'm'));
+
+  // 7. lint passes with valid blueprint and fails on missing blueprint
+  const lintOk = f.run('lint', [childRel], [], { omitPlan: true });
+  assert.equal(lintOk.status, 0, lintOk.stderr);
+
+  writeFileSync(join(f.root, childRel), filledChild.replace(bpRel, 'docs/architecture/missing.md'));
+  const lintMissing = f.run('lint', [childRel], [], { omitPlan: true });
+  assert.notEqual(lintMissing.status, 0);
+  assert.match(lintMissing.stdout + lintMissing.stderr, /missing\.md/);
+
+  // 8. recall indexes docs/architecture/*.md as [Blueprint]
+  writeFileSync(bpFull, bpText + '\nUniqueBlueprintTokenForRecall\n');
+  const recallRes = f.run('recall', ['UniqueBlueprintTokenForRecall'], [], { omitPlan: true });
+  assert.equal(recallRes.status, 0, recallRes.stderr);
+  assert.match(recallRes.stdout, /\[Blueprint\] docs\/architecture\/FO-Blueprint-Auth-Architecture\.md/);
+});
+
 
 
