@@ -1,7 +1,7 @@
 ---
 title: Plan - Bug: Bind PR and Notion close-out
 ticket: local://ADW:ADW-Plan-Bind-PR-And-Notion-Closeout-2026-11
-status: in-progress
+status: shipped
 appetite: L
 version: none
 impact: patch
@@ -14,6 +14,7 @@ reviewedBy: Codex
 reviewVerdict: pass
 reviewSession: /root/review_closeout
 reviewFingerprint: 3e3852ba2d4d4259f0ba6bdfd97cceb06d5cda52d0466027976953132577b3cf
+pr: https://github.com/AaronPG095/AI-Dev-Workflow/pull/41
 ---
 # Bind PR and Notion close-out
 
