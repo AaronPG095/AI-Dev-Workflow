@@ -104,7 +104,9 @@ Stage new files before preparing a review. The review records a fingerprint of t
 
 `pr` requires a clean committed working tree. With `--verify`, it runs the configured verification on the commit it will push and stops if verification changes the checkout. If shipping fails after opening the PR, retry the command to reuse the open PR on that branch. The link commit contains only the selected plan.
 
-For repositories using `ticket-done.yml`, the merge workflow passes a complete PR file list to `ci-done`, so ticket closure covers merge commits, squash merges, and rebase merges. Private or cost-minimized repositories can set `"ci": { "ticketDoneWorkflow": false }` in `scripts/ticket.config.json` (plus `ciSkipTicketTests: true` and `prePushVerify: true`) and rely on local `ticket.mjs merge` / `done` instead. For a manual retry, pass `--base <pre-merge-sha> --head <merged-sha>` to identify the full range. Notion mode requires `dataSourceId` and reports missing credentials when a ticket needs closing. Local mode derives closure from protected branch history.
+The `ticket-done.yml` workflow looks up the merged PR and all changed files through GitHub, so ticket closure covers merge commits, squash merges, and rebase merges. To retry in Actions, run **Close ticket on merge** from the default branch with the merged PR number. Set `"ci": { "ticketDoneWorkflow": false }` to disable automatic runs and keep this manual fallback. You can also retry with `ticket.mjs done <plan> --pr <url>` or `ticket.mjs ci-done --pr-number <number>`. A queued merge leaves the Task open until GitHub confirms the merge. Local mode derives closure from protected branch history.
+
+Notion writes require the page to match the plan's Dev Ticket Key, Development lane, configured data source, project, and exact plan path recorded in the Task's Description. When renaming a plan or reconciling an older Task with missing provenance, update the original Task's Description with `Plan: <repo-relative plan path>` as its final line. Preserve the Dev Ticket Key and Notion URL. The automatic workflow runs trusted default-branch code with the merge contents read as data. For repositories with contributors who can dispatch workflows on their branches, scope the Notion secret to a protected GitHub environment and attach the close-out job to it.
 
 *(Safety guardrail: run `node scripts/ticket.mjs hook install` to block accidental direct pushes to protected branches like `main`, and automatically run `verify --pre-push` before pushes when `prePushVerify` is configured.)*
 
@@ -228,6 +230,7 @@ node scripts/ticket.mjs ship --pr https://github.com/owner/repo/pull/1 [--retro 
 
 # Merge PR via GitHub CLI and close the Notion Task locally (0 Actions minutes):
 node scripts/ticket.mjs merge [<plan>] [--squash|--merge|--rebase] [--keep-branch]
+node scripts/ticket.mjs done [<plan>] [--pr <url>]
 
 # Run configured verification tier (or pre-push check when prePushVerify is enabled):
 node scripts/ticket.mjs verify [--tier fast|test|full] [--all] [--pre-push]

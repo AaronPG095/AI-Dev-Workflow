@@ -15,7 +15,7 @@
 //   node scripts/ticket.mjs verify [--tier fast|test|full] [--all] [--pre-push]    run configured verification command(s)
 //   node scripts/ticket.mjs ci-check --base <sha> --head <sha>                    CI: changed plans must pass check and keep every
 //                                                                                 checkbox; "no-plan" PRs must stay small
-//   node scripts/ticket.mjs ci-done  --head <merge sha> --pr-files <file>         CI: set merged plans' Tasks to Done
+//   node scripts/ticket.mjs ci-done  --pr-number <number>                        CI: set merged plans' Tasks to Done
 //
 // Options: --dry-run prints Notion requests instead of sending them and does not modify the plan.
 // Tracker: "notion" (default when dataSourceId is set) or "local" (offline/public markdown-only mode).
@@ -48,6 +48,7 @@ const config = JSON.parse(
   readFileSync(join(here, 'ticket.config.json'), 'utf8'),
 );
 const NOTION_VERSION = '2025-09-03';
+const NOTION_TEXT_LIMIT = 1990;
 if (config.tracker !== undefined && !['local', 'notion'].includes(config.tracker))
   fail('tracker must be "local" or "notion" in scripts/ticket.config.json');
 if (config.tracker === 'notion' &&
@@ -943,12 +944,11 @@ async function notion(method, path, body, { soft = false } = {}) {
 }
 
 // Status changes through the API don't press the Doing/Done buttons, so the dates those buttons set are written here.
-async function startTicket(url) {
-  if (isLocal || /^local:\/\//.test(url || '')) return;
-  const id = pageId(url);
-  const page = await notion('GET', `pages/${id}`);
+async function startTicket(plan) {
+  if (isLocal) return;
+  const { path, page } = await readNotionTask(plan);
   const started = page.properties?.['Started At']?.date?.start;
-  return notion('PATCH', `pages/${id}`, {
+  return notion('PATCH', path, {
     properties: {
       Status: { status: { name: 'Doing' } },
       ...(started ? {} : { 'Started At': { date: { start: today() } } }),
@@ -1001,10 +1001,46 @@ function recordTicket(plan, page, key, { recovered = false, agent } = {}) {
   );
 }
 
-async function closeTicket(url, date = today()) {
-  if (isLocal || /^local:\/\//.test(url || '')) return;
-  const path = `pages/${pageId(url)}`;
+function isNotionTaskUrl(url) {
+  return /^https:\/\/(?:(?:www\.)?notion\.so\/|app\.notion\.com\/p\/)[^?#]*[\da-f]{8}(?:-?[\da-f]{4}){3}-?[\da-f]{12}(?:[?#].*)?$/i.test(url || '');
+}
+
+const normalizedNotionId = (id) => (id || '').replace(/-/g, '').toLowerCase();
+const notionRichText = (property) => property?.rich_text
+  ?.map((part) => part.plain_text ?? part.text?.content ?? '').join('') || '';
+
+async function readNotionTask(plan) {
+  if (!isNotionTaskUrl(plan.meta.ticket))
+    fail(`${plan.rel}: ticket must be a canonical Notion Task URL`);
+  const id = pageId(plan.meta.ticket);
+  const path = `pages/${id}`;
   const page = await notion('GET', path);
+  if (opts.dryRun) return { id, path, page };
+
+  const props = page.properties;
+  const key = notionRichText(props?.['Dev Ticket Key']);
+  const description = notionRichText(props?.Description);
+  const lastLine = description.trimEnd().split(/\r?\n/).at(-1);
+  // Older creates sliced at 1990 characters, so a line at that boundary may be incomplete.
+  const recordedPlan = description.length !== NOTION_TEXT_LIMIT && lastLine.startsWith('Plan: ')
+    ? lastLine.slice('Plan: '.length) : '';
+  const project = normalizedNotionId(config.projectPageId);
+  const matchesProject = project && props?.Project?.relation?.some(
+    (entry) => normalizedNotionId(entry.id) === project,
+  );
+  if (normalizedNotionId(page.id) !== normalizedNotionId(id) ||
+      page.parent?.type !== 'data_source_id' ||
+      normalizedNotionId(page.parent.data_source_id) !== normalizedNotionId(config.dataSourceId) ||
+      props?.['Task Lane']?.select?.name !== 'Development' ||
+      key !== ticketKey(plan) || !matchesProject || recordedPlan !== plan.rel) {
+    fail(`${plan.rel}: Notion Task does not match this plan's development key, lane, project, data source or recorded plan path. Reconcile the original Task before retrying.`);
+  }
+  return { id, path, page };
+}
+
+async function closeTicket(plan, date = today()) {
+  if (isLocal) return;
+  const { path, page } = await readNotionTask(plan);
   const status = page.properties?.Status?.status?.name;
   const completed = page.properties?.['Completed At'];
   if (!opts.dryRun && (!status || !completed || !Object.hasOwn(completed, 'date')))
@@ -1017,7 +1053,7 @@ async function closeTicket(url, date = today()) {
     },
   });
 }
-const text = (content) => [{ text: { content: content.slice(0, 1990) } }];
+const text = (content) => [{ text: { content: content.slice(0, NOTION_TEXT_LIMIT) } }];
 
 // ---------- plan resolution & diff helpers ----------
 
@@ -1599,10 +1635,97 @@ function prCommand(command, args, failure, input) {
   try {
     return execFileSync(command, args, {
       cwd: repoRoot, encoding: 'utf8', input, stdio: ['pipe', 'pipe', 'pipe'],
+      maxBuffer: 64 * 1024 * 1024,
     }).trim();
   } catch (error) {
     fail(`${failure}: ${error.stderr?.trim() || error.message}`);
   }
+}
+
+function githubRepositoryUrl() {
+  if (process.env.GITHUB_ACTIONS === 'true') {
+    return `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}`;
+  }
+  return JSON.parse(prCommand('gh', ['repo', 'view', '--json', 'url'],
+    'could not identify the current GitHub repository')).url;
+}
+
+function readPullRequest(target, repositoryUrl = githubRepositoryUrl()) {
+  const repository = new URL(repositoryUrl);
+  const name = repository.pathname.replace(/^\//, '').replace(/\/$/, '');
+  if (repository.protocol !== 'https:' || !/^[\w.-]+\/[\w.-]+$/.test(name))
+    fail('could not determine a GitHub repository for PR close-out');
+  const prefix = `${repository.origin}/${name}/pull/`;
+  const number = typeof target === 'string' && target.startsWith(prefix)
+    ? target.slice(prefix.length) : target;
+  if (!/^[1-9]\d*$/.test(number || ''))
+    fail('expected a pull request number or a canonical URL in the current GitHub repository');
+  const api = ['api', '--hostname', repository.hostname];
+  const endpoint = `repos/${name}/pulls/${number}`;
+  const pull = JSON.parse(prCommand('gh', [...api, endpoint], 'could not inspect pull request'));
+  const protectedBranches = config.protectedBranches || ['main', 'master', 'develop'];
+  if (pull.html_url !== prefix + number ||
+      pull.base?.repo?.full_name?.toLowerCase() !== name.toLowerCase() ||
+      !protectedBranches.includes(pull.base?.ref))
+    fail('pull request does not target a protected branch in the current GitHub repository');
+  return { pull, api, endpoint, name, repositoryUrl };
+}
+
+const isChangedPlan = (file) =>
+  typeof file.filename === 'string' &&
+  ['added', 'modified', 'renamed'].includes(file.status) &&
+  file.filename.startsWith(`${config.plansDir}/`) &&
+  file.filename.endsWith('.plan.md') &&
+  !basename(file.filename).startsWith('_') &&
+  !file.filename.startsWith(`${config.plansDir}/archive/`);
+
+function pullRequestFiles(pr) {
+  const pages = JSON.parse(prCommand('gh', [
+    ...pr.api, '--paginate', '--slurp', `${pr.endpoint}/files?per_page=100`,
+  ], 'could not read the pull request file list'));
+  if (!Array.isArray(pages) || !pages.every(Array.isArray) ||
+      pages.flat().length !== pr.pull.changed_files)
+    fail('incomplete GitHub pull request file list');
+  return pages.flat();
+}
+
+function planFromPullRequest(pr, file, sha) {
+  if (!/^[a-f\d]{40}$/i.test(sha || '')) fail('pull request has no valid Git commit ID');
+  const local = git(['show', `${sha}:${file.filename}`], { allowFail: true });
+  const path = file.filename.split('/').map(encodeURIComponent).join('/');
+  const raw = local || prCommand('gh', [
+    ...pr.api, '-H', 'Accept: application/vnd.github.raw+json',
+    `repos/${pr.name}/contents/${path}?ref=${sha}`,
+  ], 'could not read the committed pull request plan');
+  return readPlanText(raw, file.filename);
+}
+
+function pullPlanIsLinked(plan, file, pr) {
+  return plan.meta.pr === pr.pull.html_url || (!plan.meta.pr && file.status === 'added');
+}
+
+function matchingPullPlan(pr, plan, files, sha) {
+  const entry = files.find((file) => file.filename === plan.rel && isChangedPlan(file));
+  if (!entry) fail(`${plan.rel}: pull request does not change this plan`);
+  const committed = planFromPullRequest(pr, entry, sha);
+  if (!pullPlanIsLinked(committed, entry, pr))
+    fail(`${committed.rel}: plan is not linked to this pull request`);
+  if (plan.meta.ticket !== committed.meta.ticket || ticketKey(plan) !== ticketKey(committed))
+    fail(`${plan.rel}: local and committed pull request ticket identities differ`);
+  return committed;
+}
+
+function mergedPullDate(pr) {
+  const mergedAt = new Date(pr.pull.merged_at || '');
+  if (pr.pull.merged !== true || !Number.isFinite(mergedAt.valueOf()))
+    fail('GitHub has not confirmed this pull request merged');
+  return mergedAt.toLocaleDateString('sv-SE', { timeZone: config.timeZone || 'Europe/Berlin' });
+}
+
+async function closeMergedPullPlan(pr, plan, files) {
+  const date = mergedPullDate(pr);
+  const committed = matchingPullPlan(pr, plan, files, pr.pull.merge_commit_sha);
+  await closeTicket(committed, date);
 }
 
 function pushPrCommit(branch, head) {
@@ -1614,7 +1737,7 @@ async function linkPullRequest(plan, prUrl, snapshot) {
   if (plan.meta.pr === prUrl && plan.meta.status === 'shipped') return snapshot?.head;
 
   const id = !isLocal && /^https:\/\//.test(plan.meta.ticket || '')
-    ? pageId(plan.meta.ticket)
+    ? (await readNotionTask(plan)).id
     : null;
   if (id) {
     await notion('PATCH', `pages/${id}`, { properties: { URL: { url: prUrl } } });
@@ -3442,11 +3565,14 @@ const commands = {
     if (isLocal) {
       return recordTicket(plan, { url: `local://${key}` }, key, { agent });
     }
-    const description = [
+    const provenance = `\n\nPlan: ${plan.rel}`;
+    const detailsLimit = NOTION_TEXT_LIMIT - 1 - provenance.length;
+    if (detailsLimit < 0) fail('plan path is too long for Notion Task provenance');
+    const details = [
       section(plan.body, 'Summary'),
       `Acceptance criteria:\n${section(plan.body, 'Acceptance criteria')}`,
-      `Plan: ${plan.rel}`,
     ].join('\n\n');
+    const description = details.slice(0, detailsLimit).trimEnd() + provenance;
     const existing = await existingTicket(key);
     if (existing) return recordTicket(plan, existing, key, { recovered: true });
     const parent = {
@@ -3556,7 +3682,7 @@ const commands = {
       if (opts.strict) fail(msg);
       console.warn(`Warning: ${msg}`);
     }
-    await startTicket(plan.meta.ticket);
+    await startTicket(plan);
     plan.meta.status = 'in-progress';
     plan.meta.branch = branch;
     plan.meta.worktree = basename(git(['rev-parse', '--show-toplevel']));
@@ -4185,19 +4311,21 @@ const commands = {
   async done() {
     const plan = onePlan();
     if (!hasTicket(plan.meta.ticket)) fail(`${plan.rel} has no ticket.`);
-    await closeTicket(plan.meta.ticket);
     if (isLocal) {
       plan.meta.status = 'done';
       plan.meta.completedAt = today();
       writePlan(plan);
+    } else {
+      const target = opts.pr || plan.meta.pr;
+      if (!target) fail('done needs the URL of a merged pull request (--pr <url>)');
+      const pr = readPullRequest(target);
+      await closeMergedPullPlan(pr, plan, pullRequestFiles(pr));
     }
     console.log(`Ticket set to Done: ${plan.meta.ticket}`);
   },
 
   async merge() {
     const plan = onePlan();
-    const found = problems(plan);
-    if (found.length) fail(`${plan.rel} is not closed out:\n- ${found.join('\n- ')}`);
 
     const modes = [
       opts.squash && '--squash',
@@ -4207,7 +4335,7 @@ const commands = {
     if (modes.length > 1) fail(`choose at most one merge strategy (${modes.join(', ')})`);
     const strategyFlag = modes[0] || '--squash';
 
-    let prTarget = /^https:\/\//.test(plan.meta.pr || '') ? plan.meta.pr : '';
+    let prTarget = plan.meta.pr || '';
     if (!prTarget) {
       const branch = git(['rev-parse', '--abbrev-ref', 'HEAD'], { allowFail: true });
       if (!branch || branch === 'HEAD')
@@ -4219,41 +4347,59 @@ const commands = {
           'could not look up pull request',
         ),
       ).filter((p) => !p.isCrossRepository);
-      const match =
-        candidates.find((p) => p.state === 'OPEN') ||
-        candidates.find((p) => p.state === 'MERGED') ||
-        candidates[0];
-      if (!match?.url)
+      if (candidates.length > 1)
+        fail(`multiple pull requests found for ${branch}. Link the intended PR before merging.`);
+      if (!candidates[0]?.url)
         fail(`no pull request found for ${plan.rel}; run "node scripts/ticket.mjs pr" first`);
-      prTarget = match.url;
+      prTarget = candidates[0].url;
     }
 
-    const prInfo = JSON.parse(
-      prCommand('gh', ['pr', 'view', prTarget, '--json', 'url,state,headRefName'], 'could not inspect pull request'),
-    );
-    const prUrl = prInfo.url || prTarget;
+    let pr = readPullRequest(prTarget);
+    const prUrl = pr.pull.html_url;
     const mergeArgs = ['pr', 'merge', prUrl, strategyFlag];
     if (!opts.keepBranch) mergeArgs.push('--delete-branch');
+    const files = pullRequestFiles(pr);
+    const head = pr.pull.head?.sha;
+    if (!pr.pull.merged) {
+      if (pr.pull.state !== 'open') fail(`pull request ${prUrl} was closed without merging`);
+      const branch = git(['rev-parse', '--abbrev-ref', 'HEAD']);
+      const localHead = git(['rev-parse', 'HEAD']);
+      assertPrSnapshot(branch, localHead);
+      if (localHead !== head || (plan.meta.branch && plan.meta.branch !== pr.pull.head.ref))
+        fail('pull request head differs from the locally reviewed commit or plan branch');
+      matchingPullPlan(pr, plan, files, head);
+      if (!/^[a-f\d]{40}$/i.test(pr.pull.base.sha || ''))
+        fail('pull request is missing its protected base commit');
+      const base = git(['merge-base', pr.pull.base.sha, head], { allowFail: true });
+      if (!base) fail('pull request base is missing locally. Fetch the protected branch and retry.');
+      const found = problems(plan, { base, head });
+      if (found.length) fail(`${plan.rel} is not closed out:\n- ${found.join('\n- ')}`);
+      mergeArgs.push('--match-head-commit', head);
+    }
 
     if (opts.dryRun) {
-      console.log(`Dry run: gh ${mergeArgs.join(' ')} (state: ${prInfo.state || 'UNKNOWN'})`);
+      console.log(`Dry run: gh ${mergeArgs.join(' ')} (state: ${pr.pull.state})`);
       if (hasTicket(plan.meta.ticket)) {
         console.log(`Dry run: close ticket ${plan.meta.ticket}`);
       }
       return;
     }
 
-    if (prInfo.state === 'MERGED') {
+    if (pr.pull.merged) {
       console.log(`Pull request already merged: ${prUrl}`);
-    } else if (prInfo.state === 'CLOSED') {
-      fail(`pull request ${prUrl} was closed without merging`);
     } else {
       prCommand('gh', mergeArgs, 'could not merge pull request');
+      pr = readPullRequest(prUrl, pr.repositoryUrl);
+      if (!pr.pull.merged) {
+        console.log(`GitHub has not merged ${prUrl} yet. Retry merge after it completes to close the ticket.`);
+        return;
+      }
+      if (pr.pull.head?.sha !== head) fail('merged pull request head differs from the reviewed commit');
       console.log(`Merged pull request: ${prUrl}`);
     }
 
     if (hasTicket(plan.meta.ticket)) {
-      await closeTicket(plan.meta.ticket);
+      await closeMergedPullPlan(pr, plan, files);
       console.log(`Ticket set to Done: ${plan.meta.ticket}`);
     }
   },
@@ -4396,7 +4542,7 @@ const commands = {
       const ticket = plan.meta.ticket || '';
       const validIdentity = isLocal
         ? ticket === `local://${ticketKey(plan)}`
-        : /^https:\/\/(?:(?:www\.)?notion\.so\/|app\.notion\.com\/p\/)[^?#]*[\da-f]{8}(?:-?[\da-f]{4}){3}-?[\da-f]{12}(?:[?#].*)?$/i.test(ticket);
+        : isNotionTaskUrl(ticket);
       if (!validIdentity) found.push('ticket does not match the configured tracker and plan identity');
       if (original) {
         for (const item of missingCheckboxes(bodyOf(original), plan.body))
@@ -4423,37 +4569,15 @@ const commands = {
   },
 
   async 'ci-done'() {
-    if (!opts.head) fail('usage: ci-done --head <merge sha>');
     if (isLocal) return console.log('Local tracker: plan completion is derived from the protected branch.');
-    const mergedAt = opts.mergedAt ? new Date(opts.mergedAt) : new Date();
-    if (!Number.isFinite(mergedAt.valueOf())) fail('invalid --merged-at timestamp');
-    const date = mergedAt.toLocaleDateString('sv-SE', {
-      timeZone: config.timeZone || 'Europe/Berlin',
-    });
-    let files;
-    if (opts.prFiles) {
-      const pages = JSON.parse(readFileSync(opts.prFiles, 'utf8'));
-      if (!Array.isArray(pages) || !pages.every(Array.isArray))
-        fail('invalid GitHub PR file list');
-      files = pages.flat();
-      const expected = Number(opts.changedFiles);
-      if (!opts.pr || !opts.mergedAt || !/^\d+$/.test(opts.changedFiles || '') ||
-          !Number.isSafeInteger(expected) || expected < 0 || files.length !== expected)
-        fail('incomplete GitHub PR file list or missing --pr');
-    } else {
-      const base = opts.base || `${opts.head}^1`;
-      files = git(['diff', '--name-only', '--diff-filter=AMR', '-z', base, opts.head, '--', config.plansDir])
-        .split('\0').filter(Boolean).map((filename) => ({ filename, status: 'added' }));
-    }
-    for (const { filename, status } of files) {
-      if (typeof filename !== 'string' || !['added', 'modified', 'renamed'].includes(status) ||
-          !filename.startsWith(`${config.plansDir}/`) || !filename.endsWith('.plan.md') ||
-          basename(filename).startsWith('_') || filename.startsWith(`${config.plansDir}/archive/`)) continue;
-      const plan = readPlanText(git(['show', `${opts.head}:${filename}`]), filename);
-      if (opts.pr && plan.meta.pr !== opts.pr && (plan.meta.pr || status !== 'added')) continue;
-      if (!hasTicket(plan.meta.ticket)) continue;
-      await closeTicket(plan.meta.ticket, date);
-      console.log(`${filename}: ticket is Done.`);
+    if (!opts.prNumber) fail('usage: ci-done --pr-number <number>');
+    const pr = readPullRequest(opts.prNumber);
+    const date = mergedPullDate(pr);
+    for (const file of pullRequestFiles(pr).filter(isChangedPlan)) {
+      const plan = planFromPullRequest(pr, file, pr.pull.merge_commit_sha);
+      if (!pullPlanIsLinked(plan, file, pr) || !hasTicket(plan.meta.ticket)) continue;
+      await closeTicket(plan, date);
+      console.log(`${file.filename}: ticket is Done.`);
     }
   },
 

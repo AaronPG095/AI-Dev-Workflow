@@ -59,10 +59,12 @@ function fixture(t, front = '', responses = [], configOverrides = {}) {
     `---\ntitle: Plan - Process: Test\nstatus: draft\n${front}---\n# Test\n\n## Summary\nTest fixture\n\n## Acceptance criteria\n- [x] Works verified: fixture\n\n## Steps\n- [x] Implement\n`,
   );
   const requests = join(root, 'requests.jsonl');
+  const ghRequests = join(root, 'gh-requests.jsonl');
   const preload = join(root, 'mock.mjs');
   writeFileSync(
     preload,
     `import { appendFileSync } from 'node:fs';
+import { createRequire, syncBuiltinESMExports } from 'node:module';
 const responses = JSON.parse(process.env.MOCK_RESPONSES);
 globalThis.fetch = async (url, init) => {
   appendFileSync(process.env.MOCK_REQUESTS, JSON.stringify({url, method:init.method, body: init.body ? JSON.parse(init.body) : null}) + '\\n');
@@ -70,18 +72,31 @@ globalThis.fetch = async (url, init) => {
   if (!response) throw new Error('unexpected API request');
   if (response.throw) throw new Error(response.throw);
   return new Response(JSON.stringify(response.body), {status: response.status || 200});
-};`,
+};
+const github = JSON.parse(process.env.MOCK_GITHUB);
+if (github) {
+  const cp = createRequire(import.meta.url)('node:child_process');
+  const original = cp.execFileSync;
+  cp.execFileSync = function (cmd, args, options) {
+    if (cmd !== 'gh') return original(cmd, args, options);
+    appendFileSync(process.env.MOCK_GH_REQUESTS, JSON.stringify(args) + '\\n');
+    if (!github.length) throw new Error('unexpected GitHub call ' + args.join(' '));
+    const result = github.shift();
+    return typeof result === 'string' ? result : JSON.stringify(result);
+  };
+  syncBuiltinESMExports();
+}`,
   );
   function run(
     command,
     options = [],
     replies = responses,
-    { omitPlan = false, envOverrides = {}, cwd = root } = {},
+    { omitPlan = false, envOverrides = {}, cwd = root, github = null } = {},
   ) {
     const args = [
       '--import',
       pathToFileURL(preload).href,
-      join(root, 'scripts/ticket.mjs'),
+      join(cwd, 'scripts/ticket.mjs'),
       command,
       ...(omitPlan ? [] : ['docs/plans/FO-Plan-Test.plan.md']),
       ...options,
@@ -91,9 +106,12 @@ globalThis.fetch = async (url, init) => {
       encoding: 'utf8',
       env: {
         ...process.env,
+        GITHUB_ACTIONS: '',
         NOTION_TOKEN: 'test-token',
         MOCK_RESPONSES: JSON.stringify(replies),
         MOCK_REQUESTS: requests,
+        MOCK_GITHUB: JSON.stringify(github),
+        MOCK_GH_REQUESTS: ghRequests,
         ...envOverrides,
       },
     });
@@ -111,6 +129,8 @@ globalThis.fetch = async (url, init) => {
     return {
       ...result,
       calls,
+      ghCalls: existsSync(ghRequests)
+        ? readFileSync(ghRequests, 'utf8').trim().split('\n').map(JSON.parse) : [],
       plan: existsSync(plan) ? readFileSync(plan, 'utf8') : '',
     };
   }
@@ -126,6 +146,32 @@ globalThis.fetch = async (url, init) => {
 
 const empty = { body: { results: [], has_more: false } };
 const created = { body: { url, id: '40a0b9c6786f817fab0ff2059ad410e3' } };
+const repository = { url: 'https://github.com/example/repo' };
+const planFilename = 'docs/plans/FO-Plan-Test.plan.md';
+const changedPlan = { filename: planFilename, status: 'added' };
+const mergedPull = (number, sha, fields = {}) => ({
+  html_url: `${repository.url}/pull/${number}`,
+  base: { ref: 'main', repo: { full_name: 'example/repo' }, sha },
+  state: 'closed',
+  merged: true,
+  merged_at: '2025-10-20T22:30:00Z',
+  merge_commit_sha: sha,
+  changed_files: 1,
+  ...fields,
+});
+const taskPage = (properties = {}, id = created.body.id) => ({
+  body: {
+    id,
+    parent: { type: 'data_source_id', data_source_id: defaultNotionConfig.dataSourceId },
+    properties: {
+      'Task Lane': { select: { name: 'Development' } },
+      'Dev Ticket Key': { rich_text: [{ plain_text: 'FO:FO-Plan-Test' }] },
+      Project: { relation: [{ id: defaultNotionConfig.projectPageId }] },
+      Description: { rich_text: [{ plain_text: `Earlier summary\n\nPlan: ${planFilename}` }] },
+      ...properties,
+    },
+  },
+});
 
 test('create stamps development fields, optional fields and canonical provenance', (t) => {
   const f = fixture(t, 'priority: high\nstate: flow\ndue: 2026-11-15\n', [
@@ -171,6 +217,16 @@ test('default create has no due date and does not read generic status setting', 
   assert.equal(r.calls.length, 2);
   assert.ok(r.calls.every((c) => c.method === 'POST'));
   assert.equal(r.calls[1].body.properties['Due Date'], undefined);
+});
+
+test('create preserves the canonical plan path in a long Task description', (t) => {
+  const f = fixture(t, '', [empty, created]);
+  writeFileSync(f.plan, readFileSync(f.plan, 'utf8').replace('Test fixture', 'A'.repeat(2500)));
+  const result = f.run('create', ['--agent', 'Codex']);
+  assert.equal(result.status, 0, result.stderr);
+  const description = result.calls[1].body.properties.Description.rich_text[0].text.content;
+  assert.ok(description.length < 1990);
+  assert.equal(description.split('\n').at(-1), `Plan: ${planFilename}`);
 });
 
 test('lost local URL recovers by persisted key without modifying existing Task', (t) => {
@@ -263,13 +319,7 @@ for (const error of [
 for (const started of [null, '2026-10-31'])
   test(`start preserves existing date (${started})`, (t) => {
     const f = fixture(t, `ticket: ${url}\n`, [
-      {
-        body: {
-          properties: {
-            'Started At': { date: started ? { start: started } : null },
-          },
-        },
-      },
+      taskPage({ 'Started At': { date: started ? { start: started } : null } }),
       { body: {} },
     ]);
     f.git('init', '-b', 'test-ticket');
@@ -295,17 +345,38 @@ for (const started of [null, '2026-10-31'])
       );
   });
 
-const completionState = (status = 'Doing', start = null) => ({
-  body: {
-    properties: {
-      Status: { status: { name: status } },
-      'Completed At': { date: start ? { start } : null },
-    },
-  },
+const completionState = (status = 'Doing', start = null, id) => taskPage({
+  Status: { status: { name: status } },
+  'Completed At': { date: start ? { start } : null },
+}, id);
+
+function doneGitHubFixture(plan, fields) {
+  return [repository, mergedPull(1, '1'.repeat(40), fields), [[changedPlan]], plan];
+}
+
+test('ship refuses to write to a Task with mismatched identity', (t) => {
+  const f = fixture(t, `ticket: ${url}\n`);
+  const valid = taskPage().body;
+  for (const [index, body] of [
+    { ...valid, parent: { ...valid.parent, data_source_id: defaultNotionConfig.projectPageId } },
+    ...Object.entries({
+      'Dev Ticket Key': { rich_text: [{ plain_text: 'FO:Other-Plan' }] },
+      'Task Lane': { select: { name: 'Life OS' } },
+      Project: { relation: [] },
+      Description: { rich_text: [{ plain_text: `ADW plan: ${planFilename}\n\nPlan: docs/plans/FO-Plan-Other.plan.md` }] },
+    }).map(([key, value]) => ({ ...valid, properties: { ...valid.properties, [key]: value } })),
+  ].entries()) {
+    const r = f.run('ship', ['--pr', `${repository.url}/pull/1`], [{ body }]);
+    assert.notEqual(r.status, 0);
+    assert.match(r.stderr, /Notion Task does not match this plan/);
+    assert.equal(r.calls.length, index + 1);
+    assert.ok(r.calls.every((call) => call.method === 'GET'));
+  }
 });
 
 test('done writes Done and Completed At together', (t) => {
-  const r = fixture(t, `ticket: ${url}\n`, [completionState(), { body: {} }]).run('done');
+  const f = fixture(t, `ticket: ${url}\npr: ${repository.url}/pull/1\n`, [completionState(), { body: {} }]);
+  const r = f.run('done', [], undefined, { github: doneGitHubFixture(readFileSync(f.plan, 'utf8')) });
   assert.equal(r.status, 0, r.stderr);
   assert.equal(r.calls[0].method, 'GET');
   assert.equal(r.calls[1].body.properties.Status.status.name, 'Done');
@@ -316,15 +387,30 @@ test('done writes Done and Completed At together', (t) => {
 });
 
 test('done preserves existing completion and skips a redundant update', (t) => {
-  const open = fixture(t, `ticket: ${url}\n`, [
+  const pending = fixture(t, `ticket: ${url}\npr: ${repository.url}/pull/1\n`, [
+    completionState(),
+  ]);
+  const unmerged = pending.run('done', [], undefined, {
+    github: doneGitHubFixture('', { merged: false, state: 'open' }),
+  });
+  assert.match(unmerged.stderr, /GitHub has not confirmed/);
+  assert.equal(unmerged.calls.length, 0);
+
+  const openFixture = fixture(t, `ticket: ${url}\npr: ${repository.url}/pull/1\n`, [
     completionState('Doing', '2025-10-20'),
     { body: {} },
-  ]).run('done');
+  ]);
+  const open = openFixture.run('done', [], undefined, {
+    github: doneGitHubFixture(readFileSync(openFixture.plan, 'utf8')),
+  });
   assert.equal(open.status, 0, open.stderr);
   assert.deepEqual(open.calls[1].body.properties, { Status: { status: { name: 'Done' } } });
-  const closed = fixture(t, `ticket: ${url}\n`, [
+  const closedFixture = fixture(t, `ticket: ${url}\npr: ${repository.url}/pull/1\n`, [
     completionState('Done', '2025-10-20'),
-  ]).run('done');
+  ]);
+  const closed = closedFixture.run('done', [], undefined, {
+    github: doneGitHubFixture(readFileSync(closedFixture.plan, 'utf8')),
+  });
   assert.equal(closed.status, 0, closed.stderr);
   assert.deepEqual(closed.calls.map((call) => call.method), ['GET']);
 });
@@ -356,25 +442,43 @@ test('ci-done reads the full PR file list and the committed plan after a linear 
   f.git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid',
     'commit', '--allow-empty', '-m', 'last rebased commit does not touch plan');
   writeFileSync(f.plan, 'This dirty checkout is not the merged plan.');
-  const list = join(f.root, 'pr-files.json');
-  writeFileSync(list, JSON.stringify([
-    [{ filename: 'docs/plans/FO-Plan-Test.plan.md', status: 'added' }],
+  const files = [
+    [changedPlan],
     [{ filename: 'README.md', status: 'modified' }],
-  ]));
-  const args = [
-    '--head', f.git('rev-parse', 'HEAD'), '--pr-files', list, '--pr', pr,
-    '--changed-files', '2', '--merged-at', '2025-10-20T22:30:00Z',
   ];
-  const r = f.run('ci-done', args, undefined, { omitPlan: true });
+  const sha = f.git('rev-parse', 'HEAD');
+  const args = ['--pr-number', '1'];
+  const github = [repository, mergedPull(1, sha, { changed_files: 2 }), files];
+  const r = f.run('ci-done', args, undefined, {
+    omitPlan: true,
+    github: github.slice(1),
+    envOverrides: {
+      GITHUB_ACTIONS: 'true',
+      GITHUB_SERVER_URL: 'https://github.com',
+      GITHUB_REPOSITORY: 'example/repo',
+    },
+  });
   assert.equal(r.status, 0, r.stderr);
   assert.equal(r.calls[1].body.properties.Status.status.name, 'Done');
   assert.equal(r.calls[1].body.properties['Completed At'].date.start, '2025-10-21');
-  const truncated = f.run('ci-done', [...args, '--changed-files', '3'], undefined, { omitPlan: true });
+  const truncated = f.run('ci-done', args, undefined, {
+    omitPlan: true, github: [repository, mergedPull(1, sha, { changed_files: 3 }), files],
+  });
   assert.notEqual(truncated.status, 0);
-  assert.match(truncated.stderr, /incomplete GitHub PR file list/);
+  assert.match(truncated.stderr, /incomplete GitHub pull request file list/);
   assert.equal(truncated.calls.length, r.calls.length);
+  for (const [pull, error] of [
+    [mergedPull(1, sha, { merged: false }), /GitHub has not confirmed/],
+    [mergedPull(1, sha, { base: { ref: 'feature', repo: { full_name: 'example/repo' } } }),
+      /does not target a protected branch/],
+  ]) {
+    const rejected = f.run('ci-done', args, undefined, { omitPlan: true, github: [repository, pull] });
+    assert.notEqual(rejected.status, 0);
+    assert.match(rejected.stderr, error);
+    assert.equal(rejected.calls.length, r.calls.length);
+  }
   const missingSecret = f.run('ci-done', args, undefined, {
-    omitPlan: true,
+    omitPlan: true, github,
     envOverrides: { NOTION_TOKEN: '' },
   });
   assert.notEqual(missingSecret.status, 0);
@@ -412,14 +516,10 @@ for (const method of ['merge commit', 'squash']) {
     } else {
       f.git('merge', '--no-ff', '-m', 'merge commit', 'feature');
     }
-    const list = join(f.root, 'pr-files.json');
-    writeFileSync(list, JSON.stringify([
-      [{ filename: 'docs/plans/FO-Plan-Test.plan.md', status: 'added' }],
-    ]));
-    const r = f.run('ci-done', [
-      '--head', f.git('rev-parse', 'HEAD'), '--pr-files', list, '--pr', pr,
-      '--changed-files', '1', '--merged-at', '2025-10-20T12:30:00Z',
-    ], undefined, { omitPlan: true });
+    const github = [repository, mergedPull(2, f.git('rev-parse', 'HEAD'), {
+      merged_at: '2025-10-20T12:30:00Z',
+    }), [[changedPlan]]];
+    const r = f.run('ci-done', ['--pr-number', '2'], undefined, { omitPlan: true, github });
     assert.equal(r.status, 0, r.stderr);
     assert.equal(r.calls[1].body.properties['Completed At'].date.start, '2025-10-20');
   });
@@ -610,7 +710,7 @@ test('pack outputs compact review packet, filters lockfiles, and truncates large
 });
 
 test('worktree .env fallback reads NOTION_TOKEN from main checkout', (t) => {
-  const f = fixture(t, `ticket: ${url}\n`, [completionState(), { body: {} }]);
+  const f = fixture(t, `ticket: ${url}\npr: ${repository.url}/pull/1\n`, [completionState(), { body: {} }]);
   f.git('init', '-b', 'main');
   f.git('add', '.');
   f.git(
@@ -632,6 +732,7 @@ test('worktree .env fallback reads NOTION_TOKEN from main checkout', (t) => {
   const r = f.run('done', [], undefined, {
     envOverrides: { NOTION_TOKEN: '' },
     cwd: wt,
+    github: [repository, mergedPull(1, f.git('rev-parse', 'HEAD')), [[changedPlan]]],
   });
   assert.equal(r.status, 0, r.stderr);
   assert.deepEqual(r.calls.map((call) => call.method), ['GET', 'PATCH']);
@@ -3909,32 +4010,8 @@ test('T3.5: verify --pre-push, prePushVerify hook/doctor, merge local Notion clo
   assert.match(dr.stdout, /Pre-push:\s+installed \(prePushVerify: test\)/);
 
   // 2. merge command merges open PR via gh and closes Notion ticket locally
-  const mock = mkdtempSync(join(tmpdir(), 'adw-merge-mock-'));
-  t.after(() => rmSync(mock, { recursive: true, force: true }));
-  const log = join(mock, 'gh.jsonl');
-  const preload = join(mock, 'gh-mock.mjs');
   const prUrl = 'https://github.com/example/repo/pull/99';
   const taskId = '11111111111141118111111111111111';
-  writeFileSync(
-    preload,
-    `
-    import { createRequire } from 'node:module';
-    const require = createRequire(import.meta.url);
-    const cp = require('node:child_process');
-    const fs = require('node:fs');
-    const orig = cp.execFileSync;
-    cp.execFileSync = function(cmd, args, options = {}) {
-      if (cmd !== 'gh') return orig.apply(this, arguments);
-      fs.appendFileSync(process.env.MERGE_MOCK_LOG, JSON.stringify(args) + '\\n');
-      if (args[1] === 'view') {
-        return JSON.stringify({ url: '${prUrl}', state: 'OPEN', headRefName: 'feat/x' });
-      }
-      if (args[1] === 'merge') return '';
-      throw Error('unexpected gh command: ' + args.join(' '));
-    };
-    require('node:module').syncBuiltinESMExports();
-  `,
-  );
 
   const fMerge = fixture(
     t,
@@ -3951,10 +4028,13 @@ test('T3.5: verify --pre-push, prePushVerify hook/doctor, merge local Notion clo
     { requireReview: true },
   );
   fMerge.git('init', '-b', 'main');
+  writeFileSync(join(fMerge.root, '.git/info/exclude'), '\ngh-requests.jsonl\nrequests.jsonl\n', { flag: 'a' });
   fMerge.git('config', 'user.name', 'Test');
   fMerge.git('config', 'user.email', 'test@example.invalid');
   fMerge.git('add', '.');
   fMerge.git('commit', '-m', 'init');
+  const base = fMerge.git('rev-parse', 'HEAD');
+  fMerge.git('switch', '-c', 'feature');
   const planBody = readFileSync(fMerge.plan, 'utf8')
     .replace('- [ ] AC1\n', '- [x] AC1 verified: ok\n')
     .replace('- [ ] Step\n', '- [x] Step\n');
@@ -3968,28 +4048,50 @@ test('T3.5: verify --pre-push, prePushVerify hook/doctor, merge local Notion clo
   assert.equal(revMergeRes.status, 0, revMergeRes.stderr);
   fMerge.git('add', '.');
   fMerge.git('commit', '-m', 'reviewed');
+  const reviewedHead = fMerge.git('rev-parse', 'HEAD');
+  const prFiles = [[{ ...changedPlan, status: 'modified' }]];
+  const merged = mergedPull(99, reviewedHead, {
+    head: { sha: reviewedHead, ref: 'feature' },
+    base: { ref: 'main', repo: { full_name: 'example/repo' }, sha: base },
+  });
+  const open = { ...merged, merged: false, state: 'open' };
+
+  const queued = fMerge.run('merge', [], [], {
+    github: [repository, open, prFiles, '', open],
+  });
+  assert.equal(queued.status, 0, queued.stderr);
+  assert.match(queued.stdout, /has not merged .* yet/);
+  assert.equal(queued.calls.length, 0);
+
+  const stale = fMerge.run('merge', [], [], {
+    github: [repository, { ...open, head: { sha: base, ref: 'feature' } }, prFiles],
+  });
+  assert.match(stale.stderr, /head differs from the locally reviewed commit/);
+  assert.equal(stale.calls.length, 0);
+
+  const unrelated = fMerge.run('merge', [], [], {
+    github: [repository, open, [[{ filename: 'README.md', status: 'modified' }]]],
+  });
+  assert.match(unrelated.stderr, /pull request does not change this plan/);
+  assert.equal(unrelated.calls.length, 0);
 
   const mergeRes = fMerge.run(
     'merge',
     ['--squash'],
     [
-      { body: { id: taskId, properties: { Status: { status: { name: 'Doing' } }, 'Completed At': { date: null } } } },
+      completionState('Doing', null, taskId),
       { body: { id: taskId } },
     ],
     {
       omitPlan: true,
-      envOverrides: {
-        NODE_OPTIONS: `--import=${pathToFileURL(preload).href}`,
-        MERGE_MOCK_LOG: log,
-      },
+      github: [repository, open, prFiles, '', merged],
     },
   );
   assert.equal(mergeRes.status, 0, mergeRes.stderr);
   assert.match(mergeRes.stdout, /Merged pull request:/);
   assert.match(mergeRes.stdout, /Ticket set to Done:/);
-  const ghCalls = readFileSync(log, 'utf8').trim().split('\n').map(JSON.parse);
-  assert.equal(ghCalls[0][1], 'view');
-  assert.deepEqual(ghCalls[1], ['pr', 'merge', prUrl, '--squash', '--delete-branch']);
+  assert.deepEqual(mergeRes.ghCalls.find((args) => args[1] === 'merge'),
+    ['pr', 'merge', prUrl, '--squash', '--delete-branch', '--match-head-commit', reviewedHead]);
   const donePatch = mergeRes.calls.find(
     (r) => r.method === 'PATCH' && r.url.includes(taskId) && r.body?.properties?.Status?.status?.name === 'Done',
   );
@@ -4004,7 +4106,7 @@ test('T3.5: verify --pre-push, prePushVerify hook/doctor, merge local Notion clo
     });
   assert.equal(runSync(['--init-prefix', 'OPT']).status, 0);
   const targetDonePath = join(target, '.github/workflows/ticket-done.yml');
-  const hadPullRequest = /pull_request:/.test(readFileSync(targetDonePath, 'utf8'));
+  const hadPullRequest = /pull_request(?:_target)?:/.test(readFileSync(targetDonePath, 'utf8'));
   const targetCfgPath = join(target, 'scripts/ticket.config.json');
   const targetCfg = JSON.parse(readFileSync(targetCfgPath, 'utf8'));
   targetCfg.ci = { ticketDoneWorkflow: false };
@@ -4023,7 +4125,10 @@ test('T3.5: verify --pre-push, prePushVerify hook/doctor, merge local Notion clo
   }
   const doneWorkflow = readFileSync(targetDonePath, 'utf8');
   assert.match(doneWorkflow, /workflow_dispatch:/);
-  assert.doesNotMatch(doneWorkflow, /pull_request:/);
+  assert.match(doneWorkflow, /inputs:\s+pr:\s+description: Number of the merged pull request/);
+  assert.match(doneWorkflow, /github.event_name == 'workflow_dispatch'/);
+  assert.match(doneWorkflow, /ci-done --pr-number/);
+  assert.doesNotMatch(doneWorkflow, /pull_request(?:_target)?:/);
   assert.equal(runSync(['--check']).status, 0);
   const selfDoctorBundleCheck = spawnSync(
     process.execPath,
