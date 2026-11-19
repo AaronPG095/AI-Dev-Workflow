@@ -1364,22 +1364,6 @@ function reviewFingerprint(plan, base, head, dir = repoRoot) {
   return createHash('sha256').update(JSON.stringify(scope)).update(diff).digest('hex');
 }
 
-function checkGitHubApproval(reviewsPath, author, head) {
-  const pages = JSON.parse(readFileSync(reviewsPath, 'utf8'));
-  if (!author || !Array.isArray(pages) || !pages.every(Array.isArray))
-    fail('GitHub approval check requires the PR author and the complete GitHub review list');
-  const latest = new Map();
-  for (const review of pages.flat()) {
-    const login = review.user?.login?.toLowerCase();
-    if (!login || login === author.toLowerCase() ||
-        !['OWNER', 'MEMBER', 'COLLABORATOR'].includes(review.author_association) ||
-        !['APPROVED', 'CHANGES_REQUESTED', 'DISMISSED'].includes(review.state)) continue;
-    latest.set(login, review);
-  }
-  if (![...latest.values()].some((review) => review.state === 'APPROVED' && review.commit_id === head))
-    fail('the current PR head needs an approving GitHub review from another repository collaborator');
-}
-
 function isTestFile(filePath, cfg = config) {
   const normPath = filePath.replace(/\\/g, '/');
   if (normPath.startsWith(`${cfg.plansDir || 'docs/plans'}/`)) return false;
@@ -4626,8 +4610,6 @@ const commands = {
       fail(
         'close out the plan(s) above: tick every item or mark it "deferred: <reason>".',
       );
-    if (isRequireReview(config) && opts.githubReviews)
-      checkGitHubApproval(opts.githubReviews, opts.prAuthor, git(['rev-parse', opts.head]));
     verifyInvariants();
   },
 

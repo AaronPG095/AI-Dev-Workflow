@@ -1197,29 +1197,13 @@ test('ci-check validates committed plan identity, evidence, hygiene, and review 
   writeFileSync(planPath, 'invalid working-copy plan');
   assert.equal(check().status, 0, check().stderr);
 
-  const head = f.git('rev-parse', 'HEAD');
-  const approvals = join(f.root, 'reviews.json');
-  const approvedReview = {
-    state: 'APPROVED', author_association: 'COLLABORATOR', commit_id: head,
-    user: { login: 'reviewer' },
-  };
-  const checkApproval = (pages) => {
-    writeFileSync(approvals, JSON.stringify(pages));
-    return f.run('ci-check', [
-      '--base', base, '--head', head, '--github-reviews', approvals, '--pr-author', 'author',
-    ], [], { omitPlan: true });
-  };
-  for (const pages of [
-    [[]],
-    [[{ ...approvedReview, commit_id: base }]],
-    [[{ ...approvedReview, user: { login: 'Author' } }]],
-    [[{ ...approvedReview, author_association: 'CONTRIBUTOR' }]],
-    [[approvedReview], [{ ...approvedReview, state: 'DISMISSED' }]],
-    [[approvedReview], [{ ...approvedReview, state: 'CHANGES_REQUESTED' }]],
-  ]) assert.match(checkApproval(pages).stderr, /current PR head needs an approving GitHub review/);
-  const accepted = checkApproval([[approvedReview, { ...approvedReview, state: 'COMMENTED' }]]);
-  assert.equal(accepted.status, 0, accepted.stderr);
-  rmSync(approvals);
+  const selfReview = reviewed.replace('reviewedBy: Codex', 'reviewedBy: Gemini');
+  writeFileSync(planPath, selfReview);
+  commit();
+  assert.match(check().stderr, /self-review blocked/);
+  writeFileSync(planPath, selfReview.replace('reviewedBy: Gemini', 'reviewedBy: Gemini\nreviewSession: fixture-independent-review'));
+  commit();
+  assert.equal(check().status, 0, check().stderr);
   for (const field of ['agent', 'reviewedBy']) {
     writeFileSync(planPath, reviewed.replace(new RegExp(`^${field}:.*\\n`, 'm'), ''));
     f.git('add', '--', plan);

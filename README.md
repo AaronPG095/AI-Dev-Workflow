@@ -102,7 +102,7 @@ Trivial changes (`<= 40` changed lines, no new files in the main source folder, 
 
 Stage new files before preparing a review. The review records a fingerprint of the diff and plan requirements. Code or requirement edits require a new review. PR linking and progress log updates preserve the fingerprint. `requireReview` defaults to `true` and `allowSelfReview` defaults to `false` (require an independent `--agent` or `--reviewer-id <subagent-id>`). When adopting an older plan that lacks its implementing `agent`, restore the actual client in the plan before recording review.
 
-For planned changes with `requireReview` enabled, Plan check also requires a current-head GitHub approval from another repository collaborator. The local review stamp records the agent's findings and the GitHub review authenticates an independent approver. Configure protected branches to require Plan check, require approval from a user with write access, dismiss stale approvals, and protect edits to workflow definitions through code-owner approval where available.
+Plan check verifies the recorded reviewer fields and the freshness of the review fingerprint. An independent sub-agent or fresh session can supply the review in a solo repository. The plan stamp records reviewer provenance as supplied by the reviewer.
 
 `pr` requires a clean committed working tree. With `--verify`, it tests the initial commit and any new plan-link commit before pushing each revision. It stops if verification changes the checkout. If shipping fails after opening the PR, retry the command to reuse the open PR on that branch. The link commit contains only the selected plan.
 

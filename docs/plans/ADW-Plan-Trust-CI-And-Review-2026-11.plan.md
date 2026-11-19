@@ -11,16 +11,17 @@ branch: codex/trust-ci-and-review
 worktree: AI-Dev-Workflow
 startedAt: 2026-11-18
 reviewedBy: Codex
-reviewVerdict: warn
-reviewSession: /root/review_ci
-reviewFingerprint: bc7fab6ac1764f96a1cca964c78c34ea3ade0614bccac9dbb48c8f984446bd6a
+reviewVerdict: pass
+reviewSession: /root/review_solo_gate
+reviewFingerprint: 9ea19e0167aad0872635c45709d06999ed8db19dd9fe9a4e79250c80d6f78a3d
 pr: https://github.com/AaronPG095/AI-Dev-Workflow/pull/40
+baseBranch: main
 ---
 # Trust CI and review evidence
 
 ## Summary
 
-Require a plan for workflow changes, run repository invariants on exempt changes, and distinguish local review stamps from authenticated GitHub approvals.
+Require a plan for workflow changes, run repository invariants on exempt changes, and validate review stamps for the existing independent sub-agent workflow.
 
 ## Context
 
@@ -34,17 +35,19 @@ None
 
 - [x] AC1: A managed workflow change requires a plan, and the gate never executes a candidate sync verifier. verified(test): A legitimate upstream sync fixture is rejected by ci-check with no-plan.
 - [x] AC2: The configured repository invariants run for valid no-plan and archive-only changes. verified(test): Trivial and archive-only fixtures reject a committed invariant violation even with a clean worktree copy.
-- [x] AC3: Required local review stamps include valid identities, and GitHub documents and enforces the independent approval boundary for a PR revision. verified(test): Targeted tests accepted a current collaborator review and rejected missing identities, stale, self, external, dismissed, and changed-request reviews.
+- [ ] AC3: Required local review stamps include valid identities, and GitHub documents and enforces the independent approval boundary for a PR revision. deferred: The authenticated GitHub approval requirement was superseded by the approved solo workflow in AC4.
+- [x] AC4: Plan check validates the reviewer fields and fingerprint while supporting independent sub-agent review for a solo GitHub owner. verified(test): Focused suite passed 7 of 7, including current sub-agent stamp acceptance and rejection of missing identities, self-review and stale fingerprints.
 
 ## Steps
 
 - [x] Remove the untrusted sync verification route and keep invariants in the successful gate paths (AC1, AC2).
-- [x] Tighten local stamp validation and enforce authenticated independent review on GitHub (AC3).
+- [ ] Tighten local stamp validation and enforce authenticated independent review on GitHub (AC3). deferred: Retain local stamp validation and use the existing independent sub-agent process covered by AC4.
 - [x] Verify the gate behavior with regression fixtures and align the distribution documentation (AC1, AC2, AC3).
+- [x] Remove the GitHub approval dependency and verify valid sub-agent stamps, self-review rejection, and stale review rejection (AC4).
 
 ## Risks
 
-An approval for a prior revision could leave a check green. Check the reviewed head and use protected-branch rules to prevent approval and workflow-check bypasses.
+The fingerprint detects stale stamps. The reviewer identity is recorded in the plan and depends on the independent review process.
 
 ## Out of scope
 
@@ -54,6 +57,10 @@ Notion close-out and local verification or shipping fixes have separate plans. G
 
 Aaron approved the review's fixes by saying “Implement your fixes.”
 
+Aaron approved retaining independent sub-agent review and removing the mandatory GitHub approval by saying “Fix it and then merge it.”
+
 ## Progress log
 - 2026-11-18 09:43 UTC, Codex (handoff): Done: CI trust fixes and targeted regression tests; independent review completed.; Next: Confirm full Windows suite and open the PR.; Open: none; Tree: 6 dirty file(s)
 - 2026-11-18 09:43 UTC, Codex (review: warn): Independent review verified gate controls and resolved large-blob compatibility. Up-to-date branches avoid stale-head README invariant failures, and native reviewer and workflow-owner protection is required. [reviewer: /root/review_ci]
+- 2026-11-19 14:30 UTC, Codex (handoff): Done: Removed the mandatory GitHub approver, retained the review-stamp and invariant checks, and passed focused tests and independent review.; Next: Push the revised PR, verify CI and merge.; Open: none; Tree: 5 dirty file(s)
+- 2026-11-19 14:30 UTC, Codex (review: pass): Independent review confirmed the solo workflow, retained review fingerprint and invariants, and accurate deferrals. Focused suite passed 7 of 7. [reviewer: /root/review_solo_gate]
