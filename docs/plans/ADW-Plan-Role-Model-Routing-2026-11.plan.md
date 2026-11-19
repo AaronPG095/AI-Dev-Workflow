@@ -1,7 +1,7 @@
 ---
 title: Plan - Feature: Role Model Routing
 ticket: local://ADW:ADW-Plan-Role-Model-Routing-2026-11
-status: in-progress
+status: shipped
 priority: 
 state: 
 due: 
@@ -19,6 +19,7 @@ reviewSession: reviewer-neon-low
 reviewModel: gemini-4-neon-low
 baseBranch: main
 reviewFingerprint: 6833244f094379de50baab8abfbcf96425e063b0832235b0c542d340c0555801
+pr: https://github.com/AaronPG095/AI-Dev-Workflow/pull/43
 ---
 # Role Model Routing
 
