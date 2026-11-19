@@ -4254,3 +4254,179 @@ test('T3.5: verify --pre-push, prePushVerify hook/doctor, merge local Notion clo
   assert.equal(selfDoctorBundleCheck.status, 0, selfDoctorBundleCheck.stderr);
 });
 
+test('role-to-model routing: config defaults, step/prime/review --prompt/run --dry-run, ADW_MODEL, and review --model', (t) => {
+  const repoRoot = dirname(scripts);
+  const expectedModels = {
+    planner: 'gemini-4-neon-medium',
+    builder: 'gemini-4-hydrogen-medium',
+    fixer: 'gemini-4-hydrogen-medium',
+    reviewer: 'gemini-4-neon-low',
+  };
+  for (const relCfg of ['scripts/ticket.config.json', 'ticket.config.example.json']) {
+    const cfg = JSON.parse(readFileSync(join(repoRoot, relCfg), 'utf8'));
+    assert.deepEqual(cfg.agentic?.models, expectedModels, `${relCfg} agentic.models`);
+  }
+  const manifest = JSON.parse(readFileSync(join(scripts, 'workflow-manifest.json'), 'utf8'));
+  assert.deepEqual(manifest.starterConfig?.agentic?.models, expectedModels, 'starterConfig agentic.models');
+
+  // 1. Configured agentic.models surfaces across step, step --json, prime, review --prompt, run --dry-run
+  const f = fixture(
+    t,
+    'ticket: local://FO:FO-Plan-Test\nagent: Gemini\n',
+    [],
+    {
+      tracker: 'local',
+      verify: { test: 'node -e "process.exit(0)"' },
+      agentic: { maxRetries: 2, verifyTier: 'test', models: expectedModels },
+    },
+  );
+  writeFileSync(
+    join(f.root, 'docs/plans/FO-Plan-Test.plan.md'),
+    [
+      '---',
+      'title: Plan - Feature: Role Routing',
+      'ticket: local://FO:FO-Plan-Test',
+      'status: in-progress',
+      'agent: Gemini',
+      '---',
+      '# Role Routing',
+      '',
+      '## Summary',
+      'Test role model routing.',
+      '',
+      '## Context',
+      '- scripts/ticket.mjs',
+      '',
+      '## Open questions',
+      'None',
+      '',
+      '## Acceptance criteria',
+      '- [ ] AC1: Works',
+      '',
+      '## Steps',
+      '- [ ] Step 1 (AC1)',
+      '',
+      '## Progress log',
+    ].join('\n'),
+  );
+  f.git('init', '-b', 'feat/role-test');
+  f.git('config', 'user.name', 'Test');
+  f.git('config', 'user.email', 'test@example.invalid');
+  f.git('add', '.');
+  f.git('commit', '-m', 'init');
+
+  for (const [role, model] of Object.entries(expectedModels)) {
+    const res = f.run('step', ['--role', role]);
+    assert.equal(res.status, 0, res.stderr);
+    assert.match(res.stdout, new RegExp(`Model:\\s+${model}`));
+    const jsonRes = f.run('step', ['--role', role, '--json']);
+    assert.equal(jsonRes.status, 0, jsonRes.stderr);
+    const parsed = JSON.parse(jsonRes.stdout);
+    assert.equal(parsed.role, role);
+    assert.equal(parsed.model, model);
+  }
+  const plannerRes = f.run('step', ['--role', 'planner']);
+  assert.match(plannerRes.stdout, /# Planner Brief:/);
+  assert.match(plannerRes.stdout, /## Planning Protocol/);
+
+  const primeRes = f.run('prime');
+  assert.equal(primeRes.status, 0, primeRes.stderr);
+  assert.match(
+    primeRes.stdout,
+    /Models:\s+planner=gemini-4-neon-medium \| builder=gemini-4-hydrogen-medium \| reviewer=gemini-4-neon-low \| fixer=gemini-4-hydrogen-medium/,
+  );
+
+  const reviewPromptRes = f.run('review', ['--prompt']);
+  assert.equal(reviewPromptRes.status, 0, reviewPromptRes.stderr);
+  assert.match(reviewPromptRes.stdout, /Model:\s+gemini-4-neon-low/);
+
+  const dryRunRes = f.run('run', ['--cmd', 'node -e ""', '--dry-run']);
+  assert.equal(dryRunRes.status, 0, dryRunRes.stderr);
+  assert.match(dryRunRes.stdout, /Models:\s+planner=gemini-4-neon-medium/);
+  assert.match(dryRunRes.stdout, /Model:\s+gemini-4-hydrogen-medium/);
+
+  // 2. ADW_MODEL propagation in run for builder and reviewer
+  const envLogDir = mkdtempSync(join(tmpdir(), 'adw-env-'));
+  t.after(() => rmSync(envLogDir, { recursive: true, force: true }));
+  const envLog = join(envLogDir, 'adw-env.jsonl');
+  const runnerScript = join(f.root, 'runner.mjs');
+  writeFileSync(
+    runnerScript,
+    `import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+appendFileSync(${JSON.stringify(envLog)}, JSON.stringify({ role: process.env.ADW_ROLE, model: process.env.ADW_MODEL }) + '\\n');
+const planPath = process.env.ADW_PLAN;
+if (process.env.ADW_ROLE === 'reviewer') {
+  execFileSync(process.execPath, ['scripts/ticket.mjs', 'review', planPath, '--agent', 'Codex', '--model', process.env.ADW_MODEL || '', '--verdict', 'pass', '--summary', 'Runner verified']);
+}
+`,
+  );
+  // Ensure clean tree for review fingerprint
+  f.git('add', 'runner.mjs');
+  f.git('commit', '-m', 'add runner');
+  const runRes = f.run('run', ['--cmd', `node ${JSON.stringify(runnerScript)}`]);
+  assert.equal(runRes.status, 0, `${runRes.stdout}\n${runRes.stderr}`);
+  const envEntries = readFileSync(envLog, 'utf8')
+    .trim()
+    .split('\n')
+    .map((l) => JSON.parse(l));
+  assert.deepEqual(
+    envEntries.filter((e) => e.role === 'builder').map((e) => e.model),
+    ['gemini-4-hydrogen-medium', 'gemini-4-hydrogen-medium'],
+  );
+  assert.deepEqual(
+    envEntries.filter((e) => e.role === 'reviewer').map((e) => e.model),
+    ['gemini-4-neon-low'],
+  );
+
+  // 3. review --model records reviewModel and progress log tag, and omitting --model stays backward-compatible
+  const planAfterRun = readFileSync(join(f.root, 'docs/plans/FO-Plan-Test.plan.md'), 'utf8');
+  assert.match(planAfterRun, /reviewModel: gemini-4-neon-low/);
+  assert.match(planAfterRun, /\(review: pass\): Runner verified \(model: gemini-4-neon-low\)/);
+
+  const plainRev = f.run('review', [
+    '--agent',
+    'Codex',
+    '--verdict',
+    'pass',
+    '--summary',
+    'No model flag',
+  ]);
+  assert.equal(plainRev.status, 0, plainRev.stderr);
+  assert.doesNotMatch(plainRev.plan, /reviewModel:/);
+  assert.match(plainRev.plan, /\(review: pass\): No model flag$/m);
+
+  // 4. Omitting agentic.models omits Model/Models lines cleanly
+  const fNoModels = fixture(
+    t,
+    'ticket: local://FO:FO-Plan-Test\nagent: Gemini\n',
+    [],
+    { tracker: 'local', verify: { test: 'node -e "process.exit(0)"' } },
+  );
+  fNoModels.git('init', '-b', 'feat/no-models');
+  fNoModels.git('config', 'user.name', 'Test');
+  fNoModels.git('config', 'user.email', 'test@example.invalid');
+  fNoModels.git('add', '.');
+  fNoModels.git('commit', '-m', 'init');
+
+  for (const role of ['planner', 'builder', 'reviewer', 'fixer']) {
+    const res = fNoModels.run('step', ['--role', role]);
+    assert.equal(res.status, 0, res.stderr);
+    assert.doesNotMatch(res.stdout, /^Model:/m);
+    const jRes = fNoModels.run('step', ['--role', role, '--json']);
+    assert.equal(jRes.status, 0, jRes.stderr);
+    assert.equal('model' in JSON.parse(jRes.stdout), false);
+  }
+  const primeNoModels = fNoModels.run('prime');
+  assert.equal(primeNoModels.status, 0, primeNoModels.stderr);
+  assert.doesNotMatch(primeNoModels.stdout, /^Models:/m);
+  const revPromptNoModels = fNoModels.run('review', ['--prompt']);
+  assert.equal(revPromptNoModels.status, 0, revPromptNoModels.stderr);
+  assert.doesNotMatch(revPromptNoModels.stdout, /^Model:/m);
+  const dryRunNoModels = fNoModels.run('run', ['--cmd', 'node -e ""', '--dry-run']);
+  assert.equal(dryRunNoModels.status, 0, dryRunNoModels.stderr);
+  assert.doesNotMatch(dryRunNoModels.stdout, /^Models:/m);
+  assert.doesNotMatch(dryRunNoModels.stdout, /^Model:/m);
+});
+
+
