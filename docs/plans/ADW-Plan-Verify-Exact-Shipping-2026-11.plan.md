@@ -1,7 +1,7 @@
 ---
 title: Plan - Bug: Verify exact shipping and supervisor state
 ticket: local://ADW:ADW-Plan-Verify-Exact-Shipping-2026-11
-status: in-progress
+status: shipped
 appetite: L
 version: none
 impact: patch
@@ -15,6 +15,7 @@ reviewVerdict: pass
 reviewSession: /root/review_shipping
 baseBranch: main
 reviewFingerprint: e172b23262ad6d663493c4f103992bed41a7c89b2715625aa9d51389894f7dab
+pr: https://github.com/AaronPG095/AI-Dev-Workflow/pull/42
 ---
 # Verify exact shipping and supervisor state
 
