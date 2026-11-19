@@ -1300,26 +1300,45 @@ function changedPlans(args) {
     );
 }
 
-function resolveDiffBase(dir = repoRoot) {
-  if (opts.base)
+function configuredPrBase(ref) {
+  const branch = (ref || '').replace(/^(?:refs\/(?:heads\/|remotes\/origin\/)|origin\/)/, '');
+  return (config.protectedBranches || ['main', 'master', 'develop']).includes(branch) ? branch : '';
+}
+
+function resolveDiffBase(dir = repoRoot, plan) {
+  const selected = configuredPrBase(opts.base || plan?.meta.baseBranch);
+  if (opts.base && !selected)
     return (
       git(['merge-base', opts.base, 'HEAD'], { allowFail: true, cwd: dir }) || opts.base
     );
-  const candidates = (
-    config.protectedBranches || ['main', 'master', 'develop']
-  ).flatMap((b) => [`origin/${b}`, b]);
+  const branches = selected ? [selected] : config.protectedBranches || ['main', 'master', 'develop'];
+  const candidates = branches.flatMap((b) => [`refs/remotes/origin/${b}`, `refs/heads/${b}`]);
   for (const ref of candidates) {
     const mb = git(['merge-base', ref, 'HEAD'], { allowFail: true, cwd: dir });
     if (mb) return mb;
   }
+  if (selected) fail(`protected base "${selected}" is missing locally. Fetch it before reviewing or shipping.`);
   return (
     git(['rev-parse', 'HEAD~1'], { allowFail: true, cwd: dir }) ||
     git(['rev-parse', 'HEAD'], { allowFail: true, cwd: dir })
   );
 }
 
+function plannedBaseBranch(plan) {
+  const requested = opts.base || plan.meta.baseBranch;
+  if (requested) {
+    const branch = configuredPrBase(requested);
+    if (!branch) fail(`PR base "${requested}" must name a configured protected branch`);
+    return branch;
+  }
+  const branches = config.protectedBranches || ['main', 'master', 'develop'];
+  return branches.find((branch) => [`refs/remotes/origin/${branch}`, `refs/heads/${branch}`].some(
+    (ref) => git(['show-ref', '--verify', ref], { allowFail: true }),
+  ));
+}
+
 function reviewFingerprint(plan, base, head, dir = repoRoot) {
-  base = base ?? resolveDiffBase(dir);
+  base = base ?? resolveDiffBase(dir, plan);
   if (!base) fail('review needs a Git baseline; commit the plan before reviewing');
   const diff = execFileSync('git', [
     'diff', '--binary', '--full-index', '--no-ext-diff', '--no-textconv',
@@ -1595,6 +1614,16 @@ function findCheckboxes(body) {
   return { lines, items };
 }
 
+function findRunnerTarget(items, target) {
+  const identity = (item) => item.text
+    .replace(/\s+(?:verified(?:\((?:test|cmd|manual|inspect)\))?|deferred):.*$/i, '').trim();
+  const targetText = identity(target);
+  const candidates = items.filter((item) => item.section.toLowerCase() === target.section.toLowerCase() &&
+    identity(item) === targetText);
+  return candidates.find((item) => item.lineIndex === target.lineIndex) ||
+    (candidates.length === 1 ? candidates[0] : null);
+}
+
 // ---------- commands ----------
 
 function pullRequestBody(plan, verification) {
@@ -1623,11 +1652,11 @@ function pullRequestBody(plan, verification) {
     .replace(/^<Plan items marked "deferred:"[^\n]*>$/m, () => deferred);
 }
 
-function assertPrSnapshot(branch, head) {
+function assertPrSnapshot(branch, head, operation = 'pr') {
   if (git(['rev-parse', '--abbrev-ref', 'HEAD']) !== branch ||
       git(['rev-parse', 'HEAD']) !== head ||
       git(['status', '--porcelain=v1', '--untracked-files=normal'])) {
-    fail('pr requires a clean committed snapshot; commit or stash staged, unstaged, and untracked changes before retrying');
+    fail(`${operation} requires a clean committed snapshot; commit or stash staged, unstaged, and untracked changes before retrying`);
   }
 }
 
@@ -1734,18 +1763,28 @@ function pushPrCommit(branch, head) {
 }
 
 async function linkPullRequest(plan, prUrl, snapshot) {
-  if (plan.meta.pr === prUrl && plan.meta.status === 'shipped') return snapshot?.head;
+  const linked = plan.meta.pr === prUrl && plan.meta.status === 'shipped';
+  const takeaway = (opts.retro || '').replace(/\s+/g, ' ').trim();
+  const tags = (opts.tags || 'retro').replace(/\s+/g, ' ').trim();
+  const retro = takeaway ? `- Retrospective (${tags}): ${takeaway}` : '';
+  const addRetro = retro && !section(plan.body, 'Progress log').split('\n').includes(retro);
+  const recordBase = snapshot?.baseBranch && snapshot.baseBranch !== plan.meta.baseBranch;
+  if (linked && !addRetro && !recordBase) return snapshot?.head;
 
   const id = !isLocal && /^https:\/\//.test(plan.meta.ticket || '')
     ? (await readNotionTask(plan)).id
     : null;
-  if (id) {
+  if (id && !linked) {
     await notion('PATCH', `pages/${id}`, { properties: { URL: { url: prUrl } } });
   }
   if (snapshot) assertPrSnapshot(snapshot.branch, snapshot.head);
   const original = readFileSync(plan.full);
   plan.meta.status = 'shipped';
   plan.meta.pr = prUrl;
+  if (recordBase) plan.meta.baseBranch = snapshot.baseBranch;
+  if (addRetro) {
+    plan.body = appendToSection(plan.body, 'Progress log', retro);
+  }
   writePlan(plan);
   let linkedHead;
   if (snapshot) {
@@ -1767,10 +1806,11 @@ async function linkPullRequest(plan, prUrl, snapshot) {
       fail('the PR link commit contains unexpected changes; inspect the local commit before pushing');
     assertPrSnapshot(snapshot.branch, linkedHead);
   }
+  if (addRetro && !opts.dryRun) console.log(`Retrospective recorded in ${plan.rel}`);
 
   const deferred = deferredItems(plan.body).join('\n') || 'None';
   console.log(`Copy into the PR's "Deferred" section:\n${deferred}`);
-  if (id) {
+  if (id && !linked) {
     try {
       await notion('POST', 'comments', {
         parent: { page_id: id },
@@ -2433,7 +2473,7 @@ function runVerifyCmd(cmd, { cwd = repoRoot, captureOutput = false, silent = fal
   }
   const combined = ((res.stdout || '') + (res.stderr || '')).trim();
   const output = combined || (res.error ? res.error.message : '');
-  const status = res.status ?? (res.error ? 1 : 0);
+  const status = res.status ?? 1;
   return { ok: status === 0 && !res.error, status, output };
 }
 
@@ -2702,7 +2742,7 @@ function runExternalPrompt(cmd, brief, { planRel, stepId, role, cwd = repoRoot }
       },
     });
     return {
-      status: res.status ?? (res.error ? 1 : 0),
+      status: res.status ?? 1,
       error: res.error || null,
     };
   } finally {
@@ -3376,10 +3416,13 @@ const commands = {
     }
 
     let failureContext = '';
+    let retryTarget;
     let completed = 0;
     for (let iter = 1; iter <= maxSteps; iter++) {
       plan = readPlan(plan.full);
       const ctx = resolveStepContext(plan);
+      const target = retryTarget ? findRunnerTarget(ctx.openItems, retryTarget) : ctx.nextItem;
+      if (retryTarget && !target) fail(`target step is no longer available to retry: ${retryTarget.text}`);
       if (!ctx.nextItem) break;
       if (ctx.currentRetries >= ctx.maxRetries) {
         fail(
@@ -3387,11 +3430,10 @@ const commands = {
         );
       }
 
-      const target = ctx.nextItem;
       console.log(
         `\n=== Supervisor Step ${iter} (target [${target.openIndex}]: ${target.text}) ===`,
       );
-      const brief = buildStepBrief(plan, ctx, {
+      const brief = buildStepBrief(plan, { ...ctx, nextItem: target }, {
         role: 'builder',
         failureContext,
       });
@@ -3403,11 +3445,24 @@ const commands = {
       if (execRes.error) {
         fail(`runner failed to execute: ${execRes.error.message}`);
       }
+
+      const planAfter = readPlan(plan.full);
+      const resolvedItem = findRunnerTarget(findCheckboxes(planAfter.body).items, target);
+      if (!resolvedItem) fail(`runner changed, removed, or duplicated the target step: ${target.text}`);
+      const restoreTarget = (currentPlan) => {
+        const { lines, items } = findCheckboxes(currentPlan.body);
+        const item = findRunnerTarget(items, resolvedItem);
+        if (!item) fail(`could not reopen the target step after the plan changed: ${target.text}`);
+        lines[item.lineIndex] = `${item.prefix} ${item.delim}${target.text}`;
+        currentPlan.body = lines.join('\n');
+        retryTarget = item;
+      };
+
       if (execRes.status !== 0) {
         const nextRetry = ctx.currentRetries + 1;
-        plan = readPlan(plan.full);
-        plan.meta.retryCount = String(nextRetry);
-        writePlan(plan);
+        restoreTarget(planAfter);
+        planAfter.meta.retryCount = String(nextRetry);
+        writePlan(planAfter);
         if (nextRetry >= ctx.maxRetries) {
           fail(
             `CIRCUIT BREAKER TRIPPED (${nextRetry}/${ctx.maxRetries} failed attempts; runner exited ${execRes.status}). Record a handoff before continuing.`,
@@ -3417,32 +3472,21 @@ const commands = {
         continue;
       }
 
-      // Re-read plan in case runner itself updated or checkpointed checkboxes on disk.
-      const planAfter = readPlan(plan.full);
-      const postItems = findCheckboxes(planAfter.body).items;
-      const stripEvidence = (s) =>
-        s.replace(/\s+(?:verified|deferred):.*$/i, '').trim();
-      const targetCore = stripEvidence(target.text);
-      const sameLine = postItems.find(
-        (it) =>
-          it.lineIndex === target.lineIndex &&
-          it.section.toLowerCase() === target.section.toLowerCase(),
-      );
-      const sameText = postItems.find(
-        (it) =>
-          it.section.toLowerCase() === target.section.toLowerCase() &&
-          stripEvidence(it.text) === targetCore,
-      );
-      const resolvedItem = sameLine || sameText;
-
-      if (resolvedItem && resolvedItem.isChecked) {
+      if (resolvedItem.isChecked) {
+        const beforeVerification = readFileSync(plan.full);
         const verifyRes = runVerifyCmd(ctx.resolvedVerify.cmd, {
           cwd: repoRoot,
           captureOutput: true,
         });
+        if (!readFileSync(plan.full).equals(beforeVerification)) {
+          const changedPlan = readPlan(plan.full);
+          restoreTarget(changedPlan);
+          writePlan(changedPlan);
+          fail('supervisor verification changed the plan; the target was reopened. Inspect the changes before retrying.');
+        }
         if (!verifyRes.ok) {
-          const nextRetry =
-            (parseInt(planAfter.meta.retryCount || '0', 10) || 0) + 1;
+          const nextRetry = ctx.currentRetries + 1;
+          restoreTarget(planAfter);
           planAfter.meta.retryCount = String(nextRetry);
           writePlan(planAfter);
           if (nextRetry >= ctx.maxRetries) {
@@ -3450,13 +3494,13 @@ const commands = {
               `CIRCUIT BREAKER TRIPPED (${nextRetry}/${ctx.maxRetries} failed verification attempts on \`${ctx.resolvedVerify.cmd}\`). Record a handoff before continuing.`,
             );
           }
-          failureContext = tailLines(verifyRes.output, 15);
+          failureContext = tailLines(verifyRes.output, 15) || `Verification exited with status ${verifyRes.status}.`;
           continue;
         }
         let planModified = false;
         if (
           resolvedItem.section.toLowerCase() === 'acceptance criteria' &&
-          !/\sverified:\s*\S/i.test(resolvedItem.text)
+          !VERIFIED_RE.test(resolvedItem.text)
         ) {
           const parsedLines = planAfter.body.split('\n');
           parsedLines[resolvedItem.lineIndex] =
@@ -3470,18 +3514,16 @@ const commands = {
         }
         if (planModified) writePlan(planAfter);
         failureContext = '';
+        retryTarget = undefined;
         completed++;
         continue;
       }
 
       const freshCtx = resolveStepContext(planAfter);
-      const freshMatch =
-        (resolvedItem && resolvedItem.openIndex !== null ? resolvedItem : null) ||
-        freshCtx.openItems.find((it) => stripEvidence(it.text) === targetCore) ||
-        freshCtx.nextItem;
-      if (!freshMatch) break;
+      if (resolvedItem.openIndex === null)
+        fail(`runner deferred the target step without verification: ${target.text}`);
 
-      const chk = executeCheckpoint(planAfter, freshMatch, {
+      const chk = executeCheckpoint(planAfter, resolvedItem, {
         resolvedVerify: freshCtx.resolvedVerify,
         requestedTier: freshCtx.requestedTier,
         maxRetries: freshCtx.maxRetries,
@@ -3493,12 +3535,20 @@ const commands = {
       });
       if (!chk.passed) {
         if (!chk.retryable || chk.circuitBreaker) {
+          const latest = readPlan(plan.full);
+          const currentTarget = findRunnerTarget(findCheckboxes(latest.body).items, resolvedItem);
+          if (currentTarget && currentTarget.openIndex === null) {
+            restoreTarget(latest);
+            writePlan(latest);
+          }
           fail(chk.errorMessage);
         }
+        retryTarget = resolvedItem;
         failureContext = tailLines(chk.verifyOutput, 15) || chk.errorMessage;
         continue;
       }
       failureContext = '';
+      retryTarget = undefined;
       completed++;
     }
 
@@ -3819,7 +3869,7 @@ const commands = {
 
   async pack() {
     const plan = onePlan();
-    const base = resolveDiffBase();
+    const base = resolveDiffBase(repoRoot, plan);
     const maxFileLines = Number(
       opts['max-file-lines'] || config.packMaxFileLines || 120,
     );
@@ -4087,7 +4137,7 @@ const commands = {
           `cannot stamp review verdict "pass": ${unverified.length} criterion ticked without verified evidence. Pass --force to override.`,
         );
       }
-      const integrity = analyzeTestIntegrity(resolveDiffBase());
+      const integrity = analyzeTestIntegrity(resolveDiffBase(repoRoot, plan));
       if (integrity.available && integrity.suspiciousDrop && !allowTestDropReason) {
         fail(
           `cannot stamp review verdict "pass": test integrity check flagged potential test weakening:\n- ${integrity.warnings.join('\n- ')}\nPass --allow-test-drop "<reason>" (or --force) to override.`,
@@ -4124,6 +4174,10 @@ const commands = {
     } else {
       if (git(['ls-files', '--others', '--exclude-standard', '--', '.', `:(exclude,literal)${plan.rel}`]))
         fail('review omits untracked files; stage the reviewed files before stamping a verdict');
+      if (!opts.base || configuredPrBase(opts.base)) {
+        const baseBranch = plannedBaseBranch(plan);
+        if (baseBranch) plan.meta.baseBranch = baseBranch;
+      }
       plan.meta.reviewFingerprint = reviewFingerprint(plan);
     }
     const extraTags = [
@@ -4147,7 +4201,7 @@ const commands = {
     const found = problems(plan);
     if (found.length)
       fail(`${plan.rel} is not closed out:\n- ${found.join('\n- ')}`);
-    const appetiteRes = checkAppetite(plan, resolveDiffBase());
+    const appetiteRes = checkAppetite(plan, resolveDiffBase(repoRoot, plan));
     if (appetiteRes && appetiteRes.exceeded) {
       const msg = `Appetite ${appetiteRes.appetite} exceeded (${appetiteRes.lines}/${appetiteRes.maxLines} lines, ${appetiteRes.files}/${appetiteRes.maxFiles} files). Consider running \`node scripts/ticket.mjs split ${plan.rel} --after <#>\`.`;
       if (opts.strict) fail(msg);
@@ -4213,16 +4267,12 @@ const commands = {
     if (!/^https:\/\//.test(opts.pr || ''))
       fail('ship needs --pr <pull request URL>; open the PR first.');
     await linkPullRequest(plan, opts.pr);
-    if ((opts.retro || '').trim()) {
-      const tagList = (opts.tags || 'retro').split(',').map((t) => t.trim()).filter(Boolean);
-      const res = appendLesson({ text: opts.retro, tags: tagList, planRel: plan.rel });
-      console.log(`Retro lesson recorded in docs/lessons.md: ${res.line}`);
-    }
   },
 
   async pr() {
     const plan = onePlan();
     const branch = git(['rev-parse', '--abbrev-ref', 'HEAD']);
+    const baseBranch = plannedBaseBranch(plan) || (config.protectedBranches || ['main', 'master', 'develop'])[0];
     const protectedList = config.protectedBranches || ['main', 'master', 'develop'];
     if (!branch || branch === 'HEAD' || protectedList.includes(branch))
       fail(`cannot open PR directly from protected branch "${branch}". Checkout a feature branch first.`);
@@ -4237,11 +4287,11 @@ const commands = {
     const found = problems(plan);
     if (found.length) fail(`plan is not closed out:\n- ${found.join('\n- ')}`);
 
-    let verification = '';
-    if (shouldVerify) {
-      const tier = resolveVerifyCommand(config, 'full') || resolveVerifyCommand(config, 'test');
-      if (!tier) fail('pr --verify needs a configured full or test verification command');
-      console.log(`Running verification on ${head.slice(0, 10)} (${tier.tier}): ${tier.cmd}`);
+    const tier = shouldVerify && (resolveVerifyCommand(config, 'full') || resolveVerifyCommand(config, 'test'));
+    if (shouldVerify && !tier) fail('pr --verify needs a configured full or test verification command');
+    const verifySnapshot = (revision) => {
+      assertPrSnapshot(branch, revision);
+      console.log(`Running verification on ${revision.slice(0, 10)} (${tier.tier}): ${tier.cmd}`);
       try {
         execSync(tier.cmd, {
           cwd: repoRoot,
@@ -4249,11 +4299,12 @@ const commands = {
           env: verifyExecEnv(),
         });
       } catch (error) {
-        fail(`verification failed before opening PR: ${error.message}`);
+        fail(`verification failed before pushing ${revision.slice(0, 10)}: ${error.message}`);
       }
-      assertPrSnapshot(branch, head);
-      verification = `- \`${tier.cmd}\` passed on commit \`${head.slice(0, 10)}\`.`;
-    }
+      assertPrSnapshot(branch, revision);
+      return `- \`${tier.cmd}\` passed on commit \`${revision.slice(0, 10)}\`.`;
+    };
+    const verification = tier ? verifySnapshot(head) : '';
 
     const title = plan.meta.title || plan.rel;
     const body = pullRequestBody(plan, verification);
@@ -4265,21 +4316,24 @@ const commands = {
       return;
     }
 
-    pushPrCommit(branch, head);
-    prCommand('git', ['branch', `--set-upstream-to=origin/${branch}`, branch],
-      'could not configure the pushed branch as upstream');
     const existing = JSON.parse(prCommand('gh', [
       'pr', 'list', '--state', 'open', '--head', branch,
-      '--json', 'url,isCrossRepository',
+      '--json', 'url,isCrossRepository,baseRefName',
     ], 'could not look up existing pull request')).filter((pr) => !pr.isCrossRepository);
     if (existing.length > 1)
       fail(`multiple open pull requests use branch "${branch}"; link the intended PR manually`);
+    if (existing[0] && existing[0].baseRefName !== baseBranch)
+      fail(`the existing pull request targets "${existing[0].baseRefName}", but this plan targets "${baseBranch}"`);
+
+    pushPrCommit(branch, head);
+    prCommand('git', ['branch', `--set-upstream-to=origin/${branch}`, branch],
+      'could not configure the pushed branch as upstream');
 
     let prUrl = existing[0]?.url;
     if (prUrl) {
       console.log(`Reusing pull request: ${prUrl}`);
     } else {
-      const args = ['pr', 'create', '--title', title, '--body-file', '-', '--head', branch];
+      const args = ['pr', 'create', '--title', title, '--body-file', '-', '--head', branch, '--base', baseBranch];
       if (opts.draft) args.push('--draft');
       prUrl = prCommand('gh', args, 'could not create pull request', body);
       console.log(`Pull request created: ${prUrl}`);
@@ -4288,16 +4342,14 @@ const commands = {
       fail('GitHub CLI did not return a pull request URL; retry to look up the existing PR');
 
     assertPrSnapshot(branch, head);
-    let finalHead = (await linkPullRequest(plan, prUrl, { branch, head })) || head;
-    if ((opts.retro || '').trim()) {
-      const tagList = (opts.tags || 'retro').split(',').map((t) => t.trim()).filter(Boolean);
-      const res = appendLesson({ text: opts.retro, tags: tagList, planRel: plan.rel });
-      git(['add', '--', 'docs/lessons.md']);
-      git(['--literal-pathspecs', 'commit', '--only', '-m', 'chore(retro): record workflow lesson', '--', 'docs/lessons.md']);
-      finalHead = git(['rev-parse', 'HEAD']);
-      console.log(`Retro lesson recorded in docs/lessons.md: ${res.line}`);
+    const finalHead = (await linkPullRequest(plan, prUrl, { branch, head, baseBranch })) || head;
+    if (finalHead !== head) {
+      const finalPlan = readPlan(plan.full);
+      const finalProblems = problems(finalPlan, { head: finalHead });
+      if (finalProblems.length) fail(`linked PR revision is not closed out:\n- ${finalProblems.join('\n- ')}`);
+      if (tier) verifySnapshot(finalHead);
+      pushPrCommit(branch, finalHead);
     }
-    if (finalHead !== head) pushPrCommit(branch, finalHead);
 
     if (opts.auto) {
       prCommand('gh', [
@@ -4797,11 +4849,14 @@ const commands = {
         '  fi',
         'fi',
         '',
-        'has_non_delete=0',
+        'pushed_head=',
         'while read -r local_ref local_oid remote_ref remote_oid; do',
-        '  if [ "$local_oid" != "0000000000000000000000000000000000000000" ]; then',
-        '    has_non_delete=1',
-        '  fi',
+        '  case "$local_oid" in',
+        '    *[!0]*)',
+        '      if [ -z "$pushed_head" ]; then pushed_head="$local_oid";',
+        '      elif [ "$pushed_head" != "$local_oid" ]; then pushed_head=multiple; fi',
+        '      ;;',
+        '  esac',
         '  branch=$(echo "$remote_ref" | sed \'s@^refs/heads/@@\')',
         '  for pb in $protected_branches; do',
         '    if [ "$branch" = "$pb" ]; then',
@@ -4822,8 +4877,8 @@ const commands = {
         '  if [ $? -ne 0 ]; then',
         '    echo "Note: Active plan check did not pass yet. CI will enforce plan completion on PR."',
         '  fi',
-        '  if [ "$has_non_delete" = "1" ]; then',
-        '    node scripts/ticket.mjs verify --pre-push',
+        '  if [ -n "$pushed_head" ]; then',
+        '    node scripts/ticket.mjs verify --pre-push --pushed-head "$pushed_head"',
         '    rc=$?',
         '    if [ $rc -ne 0 ]; then',
         '      exit $rc',
@@ -5315,6 +5370,7 @@ const commands = {
   },
 
   async verify() {
+    let pushSnapshot;
     if (opts.prePush) {
       if (process.env.GIT_SKIP_PREPUSH_VERIFY === '1') {
         console.log('Pre-push verify skipped (GIT_SKIP_PREPUSH_VERIFY=1).');
@@ -5323,6 +5379,17 @@ const commands = {
       const prePushTier = resolvePrePushVerifyTier(config);
       if (!prePushTier) return;
       opts.tier = opts.tier || prePushTier;
+      if (opts.pushedHead) {
+        if (!/^(?:[\da-f]{40}|[\da-f]{64})$/i.test(opts.pushedHead))
+          fail('pre-push verification requires a single pushed commit. Push different revisions separately.');
+        const pushedCommit = git(['rev-parse', '--verify', `${opts.pushedHead}^{commit}`], { allowFail: true });
+        const head = git(['rev-parse', 'HEAD']);
+        if (!pushedCommit || pushedCommit !== head)
+          fail('pre-push verification must run from the commit being pushed. Check it out and retry.');
+        const branch = git(['rev-parse', '--abbrev-ref', 'HEAD']);
+        assertPrSnapshot(branch, head, 'pre-push verification');
+        pushSnapshot = { branch, head };
+      }
     }
 
     const tiers = getVerifyTiers();
@@ -5353,6 +5420,7 @@ const commands = {
           fail(`verification tier "${t}" failed: ${err.message}`);
         }
       }
+      if (pushSnapshot) assertPrSnapshot(pushSnapshot.branch, pushSnapshot.head, 'pre-push verification');
       console.log('All verification tiers passed.');
       return;
     }
@@ -5373,6 +5441,7 @@ const commands = {
         stdio: 'inherit',
         env: verifyExecEnv(),
       });
+      if (pushSnapshot) assertPrSnapshot(pushSnapshot.branch, pushSnapshot.head, 'pre-push verification');
       console.log(`✓ Verification (${resolved.tier}) passed.`);
     } catch (err) {
       fail(`verification (${resolved.tier}) failed: ${err.message}`);

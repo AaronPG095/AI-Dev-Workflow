@@ -974,9 +974,10 @@ test('pr command validates plan closeout and outputs PR body in dry-run mode', (
   assert.match(r.stdout, /## Deferred\s+None\./);
 });
 
-test('pr pins verified commits and resumes an open PR after a failed link commit', (t) => {
-  const f = fixture(t, 'ticket: local://FO:FO-Plan-Test\n', [], {
+test('pr pins its verified base and head and retains the review when shipping a retrospective', (t) => {
+  const f = fixture(t, 'ticket: local://FO:FO-Plan-Test\nagent: Gemini\n', [], {
     tracker: 'local',
+    requireReview: true,
     verifyCommand: 'node -e "console.log(\'verified fixture\')"',
   });
   const remote = mkdtempSync(join(tmpdir(), 'ticket-pr-remote-'));
@@ -996,21 +997,29 @@ test('pr pins verified commits and resumes an open PR after a failed link commit
         ? fs.readFileSync(process.env.PR_MOCK_LOG, 'utf8') : '';
       fs.appendFileSync(process.env.PR_MOCK_LOG, JSON.stringify({args, body: options.input}) + '\\n');
       if (args[1] === 'list') return calls.includes('"create"')
-        ? '[{"url":"${url}","isCrossRepository":false}]' : '[]';
+        ? '[{"url":"${url}","isCrossRepository":false,"baseRefName":"develop"}]' : '[]';
       if (args[1] === 'create') return '${url}';
       throw Error('unexpected gh command');
     };
     require('node:module').syncBuiltinESMExports();
   `);
-  const runPr = () => f.run('pr', ['--verify'], [], {
+  const runPr = () => f.run('pr', ['--verify', '--retro', 'Keep the final head verified'], [], {
     omitPlan: true,
     envOverrides: { NODE_OPTIONS: `--import=${pathToFileURL(preload).href}`, PR_MOCK_LOG: log },
   });
-  f.git('init', '-b', 'feat/pr-test');
+  f.git('init', '-b', 'main');
   f.git('config', 'user.name', 'Test');
   f.git('config', 'user.email', 'test@example.invalid');
-  f.git('add', '.');
-  f.git('commit', '-m', 'baseline');
+  f.git('add', 'scripts', 'mock.mjs');
+  f.git('commit', '-m', 'main baseline');
+  f.git('switch', '-c', 'develop');
+  writeFileSync(join(f.root, 'develop.txt'), 'develop baseline\n');
+  f.git('add', 'develop.txt');
+  f.git('commit', '-m', 'develop baseline');
+  const develop = f.git('rev-parse', 'HEAD');
+  f.git('switch', '-c', 'feat/pr-test');
+  f.git('add', 'docs/plans');
+  f.git('commit', '-m', 'initial plan');
 
   writeFileSync(join(f.root, 'staged.txt'), 'staged\n');
   f.git('add', 'staged.txt');
@@ -1019,12 +1028,22 @@ test('pr pins verified commits and resumes an open PR after a failed link commit
   assert.match(dirty.stderr, /requires a clean committed snapshot/);
   assert.equal(existsSync(log), false);
   f.git('commit', '-m', 'include staged work deliberately');
+  const review = f.run('review', ['--base', 'develop', '--agent', 'Codex',
+    '--verdict', 'pass', '--summary', 'fixture review']);
+  assert.equal(review.status, 0, review.stderr);
+  assert.match(review.plan, /baseBranch: develop/);
+  const packed = f.run('pack');
+  assert.match(packed.stdout, new RegExp(develop.slice(0, 10)));
+  assert.equal(f.run('check').status, 0);
+  f.git('add', 'docs/plans');
+  f.git('commit', '-m', 'record review for develop');
   const verifiedHead = f.git('rev-parse', 'HEAD');
 
   const failedPush = runPr();
   assert.notEqual(failedPush.status, 0);
   assert.match(failedPush.stderr, /could not push PR commit/);
-  assert.equal(existsSync(log), false);
+  assert.doesNotMatch(readFileSync(log, 'utf8'), /"create"/);
+  rmSync(log);
 
   f.git('init', '--bare', remote);
   f.git('remote', 'add', 'origin', remote);
@@ -1044,13 +1063,21 @@ test('pr pins verified commits and resumes an open PR after a failed link commit
   assert.equal(retry.status, 0, retry.stderr);
   assert.match(retry.stdout, /Reusing pull request/);
   assert.match(retry.plan, /status: shipped/);
+  assert.match(retry.plan, /Retrospective \(retro\): Keep the final head verified/);
+  assert.equal(existsSync(join(f.root, 'docs/lessons.md')), false);
   assert.equal(f.git('diff-tree', '--no-commit-id', '--name-only', '-r', 'HEAD'),
     'docs/plans/FO-Plan-Test.plan.md');
   const linkedHead = f.git('rev-parse', 'HEAD');
+  assert.match(retry.stdout, new RegExp(`Running verification on ${linkedHead.slice(0, 10)}`));
+  const check = f.run('ci-check', ['--base', develop, '--head', linkedHead], [], { omitPlan: true });
+  assert.equal(check.status, 0, check.stderr);
+  const wrongBase = f.run('ci-check', ['--base', 'main', '--head', linkedHead], [], { omitPlan: true });
+  assert.match(wrongBase.stderr, /review does not cover this change/);
   assert.match(f.git('ls-remote', 'origin', 'refs/heads/feat/pr-test'), new RegExp(linkedHead));
   assert.equal(f.git('rev-parse', '--abbrev-ref', '@{upstream}'), 'origin/feat/pr-test');
   const calls = readFileSync(log, 'utf8').trim().split('\n').map(JSON.parse);
   assert.deepEqual(calls.map(({ args }) => args[1]), ['list', 'create', 'list']);
+  assert.deepEqual(calls[1].args.slice(-2), ['--base', 'develop']);
   assert.match(calls[1].body, /passed on commit/);
   assert.match(calls[1].body, new RegExp(verifiedHead.slice(0, 10)));
 });
@@ -2362,6 +2389,61 @@ if (role === 'builder') {
   assert.match(readFileSync(planPath, 'utf8'), /retryCount: 2/);
 });
 
+test('run reopens a runner-ticked final step when verification fails', (t) => {
+  const f = fixture(t, '', [], {
+    agentic: { maxRetries: 2, verifyTier: 'test' },
+    verify: { test: 'node verify.cjs' },
+  });
+  const pending = readFileSync(f.plan, 'utf8').replace('- [x] Implement', '- [ ] Implement');
+  writeFileSync(f.plan, pending);
+  writeFileSync(join(f.root, 'verify.cjs'), "process.exit(require('node:fs').existsSync('repaired') ? 0 : 1);");
+  writeFileSync(join(f.root, 'runner.cjs'), `
+const fs = require('node:fs');
+const plan = process.env.ADW_PLAN;
+const brief = fs.readFileSync(0, 'utf8');
+let body = fs.readFileSync(plan, 'utf8');
+if (process.env.ADWFIX_REORDER && !body.includes('- [ ] Other')) {
+  body = body.replace('- [ ] Implement', '- [ ] Other\\n- [ ] Implement');
+}
+if (process.env.ADWFIX_REPAIR && brief.includes('Last Verification Failure')) fs.writeFileSync('repaired', '');
+fs.writeFileSync(plan, body.replace('- [ ] Implement', '- [x] Implement'));
+`);
+  const args = ['--cmd', 'node runner.cjs', '--no-review'];
+  const blocked = f.run('run', args);
+  assert.notEqual(blocked.status, 0);
+  assert.match(blocked.stderr, /CIRCUIT BREAKER TRIPPED \(2\/2/);
+  assert.doesNotMatch(blocked.stdout, /Run complete/);
+  assert.match(blocked.plan, /- \[ \] Implement/);
+  assert.equal([...blocked.stdout.matchAll(/target \[1\]: Implement/g)].length, 2);
+
+  writeFileSync(f.plan, pending);
+  const repaired = f.run('run', args, [], { envOverrides: { ADWFIX_REPAIR: '1' } });
+  assert.equal(repaired.status, 0, repaired.stderr);
+  assert.match(repaired.stdout, /Run complete/);
+  assert.match(repaired.plan, /- \[x\] Implement/);
+  assert.doesNotMatch(repaired.plan, /retryCount/);
+
+  rmSync(join(f.root, 'repaired'));
+  writeFileSync(f.plan, pending);
+  const reordered = f.run('run', [...args, '--max-steps', '2'], [], {
+    envOverrides: { ADWFIX_REPAIR: '1', ADWFIX_REORDER: '1' },
+  });
+  assert.match(reordered.stderr, /max-steps limit/);
+  assert.equal([...reordered.stdout.matchAll(/target \[[12]\]: Implement/g)].length, 2);
+  assert.match(reordered.plan, /- \[ \] Other\n- \[x\] Implement/);
+
+  writeFileSync(f.plan, pending);
+  writeFileSync(join(f.root, 'verify.cjs'), `
+require('node:fs').appendFileSync('docs/plans/FO-Plan-Test.plan.md', '\\n## Notes\\nVerifier note\\n');
+process.exit(1);
+`);
+  const changed = f.run('run', args);
+  assert.notEqual(changed.status, 0);
+  assert.match(changed.stderr, /verification changed the plan; the target was reopened/);
+  assert.match(changed.plan, /- \[ \] Implement/);
+  assert.match(changed.plan, /Verifier note/);
+});
+
 test('wave --check and wave --prune verify and clean closed wave worktrees safely', (t) => {
   const f = fixture(
     t,
@@ -3377,7 +3459,7 @@ test('T2.7: lesson capture, ship --retro, recall --lessons, review --prompt, and
   const lessonsContent = readFileSync(join(f.root, 'docs/lessons.md'), 'utf8');
   assert.match(lessonsContent, /windows, cli · docs\/plans\/FO-Plan-Test\.plan\.md \| Always escape PowerShell && in scripts/);
 
-  // 2. ship --retro appends second lesson
+  // 2. ship --retro records the takeaway in the plan without changing the shared lessons file.
   const shipRes = f.run('ship', [
     '--pr',
     'https://github.com/example/repo/pull/99',
@@ -3385,8 +3467,9 @@ test('T2.7: lesson capture, ship --retro, recall --lessons, review --prompt, and
     'Cache timeout tests need fake timers to avoid flake',
   ]);
   assert.equal(shipRes.status, 0, shipRes.stderr);
-  const lessonsAfterShip = readFileSync(join(f.root, 'docs/lessons.md'), 'utf8');
-  assert.match(lessonsAfterShip, /Cache timeout tests need fake timers to avoid flake/);
+  assert.match(shipRes.plan, /Retrospective \(retro\): Cache timeout tests need fake timers/);
+  assert.equal(readFileSync(join(f.root, 'docs/lessons.md'), 'utf8'), lessonsContent);
+  assert.equal(f.run('lesson', ['Cache timeout tests need fake timers to avoid flake']).status, 0);
 
   // 3. recall searches docs/lessons.md and recall --lessons filters strictly
   const recallAll = f.run('recall', ['Cache'], [], { omitPlan: true });
@@ -3999,15 +4082,43 @@ test('T3.5: verify --pre-push, prePushVerify hook/doctor, merge local Notion clo
   assert.equal(skipEnv.status, 0, skipEnv.stderr);
   assert.match(skipEnv.stdout, /Pre-push verify skipped/);
 
-  // hook install includes --pre-push zero-SHA guard and doctor prints prePushVerify
+  // hook install forwards the pushed SHA and doctor prints prePushVerify
   const hookRes = f.run('hook', ['install'], [], { omitPlan: true });
   assert.equal(hookRes.status, 0, hookRes.stderr);
   const hookScript = readFileSync(join(f.root, '.git/hooks/pre-push'), 'utf8');
-  assert.match(hookScript, /verify --pre-push/);
-  assert.match(hookScript, /0000000000000000000000000000000000000000/);
+  assert.match(hookScript, /verify --pre-push --pushed-head "\$pushed_head"/);
   const dr = f.run('doctor', [], [], { omitPlan: true });
   assert.equal(dr.status, 0, dr.stderr);
   assert.match(dr.stdout, /Pre-push:\s+installed \(prePushVerify: test\)/);
+
+  const older = f.git('rev-parse', 'HEAD');
+  f.git('add', 'scripts/ticket.config.json');
+  f.git('commit', '-m', 'enable pre-push verification');
+  const head = f.git('rev-parse', 'HEAD');
+  const invokeVerify = (sha) => f.run('verify', ['--pre-push', '--pushed-head', sha], [], { omitPlan: true });
+  const exact = invokeVerify(head);
+  assert.equal(exact.status, 0, exact.stderr);
+  assert.match(exact.stdout, /prepush-test-ok/);
+  assert.match(invokeVerify(older).stderr, /must run from the commit being pushed/);
+  assert.match(invokeVerify('multiple').stderr, /requires a single pushed commit/);
+  const dirtyFile = join(f.root, 'untracked.txt');
+  writeFileSync(dirtyFile, 'dirty');
+  const unclean = invokeVerify(head);
+  assert.match(unclean.stderr, /pre-push verification requires a clean committed snapshot/);
+  assert.doesNotMatch(unclean.stdout, /prepush-test-ok/);
+  rmSync(dirtyFile);
+
+  const pushRemote = mkdtempSync(join(tmpdir(), 'adw-prepush-remote-'));
+  t.after(() => rmSync(pushRemote, { recursive: true, force: true }));
+  f.git('init', '--bare', pushRemote);
+  f.git('remote', 'add', 'fixture', pushRemote);
+  f.git('push', 'fixture', `${head}:refs/heads/verified-fixture`);
+  assert.throws(() => f.git('push', 'fixture', `${older}:refs/heads/stale-fixture`),
+    (error) => error.stderr.includes('commit being pushed'));
+  assert.throws(() => f.git('push', 'fixture',
+    `${head}:refs/heads/current-fixture`, `${older}:refs/heads/stale-fixture`),
+  (error) => error.stderr.includes('Push different revisions separately'));
+  f.git('push', 'fixture', ':refs/heads/verified-fixture');
 
   // 2. merge command merges open PR via gh and closes Notion ticket locally
   const prUrl = 'https://github.com/example/repo/pull/99';
