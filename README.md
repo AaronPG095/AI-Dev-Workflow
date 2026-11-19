@@ -215,9 +215,9 @@ node scripts/ticket.mjs pack [--test] [--tier <name>]
 node scripts/ticket.mjs review --prompt
 
 # Record a single-pass or dual-pass independent review verdict (pass | warn | block)
-# requireReview defaults to true and allowSelfReview defaults to false; pass --reviewer-id <id> for same-provider sub-agents; test drops require --allow-test-drop "<reason>"
-node scripts/ticket.mjs review [--base <protected-branch>] --agent Codex --verdict pass --summary "Criteria verified, clean hygiene"
-node scripts/ticket.mjs review --agent Gemini --reviewer-id subagent-61f13605 --standards pass --spec pass --summary "Independent sub-agent dual-pass pass"
+# requireReview defaults to true and allowSelfReview defaults to false; pass --reviewer-id <id> for same-provider sub-agents; --model <id> records reviewModel; test drops require --allow-test-drop "<reason>"
+node scripts/ticket.mjs review [--base <protected-branch>] --agent Codex [--model <model-id>] --verdict pass --summary "Criteria verified, clean hygiene"
+node scripts/ticket.mjs review --agent Gemini --reviewer-id subagent-61f13605 --model gemini-4-neon-low --standards pass --spec pass --summary "Independent sub-agent dual-pass pass"
 
 # 5. Finish & Gatekeeper
 # Verify all checkboxes are closed, invariants pass, and working tree hygiene is clean (--strict also requires non-manual proof when verifyCommand is configured)
@@ -287,10 +287,11 @@ node scripts/ticket.mjs step --json
 # Level A: Stage the intended changes, then verify and commit them with the plan
 node scripts/ticket.mjs checkpoint <#> --commit [--message "<msg>"] [--tier <name>]
 
-# Outer-Loop Autonomous Supervisor (drive an external CLI runner step-by-step up to maxRetries)
+# Outer-Loop Autonomous Supervisor (drive an external CLI runner step-by-step up to maxRetries; exports ADW_MODEL for the active role)
 node scripts/ticket.mjs run [<plan>] --cmd "<runner>" [--review-cmd "<runner>"] [--commit] [--tier <name>] [--max-retries <N>] [--max-steps <N>] [--no-review] [--dry-run]
 
-# Level B: Generate role-isolated sub-agent briefs (Builder, Adversarial Reviewer, Block-Fixer)
+# Level B: Generate role-isolated sub-agent briefs (Planner, Builder, Adversarial Reviewer, Block-Fixer)
+node scripts/ticket.mjs step --role planner
 node scripts/ticket.mjs step --role builder
 node scripts/ticket.mjs step --role reviewer
 node scripts/ticket.mjs step --role fixer
@@ -323,6 +324,7 @@ Wave uses Git's registered worktrees. A worker owns its plan after creation, and
 
 ### Runtime Hooks, Boot Verification & Versioning Config (`scripts/ticket.config.json`)
 - `bootVerifyTier`: Verification tier executed by `prime --verify` and `resume --verify` (defaults to `fast`, falling back to `test` or `full`).
+- `agentic.models`: Optional role-to-model routing map (`planner`, `builder`, `fixer`, `reviewer`; defaults to `gemini-4-neon-medium`, `gemini-4-hydrogen-medium`, `gemini-4-hydrogen-medium`, `gemini-4-neon-low`). Surfaced by `step`, `prime`, `review --prompt`, and `run` (`ADW_MODEL` env var). In Antigravity, delegate each role to a `swarm` worker pinned to its configured `model`; other clients (Claude Code, Codex, Cursor) can customize or omit `agentic.models`.
 - `hooks.postToolVerify`: Set `true` in `ticket.config.json` to run bounded `fast`/`test` verification after edit tools in `scripts/hooks/adw-hook.mjs post-tool`.
 - `hooks.postToolStrict`: Set `true` to exit `2` (blocking) when `post-tool` verification fails instead of warning cleanly.
 - `versioning`: Opt-in release train management (`enabled`, `currentVersion`, `activeTrain`, `roadmapPath` default `docs/ROADMAP.md`, `changelogPath` default `CHANGELOG.md`, `tagPrefix` default `v`, `requireVersionOnPlans`). When `version` is set on a plan, `create` stamps `Target Version` on the Notion Task.

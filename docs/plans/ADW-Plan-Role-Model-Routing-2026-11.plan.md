@@ -1,7 +1,7 @@
 ---
 title: Plan - Feature: Role Model Routing
 ticket: local://ADW:ADW-Plan-Role-Model-Routing-2026-11
-status: planned
+status: in-progress
 priority: 
 state: 
 due: 
@@ -10,6 +10,9 @@ version:
 impact: 
 devTicketKey: ADW:ADW-Plan-Role-Model-Routing-2026-11
 agent: Gemini
+branch: feat/role-model-routing
+worktree: AI-Dev-Workflow
+startedAt: 2026-11-19
 ---
 # Role Model Routing
 
@@ -30,19 +33,19 @@ None
 
 ## Acceptance criteria
 
-- [ ] AC1: WHEN `agentic.models` is configured in `scripts/ticket.config.json`, `ticket.config.example.json`, and `scripts/workflow-manifest.json` (`starterConfig`), THE SYSTEM SHALL default `planner` to `gemini-4-neon-medium`, `builder` to `gemini-4-hydrogen-medium`, `fixer` to `gemini-4-hydrogen-medium`, and `reviewer` to `gemini-4-neon-low`.
-- [ ] AC2: WHEN running `node scripts/ticket.mjs step [--role planner|builder|reviewer|fixer]` (text or `--json`), `prime`, or `review --prompt`, THE SYSTEM SHALL display the configured target model for the active role and omit it cleanly when `agentic.models` is unset.
-- [ ] AC3: WHEN running `node scripts/ticket.mjs run` (including `--dry-run`), THE SYSTEM SHALL pass `ADW_MODEL` for the active role (`builder` or `reviewer`) into `runExternalPrompt`'s environment and display configured role models in `--dry-run` output.
-- [ ] AC4: WHEN stamping a review with `node scripts/ticket.mjs review --model <model-id>`, THE SYSTEM SHALL persist `reviewModel` in plan frontmatter and include it in the review progress log entry while remaining backward-compatible when `--model` is omitted.
-- [ ] AC5: WHEN reading `AGENTS.md`, `.agents/skills/{dev-workflow,quick-review,agentic-workflow}/SKILL.md` (mirrored identically under `.claude/skills/`), and `README.md`, THE SYSTEM SHALL document `agentic.models`, `ADW_MODEL`, `review --model`, and Antigravity `swarm` worker delegation per role.
-- [ ] AC6: WHEN `node --test scripts/ticket.test.mjs` executes, THE SYSTEM SHALL pass all existing tests plus new unit tests covering `agentic.models`, `step`/`prime`/`review --prompt`, `ADW_MODEL` in `run`, and `review --model`.
+- [x] AC1: WHEN `agentic.models` is configured in `scripts/ticket.config.json`, `ticket.config.example.json`, and `scripts/workflow-manifest.json` (`starterConfig`), THE SYSTEM SHALL default `planner` to `gemini-4-neon-medium`, `builder` to `gemini-4-hydrogen-medium`, `fixer` to `gemini-4-hydrogen-medium`, and `reviewer` to `gemini-4-neon-low`. verified: test: role-to-model routing test verified agentic.models defaults in config, example, and manifest
+- [x] AC2: WHEN running `node scripts/ticket.mjs step [--role planner|builder|reviewer|fixer]` (text or `--json`), `prime`, or `review --prompt`, THE SYSTEM SHALL display the configured target model for the active role and omit it cleanly when `agentic.models` is unset. verified: test: verified step (text/--json), prime, and review --prompt display configured role models and omit when unset
+- [x] AC3: WHEN running `node scripts/ticket.mjs run` (including `--dry-run`), THE SYSTEM SHALL pass `ADW_MODEL` for the active role (`builder` or `reviewer`) into `runExternalPrompt`'s environment and display configured role models in `--dry-run` output. verified: test: verified ADW_MODEL env propagation for builder/reviewer in run and Models summary in run --dry-run
+- [x] AC4: WHEN stamping a review with `node scripts/ticket.mjs review --model <model-id>`, THE SYSTEM SHALL persist `reviewModel` in plan frontmatter and include it in the review progress log entry while remaining backward-compatible when `--model` is omitted. verified: test: verified review --model persists reviewModel and (model: ...) log tag while remaining backward-compatible
+- [x] AC5: WHEN reading `AGENTS.md`, `.agents/skills/{dev-workflow,quick-review,agentic-workflow}/SKILL.md` (mirrored identically under `.claude/skills/`), and `README.md`, THE SYSTEM SHALL document `agentic.models`, `ADW_MODEL`, `review --model`, and Antigravity `swarm` worker delegation per role. verified: inspect: updated AGENTS.md, README.md, and byte-identical .agents/.claude skill mirrors
+- [x] AC6: WHEN `node --test scripts/ticket.test.mjs` executes, THE SYSTEM SHALL pass all existing tests plus new unit tests covering `agentic.models`, `step`/`prime`/`review --prompt`, `ADW_MODEL` in `run`, and `review --model`. verified: test: node --test scripts/ticket.test.mjs passed 93/93 tests (0 failures)
 
 ## Steps
 
-- [ ] Add `agentic.models` defaults to `scripts/ticket.config.json`, `ticket.config.example.json`, and `scripts/workflow-manifest.json` (AC1)
-- [ ] Update `scripts/ticket.mjs` to resolve `agentic.models` per role (including `step --role planner`), include role models in `step`/`step --json`/`prime`/`review --prompt`/`run --dry-run`, export `ADW_MODEL` in `runExternalPrompt`, and support optional `--model` on `review` (AC2, AC3, AC4)
-- [ ] Update `AGENTS.md`, `.agents/skills/{dev-workflow,quick-review,agentic-workflow}/SKILL.md` (and identical `.claude/skills/` mirrors), and `README.md` with role-to-model routing instructions and Antigravity `swarm` delegation guidance (AC5)
-- [ ] Add unit tests in `scripts/ticket.test.mjs` and verify with `node --test scripts/ticket.test.mjs` (AC6)
+- [x] Add `agentic.models` defaults to `scripts/ticket.config.json`, `ticket.config.example.json`, and `scripts/workflow-manifest.json` (AC1)
+- [x] Update `scripts/ticket.mjs` to resolve `agentic.models` per role (including `step --role planner`), include role models in `step`/`step --json`/`prime`/`review --prompt`/`run --dry-run`, export `ADW_MODEL` in `runExternalPrompt`, and support optional `--model` on `review` (AC2, AC3, AC4)
+- [x] Update `AGENTS.md`, `.agents/skills/{dev-workflow,quick-review,agentic-workflow}/SKILL.md` (and identical `.claude/skills/` mirrors), and `README.md` with role-to-model routing instructions and Antigravity `swarm` delegation guidance (AC5)
+- [x] Add unit tests in `scripts/ticket.test.mjs` and verify with `node --test scripts/ticket.test.mjs` (AC6)
 
 ## Risks
 

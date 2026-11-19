@@ -6,7 +6,7 @@
 //   node scripts/ticket.mjs start  [<plan>]                                       Task -> Doing, branch + worktree recorded
 //   node scripts/ticket.mjs log    [<plan>] --agent <client> --message "<text>"   handoff line in the plan's Progress log
 //   node scripts/ticket.mjs pack   [<plan>] [--base <ref>]                        0-token review packet (plan criteria + hygiene + filtered diff)
-//   node scripts/ticket.mjs review [<plan>] --agent <client> --verdict <pass|warn|block> --summary "<text>"
+//   node scripts/ticket.mjs review [<plan>] --agent <client> [--model <id>] --verdict <pass|warn|block> --summary "<text>"
 //   node scripts/ticket.mjs check  [<plan>]                                       fails while any checkbox is open, a ticked criterion has no
 //                                                                                 "verified:" evidence, or review verdict is "block"
 //   node scripts/ticket.mjs ship   [<plan>] --pr <url>                            check, link PR on the Task, add a comment
@@ -1885,6 +1885,43 @@ function resolveStepContext(plan, { tier, maxRetries: maxRetriesOpt } = {}) {
   };
 }
 
+const AGENTIC_ROLES = ['planner', 'builder', 'reviewer', 'fixer'];
+
+function resolveRoleModel(role, cfg = config) {
+  const normalized = String(role || '').trim().toLowerCase();
+  if (!normalized) return '';
+  const models = cfg?.agentic?.models;
+  if (!models || typeof models !== 'object' || Array.isArray(models)) return '';
+  if (typeof models[normalized] === 'string') return models[normalized].trim();
+  for (const [k, v] of Object.entries(models)) {
+    if (k.trim().toLowerCase() === normalized && typeof v === 'string') {
+      return v.trim();
+    }
+  }
+  return '';
+}
+
+function formatAgenticModelsSummary(cfg = config) {
+  const models = cfg?.agentic?.models;
+  if (!models || typeof models !== 'object' || Array.isArray(models)) return '';
+  const ordered = [];
+  const seen = new Set();
+  for (const role of AGENTIC_ROLES) {
+    const val = resolveRoleModel(role, cfg);
+    if (val) {
+      ordered.push(`${role}=${val}`);
+      seen.add(role);
+    }
+  }
+  for (const [k, v] of Object.entries(models)) {
+    const norm = k.trim().toLowerCase();
+    if (!seen.has(norm) && typeof v === 'string' && v.trim()) {
+      ordered.push(`${norm}=${v.trim()}`);
+    }
+  }
+  return ordered.join(' | ');
+}
+
 function loadLessons(dir = repoRoot) {
   const lessonsPath = join(dir, 'docs', 'lessons.md');
   if (!existsSync(lessonsPath)) return [];
@@ -2312,7 +2349,9 @@ function buildStepBrief(
   ctx,
   { role = '', failureContext = '' } = {},
 ) {
-  const normalizedRole = role.toLowerCase();
+  const normalizedRole = role.trim().toLowerCase();
+  const activeRole = normalizedRole || 'builder';
+  const targetModel = resolveRoleModel(activeRole);
   const {
     branch,
     items,
@@ -2324,6 +2363,39 @@ function buildStepBrief(
     verifyCmd,
     verifyTier,
   } = ctx;
+
+  if (normalizedRole === 'planner') {
+    const summary = section(plan.body, 'Summary') || '(none)';
+    const context = section(plan.body, 'Context') || '(none)';
+    const openQuestions = section(plan.body, 'Open questions') || 'None';
+    const criteria = section(plan.body, 'Acceptance criteria') || '(none)';
+    const steps = section(plan.body, 'Steps') || '(none)';
+    return [
+      `# Planner Brief: ${plan.meta.title || plan.rel}`,
+      `Plan: ${plan.rel} | Branch: ${plan.meta.branch || branch}`,
+      ...(targetModel ? [`Model: ${targetModel}`] : []),
+      '',
+      '## Summary',
+      summary,
+      '',
+      '## Context',
+      context,
+      '',
+      '## Open Questions',
+      openQuestions,
+      '',
+      '## Acceptance Criteria',
+      criteria,
+      '',
+      '## Steps',
+      steps,
+      '',
+      '## Planning Protocol',
+      '1. Resolve any open questions and keep scope bounded to one PR.',
+      '2. Ensure observable AC# criteria and mapped (AC#) steps.',
+      `3. Lint before ticketing: \`node scripts/ticket.mjs lint ${plan.rel}\``,
+    ].join('\n');
+  }
 
   if (normalizedRole === 'builder') {
     const criteriaList = openCriteria.length
@@ -2346,6 +2418,7 @@ function buildStepBrief(
     const brief = [
       `# Autonomous Builder Brief: ${plan.meta.title || plan.rel}`,
       `Plan: ${plan.rel} | Branch: ${plan.meta.branch || branch}`,
+      ...(targetModel ? [`Model: ${targetModel}`] : []),
       `Target: ${nextItem ? `[${nextItem.openIndex}] ${nextItem.text} (section: ${nextItem.section})` : 'All items completed!'}`,
       '',
       '## Objective & Scope',
@@ -2379,6 +2452,7 @@ function buildStepBrief(
     const lines = [
       `# Adversarial Review Brief: ${plan.meta.title || plan.rel}`,
       `Plan: ${plan.rel} | Branch: ${plan.meta.branch || branch}`,
+      ...(targetModel ? [`Model: ${targetModel}`] : []),
       '',
       '## Review Protocol (Fresh Context Window)',
       '1. Inspect review packet with embedded test verification:',
@@ -2426,6 +2500,7 @@ function buildStepBrief(
     return [
       `# Block-Fixer Brief: ${plan.meta.title || plan.rel}`,
       `Plan: ${plan.rel} | Branch: ${plan.meta.branch || branch}`,
+      ...(targetModel ? [`Model: ${targetModel}`] : []),
       '',
       '## Blocker Findings to Resolve',
       latestBlock,
@@ -2442,12 +2517,13 @@ function buildStepBrief(
   }
 
   if (normalizedRole) {
-    fail(`unknown --role "${role}". Allowed roles: builder, reviewer, fixer`);
+    fail(`unknown --role "${role}". Allowed roles: planner, builder, reviewer, fixer`);
   }
 
   const linesOut = [
     `# Next Step Brief: ${plan.meta.title || plan.rel}`,
     `Plan: ${plan.rel} | Branch: ${plan.meta.branch || branch}`,
+    ...(targetModel ? [`Model: ${targetModel}`] : []),
     `Target [${nextItem.openIndex}]: ${nextItem.text}`,
     `Section: ${nextItem.section}`,
     `Remaining: ${openSteps.length} step(s), ${openCriteria.length} criterion/criteria`,
@@ -2736,9 +2812,11 @@ function executeCheckpoint(
   };
 }
 
-function runExternalPrompt(cmd, brief, { planRel, stepId, role, cwd = repoRoot } = {}) {
+function runExternalPrompt(cmd, brief, { planRel, stepId, role, model, cwd = repoRoot } = {}) {
   const promptDir = mkdtempSync(join(tmpdir(), 'adw-run-'));
   const promptFile = join(promptDir, 'prompt.md');
+  const activeRole = String(role || 'builder').trim().toLowerCase() || 'builder';
+  const resolvedModel = model !== undefined ? model : resolveRoleModel(activeRole);
   writeFileSync(promptFile, brief, 'utf8');
   try {
     const res = spawnSync(cmd, {
@@ -2751,7 +2829,8 @@ function runExternalPrompt(cmd, brief, { planRel, stepId, role, cwd = repoRoot }
         ...process.env,
         ADW_PLAN: planRel || '',
         ADW_STEP: String(stepId || ''),
-        ADW_ROLE: role || 'builder',
+        ADW_ROLE: activeRole,
+        ADW_MODEL: resolvedModel || '',
         ADW_PROMPT_FILE: promptFile,
       },
     });
@@ -3080,6 +3159,10 @@ const commands = {
         }
         return [];
       })(),
+      ...(() => {
+        const modelsLine = formatAgenticModelsSummary();
+        return modelsLine ? [`Models: ${modelsLine}`] : [];
+      })(),
       '',
       `## Open Acceptance Criteria (${openCriteria.length} remaining)`,
       ...(openCriteria.length
@@ -3280,6 +3363,12 @@ const commands = {
   async step() {
     const planArg = opts.files.find((f) => f.endsWith('.plan.md'));
     const plan = planArg ? readPlan(planArg) : resolveActivePlan();
+    const role = (opts.role || '').trim().toLowerCase();
+    if (role && !AGENTIC_ROLES.includes(role)) {
+      fail(`unknown --role "${opts.role}". Allowed roles: ${AGENTIC_ROLES.join(', ')}`);
+    }
+    const activeRole = role || 'builder';
+    const targetModel = resolveRoleModel(activeRole);
     const ctx = resolveStepContext(plan);
     const {
       branch,
@@ -3298,6 +3387,8 @@ const commands = {
         title: plan.meta.title || plan.rel,
         branch: plan.meta.branch || branch,
         ticket: plan.meta.ticket || null,
+        role: activeRole,
+        ...(targetModel ? { model: targetModel } : {}),
         nextStep: nextItem
           ? {
               index: nextItem.openIndex,
@@ -3322,7 +3413,6 @@ const commands = {
       return;
     }
 
-    const role = (opts.role || '').toLowerCase();
     if (!role && !nextItem) {
       console.log(`All criteria and steps in ${plan.rel} are completed!`);
       console.log(
@@ -3412,9 +3502,13 @@ const commands = {
     }
 
     if (opts.dryRun) {
+      const modelsSummary = formatAgenticModelsSummary();
       console.log(`=== Dry-Run Agentic Supervisor ===`);
       console.log(`Plan:        ${plan.rel}`);
       console.log(`Runner:      ${runnerCmd || '(none — pass --cmd)'}`);
+      if (modelsSummary) {
+        console.log(`Models:      ${modelsSummary}`);
+      }
       console.log(`Verify:      ${initialCtx.verifyCmd} (${initialCtx.verifyTier})`);
       console.log(`Retries:     ${initialCtx.currentRetries}/${initialCtx.maxRetries}`);
       console.log(`Max steps:   ${maxSteps}`);
@@ -4030,10 +4124,12 @@ const commands = {
         : config.verifyCommand || 'npm test';
       const criteria = section(plan.body, 'Acceptance criteria') || '(none)';
       const lessons = selectRelevantLessons(plan, { limit: 5 });
+      const reviewerModel = resolveRoleModel('reviewer');
 
       const promptLines = [
         `# Single-Pass Review Request: ${plan.meta.title || plan.rel}`,
         `Plan: ${plan.rel} | Branch: ${branch}`,
+        ...(reviewerModel ? [`Model: ${reviewerModel}`] : []),
         `Verify Command: \`${verifyCmd}\``,
         '',
         '## Acceptance Criteria to Verify',
@@ -4055,7 +4151,7 @@ const commands = {
         '4. Code Quality & Standards: Does the change conform to repository standards with clean hygiene?',
         '',
         '## Verdict Stamp Instructions',
-        `Run: node scripts/ticket.mjs review ${plan.rel} --agent <you> [--reviewer-id <subagent-id>] --verdict <pass|warn|block> --summary "<concise findings>"`,
+        `Run: node scripts/ticket.mjs review ${plan.rel} --agent <you> [--reviewer-id <subagent-id>] [--model <model-id>] --verdict <pass|warn|block> --summary "<concise findings>"`,
         'Or dual-pass: --standards <pass|warn|block> --spec <pass|warn|block>',
       );
 
@@ -4106,6 +4202,7 @@ const commands = {
 
     const selfReviewReason = (opts.selfReview || '').replace(/\s+/g, ' ').trim();
     const reviewerId = (opts.reviewerId || opts.subagent || '').replace(/\s+/g, ' ').trim();
+    const reviewModel = (opts.model || '').replace(/\s+/g, ' ').trim();
     const allowTestDropReason = (opts.allowTestDrop || '').replace(/\s+/g, ' ').trim();
     if ((opts.reviewerId !== undefined || opts.subagent !== undefined) && reviewerId.length < 4) {
       fail(
@@ -4175,6 +4272,11 @@ const commands = {
     } else {
       delete plan.meta.reviewSession;
     }
+    if (reviewModel) {
+      plan.meta.reviewModel = reviewModel;
+    } else {
+      delete plan.meta.reviewModel;
+    }
     if (selfReviewReason && verdict !== 'block' && !reviewerId) {
       plan.meta.reviewSelfReason = selfReviewReason;
     } else {
@@ -4198,6 +4300,7 @@ const commands = {
     }
     const extraTags = [
       reviewerId && verdict !== 'block' ? ` [reviewer: ${reviewerId}]` : '',
+      reviewModel ? ` (model: ${reviewModel})` : '',
       selfReviewReason && verdict !== 'block' && !reviewerId ? ` [self-review: ${selfReviewReason}]` : '',
       allowTestDropReason && verdict === 'pass' ? ` [test-drop: ${allowTestDropReason}]` : '',
     ].join('');
