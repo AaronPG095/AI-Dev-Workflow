@@ -798,6 +798,10 @@ function lintPlan(plan) {
   if (openQ > 0) {
     errors.push(`Section "## Open questions" has ${openQ} unresolved item(s).`);
   }
+  const blueprintRef = (plan.meta.blueprint || '').trim();
+  if (blueprintRef && !existsSync(resolve(repoRoot, blueprintRef))) {
+    errors.push(`Frontmatter "blueprint" references missing file: ${blueprintRef}`);
+  }
   if (
     plan.meta.impact &&
     !IMPACTS.includes(plan.meta.impact.trim().toLowerCase())
@@ -2374,6 +2378,7 @@ function buildStepBrief(
       `# Planner Brief: ${plan.meta.title || plan.rel}`,
       `Plan: ${plan.rel} | Branch: ${plan.meta.branch || branch}`,
       ...(targetModel ? [`Model: ${targetModel}`] : []),
+      ...(plan.meta.blueprint ? [`Blueprint: ${plan.meta.blueprint}`] : []),
       '',
       '## Summary',
       summary,
@@ -2419,6 +2424,7 @@ function buildStepBrief(
       `# Autonomous Builder Brief: ${plan.meta.title || plan.rel}`,
       `Plan: ${plan.rel} | Branch: ${plan.meta.branch || branch}`,
       ...(targetModel ? [`Model: ${targetModel}`] : []),
+      ...(plan.meta.blueprint ? [`Blueprint: ${plan.meta.blueprint}`] : []),
       `Target: ${nextItem ? `[${nextItem.openIndex}] ${nextItem.text} (section: ${nextItem.section})` : 'All items completed!'}`,
       '',
       '## Objective & Scope',
@@ -2438,6 +2444,9 @@ function buildStepBrief(
       `2. Run verification: \`${verifyCmd}\` (tier: ${verifyTier}).`,
       `3. Retry budget: up to ${maxRetries} self-healing attempts (currently ${currentRetries}/${maxRetries} used). If still failing after ${maxRetries} tries, STOP, log handoff, and escalate.`,
       `4. Checkpoint & tick: node scripts/ticket.mjs checkpoint ${nextItem ? nextItem.openIndex : ''} --commit`,
+      ...(plan.meta.blueprint
+        ? [`5. Preserve the contracts and invariants defined in \`${plan.meta.blueprint}\`.`]
+        : []),
     ];
     if (failureContext && failureContext.trim()) {
       brief.push('', '## Last Verification Failure', failureContext.trim());
@@ -2453,6 +2462,7 @@ function buildStepBrief(
       `# Adversarial Review Brief: ${plan.meta.title || plan.rel}`,
       `Plan: ${plan.rel} | Branch: ${plan.meta.branch || branch}`,
       ...(targetModel ? [`Model: ${targetModel}`] : []),
+      ...(plan.meta.blueprint ? [`Blueprint: ${plan.meta.blueprint}`] : []),
       '',
       '## Review Protocol (Fresh Context Window)',
       '1. Inspect review packet with embedded test verification:',
@@ -2475,6 +2485,9 @@ function buildStepBrief(
       '- Verification Honesty: Does every ticked criterion cite verified evidence without fake claims?',
       '- Test Regressions: Did all tests pass cleanly?',
       '- Code Hygiene: No temporary files, conflict markers, or debris.',
+      ...(plan.meta.blueprint
+        ? [`- Blueprint Alignment: Does the implementation preserve the contracts and invariants in \`${plan.meta.blueprint}\`?`]
+        : []),
       '',
       '## Verdict Command',
       `node scripts/ticket.mjs review ${plan.rel} --agent <you> --verdict <pass|warn|block> --summary "<concise findings>"`,
@@ -2501,6 +2514,7 @@ function buildStepBrief(
       `# Block-Fixer Brief: ${plan.meta.title || plan.rel}`,
       `Plan: ${plan.rel} | Branch: ${plan.meta.branch || branch}`,
       ...(targetModel ? [`Model: ${targetModel}`] : []),
+      ...(plan.meta.blueprint ? [`Blueprint: ${plan.meta.blueprint}`] : []),
       '',
       '## Blocker Findings to Resolve',
       latestBlock,
@@ -2513,6 +2527,9 @@ function buildStepBrief(
       `2. Verify: \`${verifyCmd}\` (tier: ${verifyTier}).`,
       '3. Run checkpoint or re-review:',
       `   node scripts/ticket.mjs review ${plan.rel} --agent <you> --verdict pass --summary "Resolved review blocker findings"`,
+      ...(plan.meta.blueprint
+        ? [`4. Preserve the contracts and invariants defined in \`${plan.meta.blueprint}\`.`]
+        : []),
     ].join('\n');
   }
 
@@ -2524,6 +2541,7 @@ function buildStepBrief(
     `# Next Step Brief: ${plan.meta.title || plan.rel}`,
     `Plan: ${plan.rel} | Branch: ${plan.meta.branch || branch}`,
     ...(targetModel ? [`Model: ${targetModel}`] : []),
+    ...(plan.meta.blueprint ? [`Blueprint: ${plan.meta.blueprint}`] : []),
     `Target [${nextItem.openIndex}]: ${nextItem.text}`,
     `Section: ${nextItem.section}`,
     `Remaining: ${openSteps.length} step(s), ${openCriteria.length} criterion/criteria`,
@@ -2940,6 +2958,14 @@ const commands = {
 
     const summary = (opts.summary || '').replace(/^["']|["']$/g, '').trim();
     const contextText = (opts.context || '').replace(/^["']|["']$/g, '').trim();
+    let blueprintRel = '';
+    if (opts.blueprint !== undefined) {
+      const rawBp = String(opts.blueprint || '').replace(/^["']|["']$/g, '').trim();
+      if (!rawBp) fail('--blueprint requires a file path');
+      const bpFull = resolve(repoRoot, rawBp);
+      if (!existsSync(bpFull)) fail(`blueprint not found: ${rawBp}`);
+      blueprintRel = relative(repoRoot, bpFull).replace(/\\/g, '/');
+    }
     const rawCriteria = (opts.criteria || '')
       .replace(/^["']|["']$/g, '')
       .trim();
@@ -2989,6 +3015,12 @@ const commands = {
       if (impact && !/^impact:/m.test(content)) {
         content = content.replace(/^---\n/, `---\nimpact: ${impact}\n`);
       }
+      if (blueprintRel) {
+        content = content.replace(
+          /\n---\n/,
+          `\nblueprint: ${blueprintRel}\n---\n`,
+        );
+      }
       if (summary) {
         content = content.replace(
           /<2-3 sentences: what changes and why\.>/,
@@ -2999,6 +3031,11 @@ const commands = {
         content = content.replace(
           /<Compacted research:[^>]*>/,
           contextText,
+        );
+      } else if (blueprintRel) {
+        content = content.replace(
+          /<Compacted research:[^>]*>/,
+          `See architecture blueprint: \`${blueprintRel}\``,
         );
       }
       if (rawCriteria) {
@@ -3025,6 +3062,7 @@ const commands = {
         `appetite: ${appetite}`,
         `version: ${version}`,
         `impact: ${impact}`,
+        ...(blueprintRel ? [`blueprint: ${blueprintRel}`] : []),
         '---',
         `# ${topic}`,
         '',
@@ -3034,7 +3072,10 @@ const commands = {
         '',
         '## Context',
         '',
-        contextText || '<Compacted research: relevant files with path:line, current behaviour, constraints, and alternatives considered & rejected.>',
+        contextText ||
+          (blueprintRel
+            ? `See architecture blueprint: \`${blueprintRel}\``
+            : '<Compacted research: relevant files with path:line, current behaviour, constraints, and alternatives considered & rejected.>'),
         '',
         '## Open questions',
         '',
@@ -3145,6 +3186,7 @@ const commands = {
       `# Session Context: ${plan.meta.title || plan.rel}`,
       `Plan: ${plan.rel} | Status: ${localPlanStatus(plan) || 'unknown'} | Ticket: ${plan.meta.ticket || 'none'}${appetiteLabel}${versionLabel}`,
       `Branch: ${branch} | Tree: ${clean ? 'clean' : 'dirty'} | Open questions: ${openQuestions}${plan.meta.reviewedBy ? ` | Reviewed: ${plan.meta.reviewedBy} (${plan.meta.reviewVerdict})` : ''}`,
+      ...(plan.meta.blueprint ? [`Blueprint: ${plan.meta.blueprint}`] : []),
       ...(baselineLine ? [baselineLine] : []),
       ...(() => {
         const tiers = getVerifyTiers();
@@ -3389,6 +3431,7 @@ const commands = {
         ticket: plan.meta.ticket || null,
         role: activeRole,
         ...(targetModel ? { model: targetModel } : {}),
+        ...(plan.meta.blueprint ? { blueprint: plan.meta.blueprint } : {}),
         nextStep: nextItem
           ? {
               index: nextItem.openIndex,
@@ -4048,6 +4091,7 @@ const commands = {
       `# Review Packet: ${plan.meta.title || plan.rel}`,
       `Plan: ${plan.rel} | Status: ${localPlanStatus(plan) || 'unknown'} | Branch: ${plan.meta.branch || git(['rev-parse', '--abbrev-ref', 'HEAD'], { allowFail: true })}`,
       `Ticket: ${plan.meta.ticket || 'none'} | Reviewed: ${plan.meta.reviewedBy ? `${plan.meta.reviewedBy} (${plan.meta.reviewVerdict || 'unknown'})` : 'not yet'}${appetiteRes ? ` | Appetite: ${appetiteRes.appetite} (${appetiteRes.lines}/${appetiteRes.maxLines} lines, ${appetiteRes.files}/${appetiteRes.maxFiles} files${appetiteRes.exceeded ? ' — EXCEEDED' : ''})` : ''}${plan.meta.version ? ` | Version: ${plan.meta.version}${plan.meta.impact ? ` (${plan.meta.impact})` : ''}` : ''}`,
+      ...(plan.meta.blueprint ? [`Blueprint: ${plan.meta.blueprint}`] : []),
       ...(resolvedTest
         ? [
             `Verify command: \`${resolvedTest.cmd}\`${resolvedTest.tier !== 'test' ? ` (${resolvedTest.tier})` : ''}`,
@@ -5004,6 +5048,95 @@ const commands = {
     for (const dir of dirs) applyHook(dir);
   },
 
+  async blueprint() {
+    const rawTopic = opts.files[0] || opts.topic || '';
+    const archDir = join(repoRoot, 'docs', 'architecture');
+    if (!rawTopic || rawTopic.trim().toLowerCase() === 'list') {
+      const files = existsSync(archDir)
+        ? readdirSync(archDir)
+            .filter((f) => f.endsWith('.md') && !f.startsWith('_'))
+            .sort()
+        : [];
+      if (!files.length) {
+        console.log(
+          'No architecture blueprints found in docs/architecture/. Create one with: node scripts/ticket.mjs blueprint "<Topic>" [--version <ver>]',
+        );
+        return;
+      }
+      console.log(`=== Architecture Blueprints (${files.length}) ===`);
+      for (const f of files) {
+        const text = readFileSync(join(archDir, f), 'utf8').replace(/\r\n/g, '\n');
+        const fm = text.match(/^---\n([\s\S]*?)\n---\n/);
+        const meta = {};
+        if (fm) {
+          for (const line of fm[1].split('\n')) {
+            const idx = line.indexOf(':');
+            if (idx > 0) meta[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
+          }
+        }
+        const heading = (text.match(/^#\s+(.+)$/m) || [])[1] || '';
+        const title = meta.title || heading || f;
+        const status = meta.status || 'active';
+        const verPart = meta.version ? ` | version: ${meta.version}` : '';
+        console.log(`- docs/architecture/${f} | status: ${status}${verPart} | ${title}`);
+      }
+      return;
+    }
+
+    const topic = rawTopic.replace(/^["']|["']$/g, '').trim();
+    const kebabTopic = topic
+      .replace(/[^a-zA-Z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+    const filename = `${config.prefix}-Blueprint-${kebabTopic}.md`;
+    const relPath = join('docs', 'architecture', filename).replace(/\\/g, '/');
+    const fullPath = join(repoRoot, relPath);
+
+    if (existsSync(fullPath) && !opts.force) {
+      fail(`blueprint already exists: ${relPath} (pass --force to overwrite)`);
+    }
+
+    const version =
+      opts.version !== undefined
+        ? String(opts.version).replace(/^["']|["']$/g, '').trim()
+        : '';
+    const plannerModel = resolveRoleModel('planner');
+    const content = [
+      '---',
+      `title: Blueprint: ${topic}`,
+      'status: active',
+      ...(version ? [`version: ${version}`] : []),
+      ...(plannerModel ? [`plannerModel: ${plannerModel}`] : []),
+      `created: ${today()}`,
+      '---',
+      `# Architecture Blueprint: ${topic}`,
+      '',
+      '## Goal & Non-Goals',
+      '',
+      '<Problem statement, target architecture goals, and explicit non-goals.>',
+      '',
+      '## Architecture & Boundaries',
+      '',
+      '<Modules, layers, data flow, and ownership boundaries across components.>',
+      '',
+      '## Contracts & Invariants',
+      '',
+      '<Shared interfaces, schemas, invariants, and compatibility guarantees that all child PRs must preserve.>',
+      '',
+      '## PR Slice Breakdown',
+      '',
+      '1. <Slice 1 — vertical PR scope, key files, and `new "<Slice>" --blueprint ' + relPath + '`>',
+      '2. <Slice 2 — ...>',
+      '',
+      '## Living Updates & ADRs',
+      '',
+      '<Links to ADRs (`ticket.mjs adr`), evolved boundaries, and slice completion notes.>',
+    ].join('\n');
+
+    mkdirSync(dirname(fullPath), { recursive: true });
+    writeFileSync(fullPath, `${content}\n`, 'utf8');
+    console.log(`Created blueprint: ${relPath}`);
+  },
+
   async adr() {
     const rawTitle = opts.files[0] || opts.title || '';
     if (!rawTitle) {
@@ -5223,6 +5356,7 @@ const commands = {
 
       const searchDirs = [
         join(dir, 'docs', 'decisions'),
+        join(dir, 'docs', 'architecture'),
         join(dir, 'docs', 'plans'),
         join(dir, 'docs', 'plans', 'archive'),
       ];
@@ -5254,6 +5388,7 @@ const commands = {
           const lines = content.split('\n');
           const relPath = relative(dir, f).replace(/\\/g, '/');
           const isAdr = relPath.startsWith('docs/decisions/');
+          const isBlueprint = relPath.startsWith('docs/architecture/');
           const titleLine = lines.find((l) => /^#\s+/.test(l)) || '';
           const title = titleLine.replace(/^#\s+/, '').trim() || basename(f);
 
@@ -5271,7 +5406,7 @@ const commands = {
 
           results.push({
             repo: repoName,
-            type: isAdr ? 'ADR' : 'Plan',
+            type: isAdr ? 'ADR' : isBlueprint ? 'Blueprint' : 'Plan',
             file: relPath,
             title,
             matches,

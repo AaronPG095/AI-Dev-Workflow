@@ -1,0 +1,74 @@
+---
+title: Plan - Feature: Architecture Blueprints For Multi-PR Initiatives
+ticket: local://ADW:ADW-Plan-Architecture-Blueprints-2026-11
+status: shipped
+priority: 
+state: 
+due: 
+appetite: M
+version: 
+impact: 
+devTicketKey: ADW:ADW-Plan-Architecture-Blueprints-2026-11
+agent: Gemini
+branch: feat/architecture-blueprints
+worktree: AI-Dev-Workflow
+startedAt: 2026-11-19
+reviewedBy: Gemini
+reviewVerdict: pass
+reviewSession: reviewer-neon-low
+reviewModel: gemini-4-neon-low
+baseBranch: main
+reviewFingerprint: 7d9543a8480091d824c1fc16f359a872d75a45180ab856c52963a08c151e899d
+pr: https://github.com/AaronPG095/AI-Dev-Workflow/pull/45
+---
+# Architecture Blueprints For Multi-PR Initiatives
+
+## Summary
+
+Add an opt-in Architecture Blueprint workflow (`node scripts/ticket.mjs blueprint "<Topic>" [--version <ver>]`) storing non-gated project/initiative master plans under `docs/architecture/<PREFIX>-Blueprint-<KebabTopic>.md`. Allow child PR plans to link via optional `blueprint:` frontmatter (`new "<Slice>" --blueprint <path>`) so `prime`, `step`, `pack`, `lint`, and `recall` surface architectural context automatically while keeping single-PR gates untouched.
+
+## Context
+
+- `scripts/ticket.mjs`: `new` (L2891), `prime` (L3106), `step` (L3363), `buildStepBrief` (L2347), `lintPlan` (L770), `recall` (L5185), `readmeCliSync` invariant (L683).
+- `docs/ROADMAP.md` (`release` command, ADR-004) tracks product/version trains, whereas `docs/architecture/` holds technical architecture blueprints (module boundaries, shared contracts/invariants, and vertical-slice PR decomposition) created by the `planner` model before `builder` models execute individual PR plans.
+- `docs/plans/` remains strictly per-PR `.plan.md` files so `ci-check`, `overview`, `fleet`, and `archive --all` require no exceptions.
+- Invariants to preserve: zero npm dependencies, `.agents/skills` and `.claude/skills` identical (`mirrorDirs`), and `blueprint` documented in `README.md` (`readmeCliSync`).
+
+## Open questions
+
+None
+
+## Acceptance criteria
+
+- [x] AC1: WHEN running `node scripts/ticket.mjs blueprint "<Topic>" [--version <ver>]` THE SYSTEM SHALL scaffold `docs/architecture/<PREFIX>-Blueprint-<KebabTopic>.md` with frontmatter (`title`, `status: active`, optional `version`, `plannerModel`, `created`) and sections (`Goal & Non-Goals`, `Architecture & Boundaries`, `Contracts & Invariants`, `PR Slice Breakdown`, `Living Updates & ADRs`), and running `blueprint` with no topic SHALL list existing blueprints under `docs/architecture/`. verified: node --test scripts/ticket.test.mjs (architecture blueprints test passes: scaffold, --version, --force, list)
+- [x] AC2: WHEN running `node scripts/ticket.mjs new "<Slice>" --blueprint <path>` THE SYSTEM SHALL validate the blueprint file exists, stamp `blueprint: <path>` in the child plan's frontmatter, and reference it in `## Context` when `--context` is not provided; standalone `new` without `--blueprint` remains unchanged. verified: node --test scripts/ticket.test.mjs (new --blueprint valid/missing/standalone cases pass)
+- [x] AC3: WHEN a plan declares `blueprint: <path>` in frontmatter, `prime`, `step` (text briefs for `planner`, `builder`, `fixer`, `reviewer` and `--json`), and `pack` SHALL surface the blueprint path (and builder/fixer/reviewer briefs SHALL instruct preserving its contracts/invariants). verified: node --test scripts/ticket.test.mjs (prime, step all roles + --json, pack surface Blueprint:)
+- [x] AC4: WHEN running `lint` on a plan with `blueprint: <path>`, THE SYSTEM SHALL fail with a clear error if the referenced file does not exist; AND `recall "<query>" [--fleet]` SHALL index `docs/architecture/*.md` as type `Blueprint`. verified: node --test scripts/ticket.test.mjs (lint missing-blueprint error and recall [Blueprint] pass)
+- [x] AC5: `README.md`, `AGENTS.md`, `docs/plans/_template.plan.md`, `.agents/skills/dev-workflow/SKILL.md`, and `.claude/skills/dev-workflow/SKILL.md` document the opt-in blueprint step for new projects and multi-PR initiatives and pass all configured invariants (`mirrorDirs`, `readmeCliSync`, `zeroDependencies`). verified: Updated README.md, AGENTS.md, _template.plan.md, and both SKILL.md mirrors; invariants pass in ticket.test.mjs
+- [x] AC6: Regression tests in `scripts/ticket.test.mjs` cover `blueprint`, `new --blueprint`, `prime`/`step`/`pack` surfacing, `lint` missing-blueprint validation, and `recall` indexing, and `node --test scripts/ticket.test.mjs` passes with 0 failures. verified: node --test scripts/ticket.test.mjs passed 94/94 (0 failures)
+
+## Steps
+
+- [x] Add `commands.blueprint()` (scaffold + list) in `scripts/ticket.mjs` (AC1)
+- [x] Add `--blueprint` flag handling in `commands.new()` and `blueprint:` existence validation in `lintPlan()` (AC2, AC4)
+- [x] Surface `plan.meta.blueprint` in `prime`, `step` (`--json` + `buildStepBrief`), and `pack`, and add `docs/architecture` to `recall` (AC3, AC4)
+- [x] Update `README.md`, `AGENTS.md`, `docs/plans/_template.plan.md`, `.agents/skills/dev-workflow/SKILL.md`, and `.claude/skills/dev-workflow/SKILL.md` (AC5)
+- [x] Add regression tests in `scripts/ticket.test.mjs` and run `node --test scripts/ticket.test.mjs` and `node scripts/ticket.mjs pack --test` (AC6)
+
+## Risks
+
+- Bloat or waterfall drift if blueprints become mandatory for single-PR changes or go stale — mitigated by keeping blueprints strictly opt-in, outside `docs/plans/*.plan.md`, and including a `Living Updates & ADRs` section.
+- Breaking `readmeCliSync` or `mirrorDirs` invariants — mitigated by documenting `blueprint` in `README.md`, keeping `.agents/skills/` and `.claude/skills/` identical, and verifying via `pack --test` and `check`.
+
+## Out of scope
+
+Making blueprints mandatory for single-PR changes, gating blueprints in `ci-check`/`archive`, or adding `dependsOn`/`ready` plan DAG scheduling.
+
+## Notes
+
+Approval: "Plan approved. Continue."
+
+## Progress log
+
+<!-- One line per session/review, added with `ticket.mjs log` or `ticket.mjs review` -->
+- 2026-11-19 16:55 UTC, Gemini (review: pass): AC1-AC6 verified; blueprint scaffold/list/new/prime/step/pack/lint/recall, docs, mirrors, and tests (+1 test, +42 assertions) are clean with no regressions. [reviewer: reviewer-neon-low] (model: gemini-4-neon-low)
