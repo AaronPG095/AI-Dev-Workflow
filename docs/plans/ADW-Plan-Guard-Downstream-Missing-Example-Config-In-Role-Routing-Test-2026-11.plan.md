@@ -1,0 +1,48 @@
+---
+title: Plan - Bug: Guard Downstream Missing Example Config In Role Routing Test
+ticket: local://ADW:ADW-Plan-Guard-Downstream-Missing-Example-Config-In-Role-Routing-Test-2026-11
+status: planned
+priority: 
+state: 
+due: 
+appetite: S
+version: none
+impact: none
+devTicketKey: ADW:ADW-Plan-Guard-Downstream-Missing-Example-Config-In-Role-Routing-Test-2026-11
+agent: Gemini
+---
+# Guard Downstream Missing Example Config In Role Routing Test
+
+## Summary
+
+Guard missing `ticket.config.example.json` in `scripts/ticket.test.mjs` (`role-to-model routing` test) with `if (!existsSync(fullCfg)) continue;` so downstream repositories without `ticket.config.example.json` (`AI-Cortex`, `FluentOverlay`, etc.) pass `93/93` workflow tests cleanly.
+
+## Context
+
+- `scripts/ticket.test.mjs:1311` already guards `ticket.config.example.json` with `if (existsSync(examplePath))`, whereas PR #43 added `scripts/ticket.test.mjs:4265-4268` reading `ticket.config.example.json` unconditionally.
+- Running `node --test scripts/ticket.test.mjs` in `..\AI-Cortex` failed only on test #93 (`ENOENT: no such file or directory, open '...\\AI-Cortex\\ticket.config.example.json'`, `92/93` passed).
+
+## Open questions
+
+None
+
+## Acceptance criteria
+
+- [ ] AC1: `scripts/ticket.test.mjs:4265-4269` skips `ticket.config.example.json` only when absent (`!existsSync(fullCfg)`) while still validating `scripts/ticket.config.json` and `ticket.config.example.json` whenever present, and `93/93` tests pass in `AI-Dev-Workflow` and `AI-Cortex`.
+
+## Steps
+
+- [ ] Guard `!existsSync(fullCfg)` in the `role-to-model routing` loop in `scripts/ticket.test.mjs`. (AC1)
+- [ ] Run `node --test scripts/ticket.test.mjs` (`93/93`) and obtain independent subagent review (`--reviewer-id`). (AC1)
+
+## Risks
+
+- Skipping `scripts/ticket.config.json` could hide missing `agentic.models`; mitigated by keeping `scripts/ticket.config.json` asserted in `AI-Dev-Workflow` and downstream repos while skipping only missing files (`ticket.config.example.json`).
+
+## Out of scope
+
+- Modifying `ticket.mjs` runtime role-routing behavior.
+
+## Notes
+
+- Plan approved by Aaron (2026-11-19): "Yes, do this." (downstreams rollout uncovered test failure on `verify --pre-push` in `AI-Cortex`).
