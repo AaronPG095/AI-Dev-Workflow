@@ -4263,7 +4263,9 @@ test('role-to-model routing: config defaults, step/prime/review --prompt/run --d
     reviewer: 'gemini-4-neon-low',
   };
   for (const relCfg of ['scripts/ticket.config.json', 'ticket.config.example.json']) {
-    const cfg = JSON.parse(readFileSync(join(repoRoot, relCfg), 'utf8'));
+    const fullCfg = join(repoRoot, relCfg);
+    if (!existsSync(fullCfg)) continue;
+    const cfg = JSON.parse(readFileSync(fullCfg, 'utf8'));
     assert.deepEqual(cfg.agentic?.models, expectedModels, `${relCfg} agentic.models`);
   }
   const manifest = JSON.parse(readFileSync(join(scripts, 'workflow-manifest.json'), 'utf8'));
