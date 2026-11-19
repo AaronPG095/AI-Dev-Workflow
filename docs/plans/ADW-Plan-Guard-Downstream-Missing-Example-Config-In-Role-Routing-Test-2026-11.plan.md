@@ -1,7 +1,7 @@
 ---
 title: Plan - Bug: Guard Downstream Missing Example Config In Role Routing Test
 ticket: local://ADW:ADW-Plan-Guard-Downstream-Missing-Example-Config-In-Role-Routing-Test-2026-11
-status: in-progress
+status: shipped
 priority: 
 state: 
 due: 
@@ -18,6 +18,7 @@ reviewVerdict: pass
 reviewSession: 3ad994e1-8acd-40e4-9cbd-06fa94295f12
 baseBranch: main
 reviewFingerprint: 694ff48c759cc106d4a9cfb26d7e213ef87322945e45058ee8cfa811d1ad4768
+pr: https://github.com/AaronPG095/AI-Dev-Workflow/pull/44
 ---
 # Guard Downstream Missing Example Config In Role Routing Test
 
