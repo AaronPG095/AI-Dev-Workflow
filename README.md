@@ -79,7 +79,7 @@ irm https://raw.githubusercontent.com/AaronPG095/AI-Dev-Workflow/main/scripts/in
 
 ## The 6-Step Workflow
 
-Trivial changes (`<= 40` changed lines, no new files in the main source folder, and no changes to managed workflow files) can skip the process using the `no-plan` PR label. Pure workflow sync PRs that pass `node scripts/sync.mjs . --remote --check` may also use the `no-plan` label. All non-trivial changes follow six steps:
+Trivial changes (`<= 40` changed lines, no new files in the main source folder, and no changes to managed workflow files) can skip the plan using the `no-plan` PR label. Workflow syncs require a plan. CI applies repository invariants even to trivial and archive-only changes. All non-trivial changes follow six steps:
 
 1. **Plan** — Investigate read-only, propose the approach, and wait for human approval.
 2. **Plan Doc** — Scaffold automatically with `node scripts/ticket.mjs new "<Topic>" [--type Feature] [--branch]` or copy `docs/plans/_template.plan.md` to `docs/plans/<PREFIX>-Plan-<Topic>-<YYYY-MM>.plan.md` with `- [ ]` checkboxes for Acceptance Criteria and Steps. Plans bigger than one PR are split into sequential plans via `node scripts/ticket.mjs split <plan> --after <#|query>`.
@@ -100,7 +100,9 @@ Trivial changes (`<= 40` changed lines, no new files in the main source folder, 
    ```
 6. **Finish (`check`, `ship`, `merge`)** — Verify close-out and working-tree hygiene with `node scripts/ticket.mjs check [--strict]`, open the PR, and link it via `node scripts/ticket.mjs ship --pr <url>` (or run `node scripts/ticket.mjs pr [--verify] [--auto] [--draft]`). Once approved, run `node scripts/ticket.mjs merge [<plan>]` to merge via `gh pr merge` and close out the Notion Task locally with zero GitHub Actions minutes (or let `ticket-done.yml` close it on merge). `plan-check.yml` skips Draft PRs (`draft == false`, re-triggering on `ready_for_review`), skips redundant `ticket.test.mjs` CI runs when `ciSkipTicketTests: true` in the base config, and evaluates committed PR files with the base branch's validator.
 
-Stage new files before preparing a review. The review records a fingerprint of the diff and plan requirements. Code or requirement edits require a new review. PR linking and progress log updates preserve the fingerprint. `requireReview` defaults to `true` and `allowSelfReview` defaults to `false` (require an independent `--agent` or `--reviewer-id <subagent-id>`).
+Stage new files before preparing a review. The review records a fingerprint of the diff and plan requirements. Code or requirement edits require a new review. PR linking and progress log updates preserve the fingerprint. `requireReview` defaults to `true` and `allowSelfReview` defaults to `false` (require an independent `--agent` or `--reviewer-id <subagent-id>`). When adopting an older plan that lacks its implementing `agent`, restore the actual client in the plan before recording review.
+
+Plan check verifies the recorded reviewer fields and the freshness of the review fingerprint. An independent sub-agent or fresh session can supply the review in a solo repository. The plan stamp records reviewer provenance as supplied by the reviewer.
 
 `pr` requires a clean committed working tree. With `--verify`, it tests the initial commit and any new plan-link commit before pushing each revision. It stops if verification changes the checkout. If shipping fails after opening the PR, retry the command to reuse the open PR on that branch. The link commit contains only the selected plan.
 
