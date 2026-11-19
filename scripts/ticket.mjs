@@ -1736,9 +1736,11 @@ function pushPrCommit(branch, head) {
 async function linkPullRequest(plan, prUrl, snapshot) {
   if (plan.meta.pr === prUrl && plan.meta.status === 'shipped') return snapshot?.head;
 
-  const task = isLocal ? null : await readNotionTask(plan);
-  if (task) {
-    await notion('PATCH', task.path, { properties: { URL: { url: prUrl } } });
+  const id = !isLocal && /^https:\/\//.test(plan.meta.ticket || '')
+    ? (await readNotionTask(plan)).id
+    : null;
+  if (id) {
+    await notion('PATCH', `pages/${id}`, { properties: { URL: { url: prUrl } } });
   }
   if (snapshot) assertPrSnapshot(snapshot.branch, snapshot.head);
   const original = readFileSync(plan.full);
@@ -1768,10 +1770,10 @@ async function linkPullRequest(plan, prUrl, snapshot) {
 
   const deferred = deferredItems(plan.body).join('\n') || 'None';
   console.log(`Copy into the PR's "Deferred" section:\n${deferred}`);
-  if (task) {
+  if (id) {
     try {
       await notion('POST', 'comments', {
-        parent: { page_id: task.id },
+        parent: { page_id: id },
         rich_text: text(`Shipped for review: ${prUrl}\nPlan ${plan.rel} is closed out. The Task moves to Done when the PR merges.\nDeferred: ${deferred}`),
       }, { soft: true });
     } catch (error) {

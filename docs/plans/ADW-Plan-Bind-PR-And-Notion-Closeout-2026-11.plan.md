@@ -13,7 +13,7 @@ startedAt: 2026-11-18
 reviewedBy: Codex
 reviewVerdict: pass
 reviewSession: /root/review_closeout
-reviewFingerprint: 3e3852ba2d4d4259f0ba6bdfd97cceb06d5cda52d0466027976953132577b3cf
+reviewFingerprint: d1825a077c943c049a5e961cf916a627897305ba2e81bd76c905ae77bfebcc21
 pr: https://github.com/AaronPG095/AI-Dev-Workflow/pull/41
 ---
 # Bind PR and Notion close-out
@@ -58,3 +58,5 @@ Aaron approved the review's fixes by saying “Implement your fixes.”
 ## Progress log
 - 2026-11-19 08:01 UTC, Codex (handoff): Done: Notion and GitHub close-out fixes, targeted fixtures, and independent review passed.; Next: Open the PR and confirm hosted CI.; Open: none; Tree: 6 dirty file(s)
 - 2026-11-19 08:01 UTC, Codex (review: pass): Independent review verified the authoritative Notion provenance line and protected GitHub event and merge checks; 11 targeted fixtures passed. [reviewer: /root/review_closeout]
+- 2026-11-19 08:20 UTC, Codex (handoff): Done: Corrected inherited Actions fixture environment; 11 focused tests passed with a simulated outer GitHub repository.; Next: Push to the existing PR and confirm hosted checks.; Open: none; Tree: 2 dirty file(s)
+- 2026-11-19 08:20 UTC, Codex (review: pass): Independent follow-up confirmed Actions fixture isolation and retained Notion provenance validation; all 11 focused tests passed in a simulated Actions environment. [reviewer: /root/review_closeout]

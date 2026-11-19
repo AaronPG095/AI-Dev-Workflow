@@ -106,6 +106,7 @@ if (github) {
       encoding: 'utf8',
       env: {
         ...process.env,
+        GITHUB_ACTIONS: '',
         NOTION_TOKEN: 'test-token',
         MOCK_RESPONSES: JSON.stringify(replies),
         MOCK_REQUESTS: requests,
@@ -448,7 +449,15 @@ test('ci-done reads the full PR file list and the committed plan after a linear 
   const sha = f.git('rev-parse', 'HEAD');
   const args = ['--pr-number', '1'];
   const github = [repository, mergedPull(1, sha, { changed_files: 2 }), files];
-  const r = f.run('ci-done', args, undefined, { omitPlan: true, github });
+  const r = f.run('ci-done', args, undefined, {
+    omitPlan: true,
+    github: github.slice(1),
+    envOverrides: {
+      GITHUB_ACTIONS: 'true',
+      GITHUB_SERVER_URL: 'https://github.com',
+      GITHUB_REPOSITORY: 'example/repo',
+    },
+  });
   assert.equal(r.status, 0, r.stderr);
   assert.equal(r.calls[1].body.properties.Status.status.name, 'Done');
   assert.equal(r.calls[1].body.properties['Completed At'].date.start, '2025-10-21');
