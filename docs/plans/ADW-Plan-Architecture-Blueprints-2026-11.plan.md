@@ -1,7 +1,7 @@
 ---
 title: Plan - Feature: Architecture Blueprints For Multi-PR Initiatives
 ticket: local://ADW:ADW-Plan-Architecture-Blueprints-2026-11
-status: in-progress
+status: shipped
 priority: 
 state: 
 due: 
@@ -19,6 +19,7 @@ reviewSession: reviewer-neon-low
 reviewModel: gemini-4-neon-low
 baseBranch: main
 reviewFingerprint: 7d9543a8480091d824c1fc16f359a872d75a45180ab856c52963a08c151e899d
+pr: https://github.com/AaronPG095/AI-Dev-Workflow/pull/45
 ---
 # Architecture Blueprints For Multi-PR Initiatives
 
