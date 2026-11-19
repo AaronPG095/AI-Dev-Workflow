@@ -1,7 +1,7 @@
 ---
 title: Plan - Feature: Architecture Blueprints For Multi-PR Initiatives
 ticket: local://ADW:ADW-Plan-Architecture-Blueprints-2026-11
-status: planned
+status: in-progress
 priority: 
 state: 
 due: 
@@ -10,6 +10,9 @@ version:
 impact: 
 devTicketKey: ADW:ADW-Plan-Architecture-Blueprints-2026-11
 agent: Gemini
+branch: feat/architecture-blueprints
+worktree: AI-Dev-Workflow
+startedAt: 2026-11-19
 ---
 # Architecture Blueprints For Multi-PR Initiatives
 
