@@ -137,6 +137,7 @@ const BOOLEAN_FLAGS = new Set([
   '--fleet',
   '--auto',
   '--all',
+  '--all-overlaps',
   '--verify',
   '--force',
   '--create',
@@ -1369,7 +1370,7 @@ function reviewFingerprint(plan, base, head, dir = repoRoot) {
   const diff = execFileSync('git', [
     'diff', '--binary', '--full-index', '--no-ext-diff', '--no-textconv',
     '--no-color', '--no-renames', base, ...(head ? [head] : []), '--',
-    '.', `:(exclude,literal)${plan.rel}`,
+    '.', `:(exclude,literal)${plan.rel}`, ':(exclude,literal)docs/lessons.md',
   ], { cwd: dir, maxBuffer: 64 * 1024 * 1024 });
   const scope = ['Summary', 'Acceptance criteria', 'Steps', 'Out of scope']
     .map((heading) => section(plan.body, heading));
@@ -1795,7 +1796,10 @@ async function linkPullRequest(plan, prUrl, snapshot) {
   const retro = takeaway ? `- Retrospective (${tags}): ${takeaway}` : '';
   const addRetro = retro && !section(plan.body, 'Progress log').split('\n').includes(retro);
   const recordBase = snapshot?.baseBranch && snapshot.baseBranch !== plan.meta.baseBranch;
-  if (linked && !addRetro && !recordBase) return snapshot?.head;
+  if (linked && !addRetro && !recordBase) {
+    if (!opts.dryRun && !opts.retro) autoCaptureBugLesson(plan);
+    return snapshot?.head;
+  }
 
   const id = !isLocal && /^https:\/\//.test(plan.meta.ticket || '')
     ? (await readNotionTask(plan)).id
@@ -1812,11 +1816,25 @@ async function linkPullRequest(plan, prUrl, snapshot) {
     plan.body = appendToSection(plan.body, 'Progress log', retro);
   }
   writePlan(plan);
+  let bugLessonAdded = false;
+  if (!opts.dryRun && !opts.retro) {
+    const lessonRes = autoCaptureBugLesson(plan);
+    bugLessonAdded = Boolean(lessonRes && !lessonRes.deduplicated);
+  }
   let linkedHead;
   if (snapshot) {
     const linkedPlan = readFileSync(plan.full);
+    const commitPaths = [
+      plan.rel,
+      ...(bugLessonAdded && existsSync(join(repoRoot, 'docs/lessons.md'))
+        ? ['docs/lessons.md']
+        : []),
+    ];
     try {
-      git(['--literal-pathspecs', 'commit', '--only', '-m', `chore: link pr ${prUrl}`, '--', plan.rel]);
+      if (bugLessonAdded && existsSync(join(repoRoot, 'docs/lessons.md'))) {
+        git(['--literal-pathspecs', 'add', '--', 'docs/lessons.md']);
+      }
+      git(['--literal-pathspecs', 'commit', '--only', '-m', `chore: link pr ${prUrl}`, '--', ...commitPaths]);
     } catch (error) {
       if (git(['rev-parse', 'HEAD']) === snapshot.head && readFileSync(plan.full).equals(linkedPlan)) {
         writeFileSync(plan.full, original);
@@ -1828,7 +1846,9 @@ async function linkPullRequest(plan, prUrl, snapshot) {
     const linkedPaths = git([
       'diff-tree', '--no-commit-id', '--name-only', '-r', '-z', linkedHead,
     ]).split('\0').filter(Boolean);
-    if (parent !== snapshot.head || linkedPaths.length !== 1 || linkedPaths[0] !== plan.rel)
+    const allowedPaths = new Set(commitPaths);
+    if (parent !== snapshot.head || !linkedPaths.length || !linkedPaths.includes(plan.rel) ||
+        linkedPaths.some((p) => !allowedPaths.has(p)))
       fail('the PR link commit contains unexpected changes; inspect the local commit before pushing');
     assertPrSnapshot(snapshot.branch, linkedHead);
   }
@@ -1968,16 +1988,27 @@ function loadLessons(dir = repoRoot) {
 function appendLesson({ text, tags = [], planRel = '', dir = repoRoot }) {
   const cleanText = String(text || '').replace(/\s+/g, ' ').trim();
   if (!cleanText) fail('lesson text cannot be empty');
+  const normPlan = planRel ? planRel.replace(/\\/g, '/') : '';
+  const lessonsPath = join(dir, 'docs', 'lessons.md');
+  const existingEntries = loadLessons(dir);
+  const dup = existingEntries.find(
+    (e) =>
+      e.text.toLowerCase() === cleanText.toLowerCase() &&
+      (!normPlan || e.meta.includes(normPlan)),
+  );
+  if (dup) {
+    return { path: lessonsPath, line: dup.raw, deduplicated: true };
+  }
+
   const tagList = (Array.isArray(tags) ? tags : String(tags || '').split(','))
     .map((t) => t.trim())
     .filter(Boolean);
   const metaParts = [];
   if (tagList.length) metaParts.push(tagList.join(', '));
-  if (planRel) metaParts.push(planRel.replace(/\\/g, '/'));
+  if (normPlan) metaParts.push(normPlan);
   const metaCol = metaParts.join(' · ') || 'general';
   const entryLine = `- ${today()} | ${metaCol} | ${cleanText}`;
 
-  const lessonsPath = join(dir, 'docs', 'lessons.md');
   mkdirSync(dirname(lessonsPath), { recursive: true });
   if (!existsSync(lessonsPath)) {
     const header = [
@@ -1991,7 +2022,59 @@ function appendLesson({ text, tags = [], planRel = '', dir = repoRoot }) {
     const existing = readFileSync(lessonsPath, 'utf8').trimEnd();
     writeFileSync(lessonsPath, `${existing}\n${entryLine}\n`, 'utf8');
   }
-  return { path: lessonsPath, line: entryLine };
+  return { path: lessonsPath, line: entryLine, deduplicated: false };
+}
+
+function firstSentence(rawText) {
+  const cleaned = String(rawText || '')
+    .replace(/<!--[\s\S]*?-->/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!cleaned) return '';
+  const m = cleaned.match(/^(.+?[.!?])(?:\s|$)/);
+  return (m ? m[1] : cleaned).slice(0, 220).trim();
+}
+
+function autoCaptureBlockerResolutionLesson(plan, summary, dir = repoRoot) {
+  if (opts.dryRun || config.lessons?.autoCapture === false) return null;
+  const logSection = section(plan.body, 'Progress log') || '';
+  if (!/\(review:\s*block\b/i.test(logSection)) return null;
+  const blockerLines = logSection
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => /\(review:\s*block\b/i.test(l));
+  const lastBlocker = blockerLines.at(-1) || '';
+  const blockerMatch = lastBlocker.match(/\(review:\s*block[^)]*\):\s*(.+)$/i);
+  const blockerSummary = blockerMatch
+    ? blockerMatch[1].replace(/\s*\[(?:reviewer|self-review|test-drop):[^\]]*\]/gi, '').trim()
+    : '';
+  const cleanSummary = String(summary || '').replace(/\s+/g, ' ').trim();
+  const lessonText = blockerSummary
+    ? `Resolved review blocker (${blockerSummary}): ${cleanSummary}`
+    : `Resolved review blocker: ${cleanSummary}`;
+  return appendLesson({
+    text: lessonText,
+    tags: ['review-blocker'],
+    planRel: plan.rel,
+    dir,
+  });
+}
+
+function autoCaptureBugLesson(plan, dir = repoRoot) {
+  if (opts.dryRun || opts.retro || config.lessons?.autoCapture === false) return null;
+  const planType = parsePlanTypeFromMeta(plan.meta);
+  const modePrefix = ((plan.meta.title || '').match(/^([^-\s]+)\s*-/) || [])[1] || '';
+  if (!/^(?:bug|debug)$/i.test(planType) && !/^debug$/i.test(modePrefix)) return null;
+  const summarySentence =
+    firstSentence(section(plan.body, 'Summary')) ||
+    (plan.meta.title || '').replace(/^(?:Plan|Debug|Ask)\s*-\s*[^:]+:\s*/i, '').trim();
+  if (!summarySentence) return null;
+  return appendLesson({
+    text: summarySentence,
+    tags: ['bug-fix'],
+    planRel: plan.rel,
+    dir,
+  });
 }
 
 function selectRelevantLessons(plan, { dir = repoRoot, limit = 5 } = {}) {
@@ -2119,7 +2202,67 @@ function round1(n) {
   return Number(n.toFixed(1));
 }
 
-function collectRepoStats(dir = repoRoot, { days = 90, filterDays = false } = {}) {
+function isNoiseFileForDefects(filePath, cfg = config) {
+  const normPath = String(filePath || '').replace(/\\/g, '/');
+  const base = basename(normPath);
+  if (
+    ['README.md', 'CHANGELOG.md', 'AGENTS.md', 'CLAUDE.md'].includes(base) ||
+    normPath.endsWith('.md') ||
+    normPath.endsWith('.resw') ||
+    isTestFile(normPath, cfg)
+  ) {
+    return true;
+  }
+  const ignoreList = cfg.stats?.ignoreFiles;
+  if (Array.isArray(ignoreList) && ignoreList.length) {
+    return ignoreList.some((pattern) => {
+      if (pattern.startsWith('*.')) return base.endsWith(pattern.slice(1));
+      return normPath === pattern || base === pattern || normPath.startsWith(`${pattern}/`);
+    });
+  }
+  return false;
+}
+
+function extractCommitFileLineRanges(dir, commitHash, filePath) {
+  let diff = '';
+  try {
+    diff = worktreeGit(dir, [
+      'show',
+      '--unified=0',
+      '--format=',
+      commitHash,
+      '--',
+      filePath,
+    ]);
+  } catch {
+    return [];
+  }
+  const ranges = [];
+  for (const m of diff.matchAll(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/gm)) {
+    const oldStart = parseInt(m[1], 10);
+    const oldCount = m[2] !== undefined ? parseInt(m[2], 10) : 1;
+    const newStart = parseInt(m[3], 10);
+    const newCount = m[4] !== undefined ? parseInt(m[4], 10) : 1;
+    if (oldCount > 0) ranges.push([oldStart, oldStart + oldCount - 1]);
+    else if (oldStart > 0) ranges.push([oldStart, oldStart]);
+    if (newCount > 0) ranges.push([newStart, newStart + newCount - 1]);
+    else if (newStart > 0) ranges.push([newStart, newStart]);
+  }
+  return ranges;
+}
+
+function rangesOverlap(rangesA, rangesB) {
+  if (!rangesA.length || !rangesB.length) return true;
+  return rangesA.some(([a0, a1]) =>
+    rangesB.some(([b0, b1]) => a0 <= b1 && b0 <= a1),
+  );
+}
+
+function collectRepoStats(
+  dir = repoRoot,
+  { days = 90, filterDays = false, allOverlaps = false } = {},
+) {
+  const repoCfg = dir === repoRoot ? config : readRepoConfig(dir);
   const allFoundPlans = scanPlansIncludingArchive(dir);
   const commits = parseGitCommitLog(dir, days);
   const nowMs = Date.now();
@@ -2234,7 +2377,8 @@ function collectRepoStats(dir = repoRoot, { days = 90, filterDays = false } = {}
       }
     }
     const touchedCodeFiles = new Set();
-    const plansPrefix = `${(config.plansDir || 'docs/plans').replace(/\\/g, '/')}/`;
+    const commitHashes = [];
+    const plansPrefix = `${(repoCfg.plansDir || 'docs/plans').replace(/\\/g, '/')}/`;
     if (matchingCommitIdxs.length) {
       const minIdx = Math.min(...matchingCommitIdxs);
       const maxIdx = Math.max(...matchingCommitIdxs);
@@ -2246,8 +2390,13 @@ function collectRepoStats(dir = repoRoot, { days = 90, filterDays = false } = {}
         ? matchingCommitIdxs.map((idx) => commits[idx])
         : commits.slice(minIdx, maxIdx + 1);
       for (const c of slice) {
+        commitHashes.push(c.hash);
         for (const f of c.files) {
-          if (!f.startsWith(plansPrefix) && !f.endsWith('.plan.md')) {
+          if (
+            !f.startsWith(plansPrefix) &&
+            !f.endsWith('.plan.md') &&
+            !isNoiseFileForDefects(f, repoCfg)
+          ) {
             touchedCodeFiles.add(f);
           }
         }
@@ -2261,30 +2410,65 @@ function collectRepoStats(dir = repoRoot, { days = 90, filterDays = false } = {}
       startMs,
       endMs: endMs || commitDateByFile.get(p.rel) || null,
       touchedCodeFiles,
+      commitHashes,
     });
   }
 
-  // AC2: Escaped defect detection (14-day window after Feature/Refactor completion)
+  // AC1: Escaped defect detection (14-day window after Feature/Refactor completion with hunk-range & most-recent-owner attribution)
   const escapedDefects = [];
   const windowMs = 14 * 86400000;
-  const featurePlans = enrichedPlans.filter(
-    (ep) =>
-      /^(?:feature|refactor)$/i.test(ep.type) &&
-      ep.endMs &&
-      ep.touchedCodeFiles.size > 0,
-  );
+  const featurePlans = enrichedPlans
+    .filter(
+      (ep) =>
+        /^(?:feature|refactor)$/i.test(ep.type) &&
+        ep.endMs &&
+        ep.touchedCodeFiles.size > 0,
+    )
+    .sort((a, b) => b.endMs - a.endMs);
   const bugPlans = enrichedPlans.filter((ep) =>
     /^(?:bug|debug)$/i.test(ep.type),
   );
   const revertCommits = commits.filter((c) => /^Revert\b/i.test(c.subject));
 
+  const filePlanCount = new Map();
   for (const fp of featurePlans) {
-    for (const bp of bugPlans) {
+    for (const f of fp.touchedCodeFiles) {
+      filePlanCount.set(f, (filePlanCount.get(f) || 0) + 1);
+    }
+  }
+
+  const lineRangeCache = new Map();
+  const getCommitRanges = (commitHash, file) => {
+    const key = `${commitHash}:${file}`;
+    if (!lineRangeCache.has(key)) {
+      lineRangeCache.set(key, extractCommitFileLineRanges(dir, commitHash, file));
+    }
+    return lineRangeCache.get(key);
+  };
+  const getPlanRanges = (ep, file) => {
+    const out = [];
+    for (const h of ep.commitHashes) {
+      out.push(...getCommitRanges(h, file));
+    }
+    return out;
+  };
+  const fileOverlapsHunks = (file, fp, targetRangesFn) => {
+    if ((filePlanCount.get(file) || 0) <= 2) return true;
+    const fpRanges = getPlanRanges(fp, file);
+    const targetRanges = targetRangesFn();
+    return rangesOverlap(fpRanges, targetRanges);
+  };
+
+  for (const bp of bugPlans) {
+    const bpDate = bp.startMs || bp.endMs;
+    if (!bpDate) continue;
+    for (const fp of featurePlans) {
       if (bp.plan.rel === fp.plan.rel) continue;
-      const bpDate = bp.startMs || bp.endMs;
-      if (!bpDate || bpDate < fp.endMs || bpDate - fp.endMs > windowMs) continue;
-      const overlap = [...bp.touchedCodeFiles].filter((f) =>
-        fp.touchedCodeFiles.has(f),
+      if (bpDate < fp.endMs || bpDate - fp.endMs > windowMs) continue;
+      const overlap = [...bp.touchedCodeFiles].filter(
+        (f) =>
+          fp.touchedCodeFiles.has(f) &&
+          fileOverlapsHunks(f, fp, () => getPlanRanges(bp, f)),
       );
       if (overlap.length) {
         escapedDefects.push({
@@ -2295,13 +2479,21 @@ function collectRepoStats(dir = repoRoot, { days = 90, filterDays = false } = {}
           daysAfter: round1((bpDate - fp.endMs) / 86400000),
           overlappingFiles: overlap,
         });
+        if (!allOverlaps) break;
       }
     }
-    for (const rc of revertCommits) {
-      if (!rc.dateMs || rc.dateMs < fp.endMs || rc.dateMs - fp.endMs > windowMs) {
-        continue;
-      }
-      const overlap = rc.files.filter((f) => fp.touchedCodeFiles.has(f));
+  }
+
+  for (const rc of revertCommits) {
+    if (!rc.dateMs) continue;
+    for (const fp of featurePlans) {
+      if (rc.dateMs < fp.endMs || rc.dateMs - fp.endMs > windowMs) continue;
+      const overlap = rc.files.filter(
+        (f) =>
+          !isNoiseFileForDefects(f, repoCfg) &&
+          fp.touchedCodeFiles.has(f) &&
+          fileOverlapsHunks(f, fp, () => getCommitRanges(rc.hash, f)),
+      );
       if (overlap.length) {
         escapedDefects.push({
           kind: 'revert',
@@ -2311,6 +2503,7 @@ function collectRepoStats(dir = repoRoot, { days = 90, filterDays = false } = {}
           daysAfter: round1((rc.dateMs - fp.endMs) / 86400000),
           overlappingFiles: overlap,
         });
+        if (!allOverlaps) break;
       }
     }
   }
@@ -4342,13 +4535,16 @@ const commands = {
     if (verdict === 'block') {
       delete plan.meta.reviewFingerprint;
     } else {
-      if (git(['ls-files', '--others', '--exclude-standard', '--', '.', `:(exclude,literal)${plan.rel}`]))
+      if (git(['ls-files', '--others', '--exclude-standard', '--', '.', `:(exclude,literal)${plan.rel}`, ':(exclude,literal)docs/lessons.md']))
         fail('review omits untracked files; stage the reviewed files before stamping a verdict');
       if (!opts.base || configuredPrBase(opts.base)) {
         const baseBranch = plannedBaseBranch(plan);
         if (baseBranch) plan.meta.baseBranch = baseBranch;
       }
       plan.meta.reviewFingerprint = reviewFingerprint(plan);
+    }
+    if (verdict === 'pass') {
+      autoCaptureBlockerResolutionLesson(plan, summary);
     }
     const extraTags = [
       reviewerId && verdict !== 'block' ? ` [reviewer: ${reviewerId}]` : '',
@@ -4544,6 +4740,7 @@ const commands = {
       const pr = readPullRequest(target);
       await closeMergedPullPlan(pr, plan, pullRequestFiles(pr));
     }
+    autoCaptureBugLesson(plan);
     console.log(`Ticket set to Done: ${plan.meta.ticket}`);
   },
 
@@ -4625,6 +4822,7 @@ const commands = {
       await closeMergedPullPlan(pr, plan, files);
       console.log(`Ticket set to Done: ${plan.meta.ticket}`);
     }
+    autoCaptureBugLesson(plan);
   },
 
   async 'ci-check'() {
@@ -5365,6 +5563,7 @@ const commands = {
       const searchDirs = [
         join(dir, 'docs', 'decisions'),
         join(dir, 'docs', 'architecture'),
+        join(dir, 'docs', 'dev-workflow'),
         join(dir, 'docs', 'plans'),
         join(dir, 'docs', 'plans', 'archive'),
       ];
@@ -5380,7 +5579,7 @@ const commands = {
         return files;
       }
 
-      const files = searchDirs.flatMap(scanRecursive);
+      const files = [...new Set(searchDirs.flatMap(scanRecursive))];
       for (const f of files) {
         try {
           const content = readFileSync(f, 'utf8');
@@ -5397,6 +5596,7 @@ const commands = {
           const relPath = relative(dir, f).replace(/\\/g, '/');
           const isAdr = relPath.startsWith('docs/decisions/');
           const isBlueprint = relPath.startsWith('docs/architecture/');
+          const isDoc = relPath.startsWith('docs/dev-workflow/');
           const titleLine = lines.find((l) => /^#\s+/.test(l)) || '';
           const title = titleLine.replace(/^#\s+/, '').trim() || basename(f);
 
@@ -5414,7 +5614,7 @@ const commands = {
 
           results.push({
             repo: repoName,
-            type: isAdr ? 'ADR' : isBlueprint ? 'Blueprint' : 'Plan',
+            type: isAdr ? 'ADR' : isBlueprint ? 'Blueprint' : isDoc ? 'Doc' : 'Plan',
             file: relPath,
             title,
             matches,
@@ -6520,7 +6720,13 @@ const commands = {
     const explicitDays = opts.days !== undefined;
     const days = explicitDays ? Math.max(0, parseInt(opts.days, 10) || 0) : 90;
     const dirs = opts.fleet ? getKnownRepoDirs() : [repoRoot];
-    const perRepo = dirs.map((d) => collectRepoStats(d, { days, filterDays: explicitDays }));
+    const perRepo = dirs.map((d) =>
+      collectRepoStats(d, {
+        days,
+        filterDays: explicitDays,
+        allOverlaps: Boolean(opts.allOverlaps),
+      }),
+    );
 
     if (perRepo.length === 1) {
       const s = perRepo[0];

@@ -248,14 +248,14 @@ node scripts/ticket.mjs verify [--tier fast|test|full] [--all] [--pre-push]
 # Scaffold in-repo Architecture Decision Record in docs/decisions/
 node scripts/ticket.mjs adr "Use Native Child Process Over External Packages"
 
-# Capture a reusable retrospective takeaway in docs/lessons.md (automatically surfaced in recall & reviewer briefs)
+# Capture a reusable retrospective takeaway in docs/lessons.md (deduplicated; also auto-captured on Bug/Debug close-out and review block->pass; surfaced in recall & reviewer briefs)
 node scripts/ticket.mjs lesson "<takeaway>" [--tags <a,b>] [--plan <path>]
 
-# Instant keyword search across in-repo ADRs, plan Notes, Progress logs, and docs/lessons.md
+# Instant keyword search across in-repo ADRs, architecture blueprints, dev-workflow docs, plan Notes, Progress logs, and docs/lessons.md
 node scripts/ticket.mjs recall "Notion" [--lessons] [--fleet]
 
-# Local workflow metrics (cycle time, review block/self-review rates, deferrals, retries, 14-day escaped defects)
-node scripts/ticket.mjs stats [--fleet] [--days <N>] [--json]
+# Local workflow metrics (cycle time, review block/self-review rates, deferrals, retries, hunk/most-recent 14-day escaped defects)
+node scripts/ticket.mjs stats [--fleet] [--days <N>] [--all-overlaps] [--json]
 
 # Safely archive completed or merged plans to docs/plans/archive/<YYYY-MM>/
 node scripts/ticket.mjs archive [--all|--merged] [--fleet] [--dry-run]
