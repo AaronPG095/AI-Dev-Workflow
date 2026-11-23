@@ -257,8 +257,8 @@ node scripts/ticket.mjs recall "Notion" [--lessons] [--fleet]
 # Local workflow metrics (cycle time, review block/self-review rates, deferrals, retries, 14-day escaped defects)
 node scripts/ticket.mjs stats [--fleet] [--days <N>] [--json]
 
-# Safely archive completed plans to docs/plans/archive/<YYYY-MM>/
-node scripts/ticket.mjs archive [--all]
+# Safely archive completed or merged plans to docs/plans/archive/<YYYY-MM>/
+node scripts/ticket.mjs archive [--all|--merged] [--fleet] [--dry-run]
 
 # Isolated worktree lifecycle management with Windows extended-path cleanup
 node scripts/ticket.mjs wt list [--fleet]
@@ -358,6 +358,7 @@ When developing locally with sibling repositories in the same parent folder:
 
 # Sync latest workflow files across all repositories
 .\scripts\sync-repos.ps1 -AllKnown
+node scripts/sync.mjs --all-known [--ensure-invariants]
 
 # Bootstrap a brand-new repository with starter config
 .\scripts\sync-repos.ps1 C:\path\to\my-repo -InitPrefix MYP

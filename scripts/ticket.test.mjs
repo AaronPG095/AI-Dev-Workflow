@@ -6,6 +6,7 @@ import {
   readFileSync,
   writeFileSync,
   copyFileSync,
+  cpSync,
   rmSync,
   existsSync,
   readdirSync,
@@ -43,12 +44,40 @@ const defaultNotionConfig = {
   },
 };
 
+let cachedGitTemplateDir = null;
+function getGitTemplateDir() {
+  if (!cachedGitTemplateDir) {
+    cachedGitTemplateDir = mkdtempSync(join(tmpdir(), 'ticket-git-tpl-'));
+    execFileSync('git', ['init', '-b', 'main'], {
+      cwd: cachedGitTemplateDir,
+      stdio: 'ignore',
+    });
+    execFileSync('git', ['config', 'user.name', 'Test'], {
+      cwd: cachedGitTemplateDir,
+      stdio: 'ignore',
+    });
+    execFileSync('git', ['config', 'user.email', 'test@example.invalid'], {
+      cwd: cachedGitTemplateDir,
+      stdio: 'ignore',
+    });
+    process.on('exit', () => {
+      try {
+        rmSync(cachedGitTemplateDir, { recursive: true, force: true });
+      } catch {}
+    });
+  }
+  return cachedGitTemplateDir;
+}
+
 function fixture(t, front = '', responses = [], configOverrides = {}) {
   const root = mkdtempSync(join(tmpdir(), 'ticket-regression-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   mkdirSync(join(root, 'scripts'));
   mkdirSync(join(root, 'docs/plans'), { recursive: true });
   copyFileSync(join(scripts, 'ticket.mjs'), join(root, 'scripts/ticket.mjs'));
+  if (existsSync(join(scripts, 'lib'))) {
+    cpSync(join(scripts, 'lib'), join(root, 'scripts/lib'), { recursive: true });
+  }
   writeFileSync(
     join(root, 'scripts/ticket.config.json'),
     JSON.stringify({ ...defaultNotionConfig, ...configOverrides }, null, 2),
@@ -135,6 +164,27 @@ if (github) {
     };
   }
   function git(...args) {
+    if (args[0] === 'init' && !existsSync(join(root, '.git'))) {
+      cpSync(join(getGitTemplateDir(), '.git'), join(root, '.git'), {
+        recursive: true,
+      });
+      if (args[1] === '-b' && args[2] && args[2] !== 'main') {
+        writeFileSync(
+          join(root, '.git', 'HEAD'),
+          `ref: refs/heads/${args[2]}\n`,
+          'utf8',
+        );
+      }
+      return '';
+    }
+    if (
+      args[0] === 'config' &&
+      ((args[1] === 'user.name' && args[2] === 'Test') ||
+        (args[1] === 'user.email' && args[2] === 'test@example.invalid')) &&
+      existsSync(join(root, '.git'))
+    ) {
+      return '';
+    }
     return execFileSync('git', args, {
       cwd: root,
       encoding: 'utf8',
@@ -4564,6 +4614,166 @@ test('architecture blueprints: scaffold, list, new --blueprint, prime/step/pack 
   const recallRes = f.run('recall', ['UniqueBlueprintTokenForRecall'], [], { omitPlan: true });
   assert.equal(recallRes.status, 0, recallRes.stderr);
   assert.match(recallRes.stdout, /\[Blueprint\] docs\/architecture\/FO-Blueprint-Auth-Architecture\.md/);
+});
+
+test('F1: cached git fixture, verify.fast, archive --merged [--fleet] [--dry-run], sync --ensure-invariants, and doctor dirty protected branch warning', (t) => {
+  const f = fixture(t, '', [], {
+    tracker: 'local',
+    requireReview: false,
+    verify: {
+      fast: 'node --check scripts/ticket.mjs',
+      test: 'node -e "process.exit(0)"',
+    },
+  });
+
+  // 1. Cached git fixture preserves pre-existing files on init -b and short-circuits default config calls
+  writeFileSync(join(f.root, 'pre-init.txt'), 'kept\n');
+  f.git('init', '-b', 'main');
+  f.git('config', 'user.name', 'Test');
+  f.git('config', 'user.email', 'test@example.invalid');
+  assert.equal(readFileSync(join(f.root, 'pre-init.txt'), 'utf8'), 'kept\n');
+  assert.equal(f.git('config', '--get', 'user.name'), 'Test');
+  assert.equal(f.git('config', '--get', 'user.email'), 'test@example.invalid');
+
+  // 2. verify --tier fast works and repo config + manifest have fast / invariants configured
+  const repoCfg = JSON.parse(readFileSync(join(scripts, 'ticket.config.json'), 'utf8'));
+  assert.equal(repoCfg.verify?.fast, 'node --check scripts/ticket.mjs');
+  const manifest = JSON.parse(readFileSync(join(scripts, 'workflow-manifest.json'), 'utf8'));
+  assert.ok(Array.isArray(manifest.starterConfig?.invariants?.noSecretsPatterns));
+  assert.ok(Array.isArray(manifest.starterConfig?.invariants?.excludePaths));
+
+  const fastVerify = f.run('verify', ['--tier', 'fast'], [], { omitPlan: true });
+  assert.equal(fastVerify.status, 0, fastVerify.stderr);
+
+  // 3. archive --merged [--dry-run] [--fleet]
+  const shippedClosed = join(f.root, 'docs/plans/FO-Plan-Shipped-Closed.plan.md');
+  const inProgressOpen = join(f.root, 'docs/plans/FO-Plan-Open.plan.md');
+  const mergedLocal = join(f.root, 'docs/plans/FO-Plan-Test.plan.md');
+  writeFileSync(
+    shippedClosed,
+    [
+      '---',
+      'title: Plan - Feature: Shipped Closed',
+      'ticket: https://www.notion.so/40a0b9c6786f817fab0ff2059ad410e3',
+      'status: shipped',
+      'completedAt: 2026-11-15',
+      '---',
+      '# Shipped Closed',
+      '',
+      '## Summary',
+      'Shipped and merged.',
+      '',
+      '## Acceptance criteria',
+      '- [x] AC1: Done verified: ok',
+      '',
+      '## Steps',
+      '- [x] Step 1',
+      '',
+    ].join('\n'),
+  );
+  writeFileSync(
+    inProgressOpen,
+    [
+      '---',
+      'title: Plan - Feature: Open Work',
+      'ticket: local://FO:FO-Plan-Open',
+      'status: in-progress',
+      '---',
+      '# Open Work',
+      '',
+      '## Summary',
+      'Still working.',
+      '',
+      '## Acceptance criteria',
+      '- [ ] AC1: Pending',
+      '',
+      '## Steps',
+      '- [ ] Step 1',
+      '',
+    ].join('\n'),
+  );
+  writeFileSync(
+    mergedLocal,
+    [
+      '---',
+      'title: Plan - Feature: Local Merged',
+      'ticket: local://FO:FO-Plan-Test',
+      'status: in-progress',
+      'completedAt: 2026-11-10',
+      '---',
+      '# Local Merged',
+      '',
+      '## Summary',
+      'Merged to main.',
+      '',
+      '## Acceptance criteria',
+      '- [x] AC1: Works verified: ok',
+      '',
+      '## Steps',
+      '- [x] Step 1',
+      '',
+    ].join('\n'),
+  );
+
+  f.git('add', '.');
+  f.git('commit', '-m', 'commit plans on main');
+
+  // Dry-run previews without moving
+  const dryArchive = f.run('archive', ['--merged', '--dry-run'], [], { omitPlan: true });
+  assert.equal(dryArchive.status, 0, dryArchive.stderr);
+  assert.match(dryArchive.stdout, /\[dry-run\] Would archive: docs\/plans\/FO-Plan-Shipped-Closed\.plan\.md/);
+  assert.match(dryArchive.stdout, /\[dry-run\] Would archive: docs\/plans\/FO-Plan-Test\.plan\.md/);
+  assert.doesNotMatch(dryArchive.stdout, /FO-Plan-Open\.plan\.md/);
+  assert.ok(existsSync(shippedClosed));
+  assert.ok(existsSync(mergedLocal));
+
+  // Real archive --merged moves closed/merged plans and leaves open plan untouched
+  const realArchive = f.run('archive', ['--merged'], [], { omitPlan: true });
+  assert.equal(realArchive.status, 0, realArchive.stderr);
+  assert.ok(!existsSync(shippedClosed));
+  assert.ok(!existsSync(mergedLocal));
+  assert.ok(existsSync(join(f.root, 'docs/plans/archive/2026-11/FO-Plan-Shipped-Closed.plan.md')));
+  assert.ok(existsSync(join(f.root, 'docs/plans/archive/2026-11/FO-Plan-Test.plan.md')));
+  assert.ok(existsSync(inProgressOpen));
+
+  // 4. doctor warns when on a dirty protected branch (main has uncommitted changes)
+  const docDirty = f.run('doctor', [], [], { omitPlan: true });
+  assert.equal(docDirty.status, 0, docDirty.stderr);
+  assert.match(docDirty.stdout, /Warning:\s+Protected branch "main" has \d+ uncommitted file\(s\)/);
+
+  // 5. sync.mjs --ensure-invariants backfills starterConfig.invariants without causing --check --bundle-only drift
+  const targetRepo = mkdtempSync(join(tmpdir(), 'ticket-sync-inv-'));
+  t.after(() => rmSync(targetRepo, { recursive: true, force: true }));
+  const initSync = spawnSync(
+    process.execPath,
+    [join(scripts, 'sync.mjs'), targetRepo, '--init-prefix', 'TST'],
+    { encoding: 'utf8' },
+  );
+  assert.equal(initSync.status, 0, initSync.stderr);
+
+  // Strip invariants from targetRepo's ticket.config.json to simulate an older downstream config
+  const targetCfgPath = join(targetRepo, 'scripts/ticket.config.json');
+  const strippedCfg = JSON.parse(readFileSync(targetCfgPath, 'utf8'));
+  delete strippedCfg.invariants;
+  writeFileSync(targetCfgPath, JSON.stringify(strippedCfg, null, 2) + '\n');
+
+  // --check --bundle-only must NOT report drift when invariants is missing
+  const bundleCheck = spawnSync(
+    process.execPath,
+    [join(scripts, 'sync.mjs'), targetRepo, '--check', '--bundle-only'],
+    { encoding: 'utf8' },
+  );
+  assert.equal(bundleCheck.status, 0, bundleCheck.stdout + bundleCheck.stderr);
+
+  // --ensure-invariants backfills starterConfig.invariants
+  const backfillSync = spawnSync(
+    process.execPath,
+    [join(scripts, 'sync.mjs'), targetRepo, '--ensure-invariants'],
+    { encoding: 'utf8' },
+  );
+  assert.equal(backfillSync.status, 0, backfillSync.stderr);
+  const backfilledCfg = JSON.parse(readFileSync(targetCfgPath, 'utf8'));
+  assert.deepEqual(backfilledCfg.invariants, manifest.starterConfig.invariants);
 });
 
 

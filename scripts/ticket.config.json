@@ -6,6 +6,7 @@
   "protectedBranches": ["main"],
   "captureSources": ["Claude", "Codex", "Gemini", "ChatGPT", "Notion AI", "Other"],
   "verify": {
+    "fast": "node --check scripts/ticket.mjs",
     "test": "node --test scripts/ticket.test.mjs",
     "full": "node --test scripts/ticket.test.mjs"
   },
