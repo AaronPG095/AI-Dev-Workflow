@@ -1,7 +1,7 @@
 ---
 title: Plan - Feature: Precision Stats And Auto Lessons
 ticket: local://ADW:ADW-Plan-Precision-Stats-And-Auto-Lessons-2026-11
-status: in-progress
+status: shipped
 priority: 
 state: 
 due: 
@@ -20,6 +20,7 @@ reviewSession: reviewer-argon-low
 reviewModel: gemini-4-argon-low
 baseBranch: main
 reviewFingerprint: d089a1f1c4af77a633fba897291f00fba55438961502dc4232d8fa95ff554bea
+pr: https://github.com/AaronPG095/AI-Dev-Workflow/pull/47
 ---
 # Precision Stats And Auto Lessons
 
