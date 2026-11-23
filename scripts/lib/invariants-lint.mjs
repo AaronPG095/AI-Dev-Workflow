@@ -1,13 +1,31 @@
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { join, relative, basename } from 'node:path';
 
-export function listFilesRel(rootDir, baseDir = rootDir) {
+export function listFilesRel(rootDir, baseDir = rootDir, seen = new Set()) {
   if (!existsSync(rootDir)) return [];
+  let canonical;
+  try {
+    canonical = realpathSync(rootDir);
+  } catch {
+    return [];
+  }
+  if (seen.has(canonical)) return [];
+  seen.add(canonical);
+
   const out = [];
   for (const entry of readdirSync(rootDir, { withFileTypes: true })) {
     const full = join(rootDir, entry.name);
-    if (entry.isDirectory()) out.push(...listFilesRel(full, baseDir));
-    else out.push(relative(baseDir, full).replace(/\\/g, '/'));
+    if (entry.isDirectory()) {
+      out.push(...listFilesRel(full, baseDir, seen));
+    } else if (entry.isFile()) {
+      out.push(relative(baseDir, full).replace(/\\/g, '/'));
+    } else if (entry.isSymbolicLink()) {
+      try {
+        const st = statSync(full);
+        if (st.isDirectory()) out.push(...listFilesRel(full, baseDir, seen));
+        else if (st.isFile()) out.push(relative(baseDir, full).replace(/\\/g, '/'));
+      } catch {}
+    }
   }
   return out.sort();
 }
