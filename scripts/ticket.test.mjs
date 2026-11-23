@@ -10,6 +10,7 @@ import {
   rmSync,
   existsSync,
   readdirSync,
+  symlinkSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname, basename } from 'node:path';
@@ -5287,6 +5288,32 @@ test('J1: Spike plan type scaffolding, timebox/appetite defaults, Hypothesis lin
   const stats = JSON.parse(statsRes.stdout);
   assert.equal(stats.byType.Spike, 1);
   assert.equal(stats.escapedDefects.length, 0);
+});
+
+test('listFilesRel traverses directory junctions/symlinks without EISDIR', async (t) => {
+  const { listFilesRel } = await import('./lib/invariants-lint.mjs');
+  const f = fixture(t, 'ticket: local://FO:FO-Plan-Test\n', [], {
+    tracker: 'local',
+    requireReview: false,
+    invariants: {
+      mirrorDirs: [['.agents/skills', '.claude/skills']],
+    },
+  });
+
+  const targetSkill = join(f.root, '.agents/skills/ext-skill');
+  mkdirSync(targetSkill, { recursive: true });
+  writeFileSync(join(targetSkill, 'SKILL.md'), 'same content\n');
+  mkdirSync(join(f.root, '.claude/skills'), { recursive: true });
+  symlinkSync(
+    targetSkill,
+    join(f.root, '.claude/skills/ext-skill'),
+    process.platform === 'win32' ? 'junction' : 'dir',
+  );
+
+  assert.deepEqual(listFilesRel(join(f.root, '.claude/skills')), ['ext-skill/SKILL.md']);
+
+  const checkRes = f.run('check');
+  assert.equal(checkRes.status, 0, checkRes.stderr);
 });
 
 

@@ -147,7 +147,7 @@ AI-Dev-Workflow/
 │   │   └── symbols-map.mjs        # Zero-dep repo symbol outline & dependency token parser
 │   ├── ticket.mjs                 # Zero-dependency workflow & review CLI (Node 22+)
 │   ├── ticket.config.json         # Repository configuration (local mode default)
-│   ├── ticket.test.mjs            # 99 hermetic unit and integration tests (node:test)
+│   ├── ticket.test.mjs            # 100 hermetic unit and integration tests (node:test)
 │   ├── workflow-manifest.json     # Versioned distribution manifest for sync & installers
 │   ├── sync.mjs                   # Cross-platform sync and drift engine (--remote & local)
 │   ├── sync-repos.ps1             # PowerShell wrapper for multi-repo sync
