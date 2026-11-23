@@ -1,7 +1,7 @@
 ---
 title: Plan - Refactor: Modularize Ticket Cli
 ticket: local://ADW:ADW-Plan-Modularize-Ticket-Cli-2026-11
-status: in-progress
+status: shipped
 priority: 
 state: 
 due: 
@@ -21,6 +21,7 @@ reviewSession: reviewer-argon-low
 reviewModel: gemini-4-argon-low
 baseBranch: main
 reviewFingerprint: cce62d428c0a35ac3c9127ce9e1efc7d0ccc2d4631cc904f27c6c88e33c71726
+pr: https://github.com/AaronPG095/AI-Dev-Workflow/pull/49
 ---
 # Modularize Ticket Cli
 
