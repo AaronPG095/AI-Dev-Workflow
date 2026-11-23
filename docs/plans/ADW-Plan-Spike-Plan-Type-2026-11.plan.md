@@ -1,7 +1,7 @@
 ---
 title: Plan - Feature: Spike Plan Type
 ticket: local://ADW:ADW-Plan-Spike-Plan-Type-2026-11
-status: in-progress
+status: shipped
 priority: 
 state: 
 due: 
@@ -19,6 +19,7 @@ reviewVerdict: pass
 reviewSession: independent-plan-j-reviewer
 baseBranch: main
 reviewFingerprint: 93cd5b66f2c3d247bef6b518e9aaaabf464482c497dad21f2c73e816e29b4244
+pr: https://github.com/AaronPG095/AI-Dev-Workflow/pull/50
 ---
 # Spike Plan Type
 
