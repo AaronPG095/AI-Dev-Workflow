@@ -41,6 +41,34 @@ import { fileURLToPath } from 'node:url';
 import { execFileSync, execSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
+import {
+  section,
+  appendToSection,
+  findCheckboxes,
+  findRunnerTarget,
+  countOpenQuestions,
+  missingCheckboxes,
+  bodyOf,
+} from './lib/markdown-plan.mjs';
+import {
+  listFilesRel,
+  isTestFile as isTestFileBase,
+  isIgnoredDiffPath,
+  tailLines,
+  percentile,
+  round1,
+} from './lib/invariants-lint.mjs';
+import {
+  loadLessons as loadLessonsBase,
+  parsePlanTypeFromMeta,
+  parseIsoDayOrMs,
+  isNoiseFileForDefects as isNoiseFileForDefectsBase,
+  rangesOverlap,
+} from './lib/stats-lessons.mjs';
+import {
+  parseDependsOn,
+  collectRepoSymbolMap as collectRepoSymbolMapBase,
+} from './lib/symbols-map.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..');
@@ -100,6 +128,10 @@ const WORKFLOW_FILES = new Set([
   'scripts/workflow-manifest.json',
   '.github/workflows/ci.yml',
   'scripts/ticket.mjs',
+  'scripts/lib/markdown-plan.mjs',
+  'scripts/lib/invariants-lint.mjs',
+  'scripts/lib/stats-lessons.mjs',
+  'scripts/lib/symbols-map.mjs',
   'scripts/ticket.test.mjs',
   'scripts/hooks/adw-hook.mjs',
   'scripts/ticket.config.json',
@@ -371,19 +403,6 @@ function writePlan(plan) {
   );
 }
 
-function section(body, heading) {
-  const out = [];
-  let on = false;
-  for (const line of body.split('\n')) {
-    if (/^## /.test(line)) {
-      on = line.slice(3).trim().toLowerCase() === heading.toLowerCase();
-      continue;
-    }
-    if (on) out.push(line);
-  }
-  return out.join('\n').trim();
-}
-
 function problems(plan, { requireTicket = true, ignoreReview = false, base, head, dir = repoRoot } = {}) {
   const found = [];
   if (!plan.meta.title || plan.meta.title.startsWith('<'))
@@ -484,35 +503,11 @@ function problems(plan, { requireTicket = true, ignoreReview = false, base, head
   return found;
 }
 
-function missingCheckboxes(original, candidate) {
-  const identity = (item) => JSON.stringify([
-    item.section.toLowerCase(),
-    item.text.replace(/\s+(?:verified(?:\((?:test|cmd|manual|inspect)\))?|deferred):.*$/i, '').trim(),
-  ]);
-  const remaining = new Map();
-  for (const item of findCheckboxes(candidate).items) {
-    const key = identity(item);
-    remaining.set(key, (remaining.get(key) || 0) + 1);
-  }
-  return findCheckboxes(original).items.filter((item) => {
-    const key = identity(item);
-    const count = remaining.get(key) || 0;
-    if (!count) return true;
-    remaining.set(key, count - 1);
-    return false;
-  });
-}
 const deferredItems = (body) =>
   body
     .split('\n')
     .filter((l) => /^\s*- \[ \]/.test(l) && /deferred:/i.test(l))
     .map((l) => l.trim());
-
-function bodyOf(text) {
-  const norm = text.replace(/\r\n/g, '\n');
-  const m = norm.match(/^---\n[\s\S]*?\n---\n/);
-  return m ? norm.slice(m[0].length) : norm;
-}
 
 function git(args, { allowFail = false, trim = true, cwd = repoRoot, maxBuffer } = {}) {
   try {
@@ -549,24 +544,6 @@ function originalPlan(file, base, head) {
     .filter(Boolean)
     .pop();
   return first ? git(['show', `${first}:${file}`]) : null;
-}
-
-function countOpenQuestions(body) {
-  const raw = section(body, 'Open questions');
-  if (!raw) return 0;
-  return raw
-    .split('\n')
-    .map((l) => l.trim())
-    .filter(
-      (l) =>
-        l &&
-        !l.startsWith('<!--') &&
-        !l.endsWith('-->') &&
-        !/^<[^>]+>$/.test(l) &&
-        !/^(?:\(none\)|none\.?)$/i.test(l) &&
-        !/^- \[[xX]\]/.test(l),
-    )
-    .filter((l) => /^- /.test(l) || /\?$/.test(l)).length;
 }
 
 function checkAppetite(plan, base, head, dir = repoRoot) {
@@ -616,17 +593,6 @@ function checkAppetite(plan, base, head, dir = repoRoot) {
     maxLines: limits.maxLines,
     exceeded: files > limits.maxFiles || lines > limits.maxLines,
   };
-}
-
-function listFilesRel(rootDir, baseDir = rootDir) {
-  if (!existsSync(rootDir)) return [];
-  const out = [];
-  for (const entry of readdirSync(rootDir, { withFileTypes: true })) {
-    const full = join(rootDir, entry.name);
-    if (entry.isDirectory()) out.push(...listFilesRel(full, baseDir));
-    else out.push(relative(baseDir, full).replace(/\\/g, '/'));
-  }
-  return out.sort();
 }
 
 function runInvariants(cfg = config, dir = repoRoot, tree) {
@@ -883,20 +849,6 @@ function lintPlan(plan) {
     warnings,
     uncoveredAc,
   };
-}
-
-function appendToSection(body, heading, entry) {
-  const lines = body.split('\n');
-  const start = lines.findIndex(
-    (l) => l.trim().toLowerCase() === `## ${heading}`.toLowerCase(),
-  );
-  if (start === -1)
-    return `${body.replace(/\s*$/, '')}\n\n## ${heading}\n\n${entry}\n`;
-  let end = lines.findIndex((l, i) => i > start && /^## /.test(l));
-  if (end === -1) end = lines.length;
-  while (end > start + 1 && lines[end - 1].trim() === '') end--;
-  lines.splice(end, 0, entry);
-  return lines.join('\n');
 }
 
 function pageId(url) {
@@ -1277,15 +1229,6 @@ function localPlanStatus(plan) {
   return localPlanStatusForDir(plan, repoRoot, config);
 }
 
-function parseDependsOn(plan) {
-  const raw = (plan?.meta?.dependsOn || '').trim();
-  if (!raw) return [];
-  return raw
-    .split(/[,|]/)
-    .map((s) => s.trim())
-    .filter(Boolean);
-}
-
 function isPlanCompletedOrArchived(plan, dir = repoRoot, cfg = config) {
   if (!plan) return false;
   const rel = (plan.rel || '').replace(/\\/g, '/');
@@ -1386,121 +1329,8 @@ function resolveDependencyState(plan, catalogPlans = null, dir = repoRoot) {
   };
 }
 
-function collectRepoSymbolMap(dir = repoRoot, { filter = '', maxFiles = 40 } = {}) {
-  const filterNorm = String(filter || '').replace(/\\/g, '/').trim().toLowerCase();
-  const includeTests = /test|spec/.test(filterNorm);
-  const trackedRaw = git(['ls-files', '-z'], { allowFail: true, cwd: dir });
-  const rawFiles = trackedRaw
-    ? trackedRaw.split('\0').filter(Boolean)
-    : listFilesRel(dir);
-  const extRe = /\.(?:mjs|js|ts|tsx|cs|py|go|rs)$/i;
-  const skipDirRe = /^(?:node_modules|dist|build|coverage|\.worktrees|\.git)\//i;
-
-  const candidates = [];
-  for (const f of rawFiles) {
-    const norm = f.replace(/\\/g, '/');
-    if (!extRe.test(norm) || skipDirRe.test(norm)) continue;
-    if (!includeTests && isTestFile(norm)) continue;
-    if (filterNorm && !norm.toLowerCase().includes(filterNorm)) continue;
-    candidates.push(norm);
-  }
-  candidates.sort();
-  const selected = candidates.slice(0, Math.max(1, maxFiles));
-
-  const files = [];
-  for (const rel of selected) {
-    const full = join(dir, rel);
-    if (!existsSync(full)) continue;
-    let content = '';
-    try {
-      content = readFileSync(full, 'utf8');
-    } catch {
-      continue;
-    }
-    const lines = content.replace(/\r\n/g, '\n').split('\n');
-    const symbols = [];
-    let inCommandsObj = false;
-
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      const lineNum = i + 1;
-
-      if (/^(?:export\s+)?const\s+commands\s*=\s*\{/.test(line)) {
-        inCommandsObj = true;
-        symbols.push({ kind: 'const', name: 'commands', line: lineNum });
-        continue;
-      }
-      if (inCommandsObj) {
-        if (/^\};/.test(line)) {
-          inCommandsObj = false;
-          continue;
-        }
-        const cmdMatch = line.match(
-          /^\s{2}(?:async\s+)?(?:'([a-zA-Z0-9_-]+)'|"([a-zA-Z0-9_-]+)"|([a-zA-Z0-9_-]+))\s*\(\)\s*\{/,
-        );
-        if (cmdMatch) {
-          const cmdName = cmdMatch[1] || cmdMatch[2] || cmdMatch[3];
-          symbols.push({ kind: 'command', name: `commands.${cmdName}`, line: lineNum });
-          continue;
-        }
-      }
-
-      let m =
-        line.match(/^export\s+(?:async\s+)?function\s+([A-Za-z0-9_$]+)/) ||
-        line.match(/^export\s+class\s+([A-Za-z0-9_$]+)/) ||
-        line.match(/^export\s+const\s+([A-Za-z0-9_$]+)/);
-      if (m) {
-        const kind = line.includes('class ')
-          ? 'class'
-          : line.includes('function ')
-            ? 'function'
-            : 'const';
-        symbols.push({ kind, name: m[1], line: lineNum });
-        continue;
-      }
-
-      m = line.match(/^(?:async\s+)?function\s+([A-Za-z0-9_$]+)\s*\(/);
-      if (m) {
-        symbols.push({ kind: 'function', name: m[1], line: lineNum });
-        continue;
-      }
-
-      m = line.match(
-        /^\s*public\s+(?:sealed\s+|abstract\s+|partial\s+|static\s+)*(class|interface|record|struct|enum)\s+([A-Za-z0-9_]+)/,
-      );
-      if (m) {
-        symbols.push({ kind: m[1], name: m[2], line: lineNum });
-        continue;
-      }
-
-      m =
-        line.match(/^(?:async\s+)?def\s+([A-Za-z0-9_]+)\s*\(/) ||
-        line.match(/^class\s+([A-Za-z0-9_]+)/) ||
-        line.match(/^func\s+(?:\([^)]+\)\s*)?([A-Za-z0-9_]+)\s*\(/) ||
-        line.match(/^pub\s+(?:async\s+)?fn\s+([A-Za-z0-9_]+)/) ||
-        line.match(/^pub\s+(?:struct|enum|trait)\s+([A-Za-z0-9_]+)/);
-      if (m) {
-        const kind = /^(?:class|pub\s+(?:struct|enum|trait))/.test(line)
-          ? 'type'
-          : 'function';
-        symbols.push({ kind, name: m[1], line: lineNum });
-      }
-    }
-
-    files.push({
-      file: rel,
-      lines: lines.length,
-      symbols: symbols.slice(0, 200),
-    });
-  }
-
-  return {
-    repo: basename(dir),
-    totalMatchedFiles: candidates.length,
-    shownFiles: files.length,
-    files,
-  };
-}
+const collectRepoSymbolMap = (dir = repoRoot, optsArg) =>
+  collectRepoSymbolMapBase(dir, optsArg);
 
 function resolvePlanAndTarget() {
   const planArg = opts.files.find((f) => f.endsWith('.plan.md'));
@@ -1615,15 +1445,7 @@ function reviewFingerprint(plan, base, head, dir = repoRoot) {
   return createHash('sha256').update(JSON.stringify(scope)).update(diff).digest('hex');
 }
 
-function isTestFile(filePath, cfg = config) {
-  const normPath = filePath.replace(/\\/g, '/');
-  if (normPath.startsWith(`${cfg.plansDir || 'docs/plans'}/`)) return false;
-  const custom = cfg.hygiene?.testFilePatterns;
-  if (Array.isArray(custom) && custom.length) {
-    return custom.some((pat) => new RegExp(pat, 'i').test(normPath));
-  }
-  return /(?:^|\/)(?:tests?|__tests__)\/|(?:\.test\.|\.spec\.|_test\.)/i.test(normPath);
-}
+const isTestFile = (filePath, cfg = config) => isTestFileBase(filePath, cfg);
 
 function analyzeTestIntegrity(base, head, dir = repoRoot) {
   if (!base) {
@@ -1716,14 +1538,6 @@ function analyzeTestIntegrity(base, head, dir = repoRoot) {
     suspiciousDrop:
       deletedTestFiles.length > 0 || netTestDelta < 0 || addedSkips.length > 0,
   };
-}
-
-function isIgnoredDiffPath(filePath, ignorePatterns) {
-  const name = basename(filePath);
-  return ignorePatterns.some((pattern) => {
-    if (pattern.startsWith('*.')) return name.endsWith(pattern.slice(1));
-    return filePath === pattern || name === pattern;
-  });
 }
 
 function formatFilteredDiff(
@@ -1841,52 +1655,6 @@ function resolveRepoActivePlan(dir, branch, repoCfg = {}) {
   } catch {
     return null;
   }
-}
-
-function findCheckboxes(body) {
-  const lines = body.split('\n');
-  const items = [];
-  let currentSection = '';
-  let openIndex = 0;
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    if (/^##\s+/.test(line)) {
-      currentSection = line.replace(/^##\s+/, '').trim();
-      continue;
-    }
-    const match = line.match(/^(\s*-\s*\[)([ xX])(\]\s*)(.*)$/);
-    if (match) {
-      const isChecked = match[2].toLowerCase() === 'x';
-      const text = match[4].trim();
-      const isDeferred = /deferred:/i.test(text);
-      if (!isChecked && !isDeferred) {
-        openIndex++;
-      }
-      items.push({
-        lineIndex: i,
-        prefix: match[1],
-        box: match[2],
-        delim: match[3],
-        text,
-        isChecked,
-        isDeferred,
-        section: currentSection,
-        openIndex: !isChecked && !isDeferred ? openIndex : null,
-      });
-    }
-  }
-  return { lines, items };
-}
-
-function findRunnerTarget(items, target) {
-  const identity = (item) => item.text
-    .replace(/\s+(?:verified(?:\((?:test|cmd|manual|inspect)\))?|deferred):.*$/i, '').trim();
-  const targetText = identity(target);
-  const candidates = items.filter((item) => item.section.toLowerCase() === target.section.toLowerCase() &&
-    identity(item) === targetText);
-  return candidates.find((item) => item.lineIndex === target.lineIndex) ||
-    (candidates.length === 1 ? candidates[0] : null);
 }
 
 // ---------- commands ----------
@@ -2192,36 +1960,7 @@ function formatAgenticModelsSummary(cfg = config) {
   return ordered.join(' | ');
 }
 
-function loadLessons(dir = repoRoot) {
-  const lessonsPath = join(dir, 'docs', 'lessons.md');
-  if (!existsSync(lessonsPath)) return [];
-  const raw = readFileSync(lessonsPath, 'utf8');
-  const lines = raw.split('\n');
-  const entries = [];
-  for (let i = 0; i < lines.length; i++) {
-    const trimmed = lines[i].trim();
-    if (!trimmed.startsWith('- ')) continue;
-    const m = trimmed.match(/^-\s+(\d{4}-\d{2}-\d{2})\s*\|\s*([^|]*)\|\s*(.+)$/);
-    if (m) {
-      entries.push({
-        date: m[1].trim(),
-        meta: m[2].trim(),
-        text: m[3].trim(),
-        line: i + 1,
-        raw: trimmed,
-      });
-    } else {
-      entries.push({
-        date: '',
-        meta: 'general',
-        text: trimmed.slice(2).trim(),
-        line: i + 1,
-        raw: trimmed,
-      });
-    }
-  }
-  return entries;
-}
+const loadLessons = (dir = repoRoot) => loadLessonsBase(dir);
 
 function appendLesson({ text, tags = [], planRel = '', dir = repoRoot }) {
   const cleanText = String(text || '').replace(/\s+/g, ' ').trim();
@@ -2372,21 +2111,6 @@ function scanPlansIncludingArchive(dir = repoRoot) {
   return results;
 }
 
-function parsePlanTypeFromMeta(meta) {
-  const title = (meta?.title || '').trim();
-  const m = title.match(/^(?:Plan|Debug|Ask)\s*-\s*([^:]+):/i);
-  if (m) return m[1].trim();
-  if (/^Debug\b/i.test(title)) return 'Debug';
-  return 'Unknown';
-}
-
-function parseIsoDayOrMs(value) {
-  const s = String(value || '').trim();
-  if (!s) return null;
-  const ms = Date.parse(s.length === 10 ? `${s}T00:00:00Z` : s);
-  return Number.isNaN(ms) ? null : ms;
-}
-
 function parseGitCommitLog(dir, days = 90) {
   const args = ['log', '--name-only', '--format=__COMMIT__%H|%cI|%s'];
   if (days > 0) args.push(`--since=${days} days ago`);
@@ -2423,43 +2147,8 @@ function parseGitCommitLog(dir, days = 90) {
   return commits;
 }
 
-function percentile(sortedNums, p) {
-  if (!sortedNums.length) return null;
-  if (sortedNums.length === 1) return sortedNums[0];
-  if (p === 0.5) {
-    const mid = Math.floor(sortedNums.length / 2);
-    return sortedNums.length % 2 === 1
-      ? sortedNums[mid]
-      : Number(((sortedNums[mid - 1] + sortedNums[mid]) / 2).toFixed(2));
-  }
-  const idx = Math.min(sortedNums.length - 1, Math.ceil(p * sortedNums.length) - 1);
-  return sortedNums[idx];
-}
-
-function round1(n) {
-  return Number(n.toFixed(1));
-}
-
-function isNoiseFileForDefects(filePath, cfg = config) {
-  const normPath = String(filePath || '').replace(/\\/g, '/');
-  const base = basename(normPath);
-  if (
-    ['README.md', 'CHANGELOG.md', 'AGENTS.md', 'CLAUDE.md'].includes(base) ||
-    normPath.endsWith('.md') ||
-    normPath.endsWith('.resw') ||
-    isTestFile(normPath, cfg)
-  ) {
-    return true;
-  }
-  const ignoreList = cfg.stats?.ignoreFiles;
-  if (Array.isArray(ignoreList) && ignoreList.length) {
-    return ignoreList.some((pattern) => {
-      if (pattern.startsWith('*.')) return base.endsWith(pattern.slice(1));
-      return normPath === pattern || base === pattern || normPath.startsWith(`${pattern}/`);
-    });
-  }
-  return false;
-}
+const isNoiseFileForDefects = (filePath, cfg = config) =>
+  isNoiseFileForDefectsBase(filePath, cfg);
 
 function extractCommitFileLineRanges(dir, commitHash, filePath) {
   let diff = '';
@@ -2487,13 +2176,6 @@ function extractCommitFileLineRanges(dir, commitHash, filePath) {
     else if (newStart > 0) ranges.push([newStart, newStart]);
   }
   return ranges;
-}
-
-function rangesOverlap(rangesA, rangesB) {
-  if (!rangesA.length || !rangesB.length) return true;
-  return rangesA.some(([a0, a1]) =>
-    rangesB.some(([b0, b1]) => a0 <= b1 && b0 <= a1),
-  );
 }
 
 function collectRepoStats(
@@ -3045,16 +2727,6 @@ function runBootBaselineCheck() {
     .slice(-5)
     .join(' | ');
   return `Baseline: FAIL (\`${resolved.cmd}\`, tier: ${resolved.tier})${tail ? ` [${tail}]` : ''} — fix baseline before starting next step`;
-}
-
-function tailLines(textValue, count = 15) {
-  if (!textValue) return '';
-  return textValue
-    .split(/\r?\n/)
-    .map((l) => l.trimEnd())
-    .filter(Boolean)
-    .slice(-count)
-    .join('\n');
 }
 
 function executeCheckpoint(

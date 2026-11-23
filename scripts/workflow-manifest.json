@@ -3,6 +3,10 @@
   "copy": [
     "scripts/workflow-manifest.json",
     "scripts/ticket.mjs",
+    "scripts/lib/markdown-plan.mjs",
+    "scripts/lib/invariants-lint.mjs",
+    "scripts/lib/stats-lessons.mjs",
+    "scripts/lib/symbols-map.mjs",
     "scripts/ticket.test.mjs",
     "scripts/hooks/adw-hook.mjs",
     "scripts/sync.mjs",
