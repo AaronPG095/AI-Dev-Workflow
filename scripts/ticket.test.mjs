@@ -5226,5 +5226,68 @@ test('I1: characterization of scripts/lib/* ESM modules, command surface parity,
   assert.equal(syncRes.status, 0, syncRes.stdout + syncRes.stderr);
 });
 
+test('J1: Spike plan type scaffolding, timebox/appetite defaults, Hypothesis lint, and stats classification', (t) => {
+  const f = fixture(t, '', [], { tracker: 'local', requireReview: false });
+  rmSync(f.plan);
+
+  // 1. new --type Spike --timebox 4h defaults appetite to S and adds Hypothesis + Findings sections
+  const spikeNew = f.run(
+    'new',
+    ['Eval Cache', '--type', 'Spike', '--timebox', '4h'],
+    [],
+    { omitPlan: true },
+  );
+  assert.equal(spikeNew.status, 0, spikeNew.stderr);
+  const createdFile = readdirSync(join(f.root, 'docs/plans')).find((n) =>
+    n.includes('Eval-Cache'),
+  );
+  assert.ok(createdFile, 'expected Spike plan file');
+  const relPath = `docs/plans/${createdFile}`;
+  const fullPath = join(f.root, relPath);
+  const spikeText = readFileSync(fullPath, 'utf8');
+  assert.match(spikeText, /^title: Plan - Spike: Eval Cache$/m);
+  assert.match(spikeText, /^appetite: S$/m);
+  assert.match(spikeText, /^timebox: 4h$/m);
+  assert.match(spikeText, /^## Hypothesis$/m);
+  assert.match(spikeText, /^## Findings & Recommendation$/m);
+  assert.match(spikeText, /within 4h budget/);
+  assert.match(spikeText, /Documented answer and go\/no-go recommendation/);
+
+  // 2. lint rejects placeholder Hypothesis and warns when appetite is L
+  const lintFail = f.run('lint', [relPath], [], { omitPlan: true });
+  assert.notEqual(lintFail.status, 0);
+  assert.match(lintFail.stderr + lintFail.stdout, /Hypothesis.*placeholder/);
+
+  const populated = spikeText
+    .replace('appetite: S', 'appetite: L')
+    .replace(/<2-3 sentences:[^>]*>/, 'Evaluate cache latency vs memory.')
+    .replace(/<Compacted research:[^>]*>/, 'Benchmarked local LRU.')
+    .replace(/<Unresolved assumptions[^>]*>/, 'None')
+    .replace(/<Hypothesis:[^>]*>/, 'LRU cache reduces repeat reads below 5ms.')
+    .replace(/<Pre-mortem:[^>]*>/, 'Prototype discarded if p95 exceeds 10ms.')
+    .replace(/<What this plan deliberately[^>]*>/, 'Production rollout.');
+  writeFileSync(fullPath, populated);
+
+  const lintWarn = f.run('lint', [relPath, '--json'], [], { omitPlan: true });
+  assert.equal(lintWarn.status, 0, lintWarn.stderr);
+  const warnParsed = JSON.parse(lintWarn.stdout);
+  assert.ok(
+    warnParsed.warnings.some((w) => /Spike plans should be time-boxed with appetite S or M/.test(w)),
+    `Expected Spike appetite warning, got: ${JSON.stringify(warnParsed.warnings)}`,
+  );
+
+  // Fixing appetite -> lint --strict passes cleanly
+  writeFileSync(fullPath, populated.replace('appetite: L', 'appetite: S'));
+  const lintClean = f.run('lint', [relPath, '--strict'], [], { omitPlan: true });
+  assert.equal(lintClean.status, 0, lintClean.stderr);
+
+  // 3. stats classifies Spike under byType.Spike
+  const statsRes = f.run('stats', ['--json'], [], { omitPlan: true });
+  assert.equal(statsRes.status, 0, statsRes.stderr);
+  const stats = JSON.parse(statsRes.stdout);
+  assert.equal(stats.byType.Spike, 1);
+  assert.equal(stats.escapedDefects.length, 0);
+});
+
 
 

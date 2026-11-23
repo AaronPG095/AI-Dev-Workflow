@@ -147,7 +147,7 @@ AI-Dev-Workflow/
 │   │   └── symbols-map.mjs        # Zero-dep repo symbol outline & dependency token parser
 │   ├── ticket.mjs                 # Zero-dependency workflow & review CLI (Node 22+)
 │   ├── ticket.config.json         # Repository configuration (local mode default)
-│   ├── ticket.test.mjs            # 98 hermetic unit and integration tests (node:test)
+│   ├── ticket.test.mjs            # 99 hermetic unit and integration tests (node:test)
 │   ├── workflow-manifest.json     # Versioned distribution manifest for sync & installers
 │   ├── sync.mjs                   # Cross-platform sync and drift engine (--remote & local)
 │   ├── sync-repos.ps1             # PowerShell wrapper for multi-repo sync
@@ -171,8 +171,8 @@ node scripts/ticket.mjs blueprint "Auth Architecture" [--version 1.2.0] [--force
 node scripts/ticket.mjs blueprint [list]
 node scripts/ticket.mjs blueprint status [<blueprint-path>] [--json]
 
-# Automatically creates docs/plans/<PREFIX>-Plan-<Topic>-<YYYY-MM>.plan.md
-node scripts/ticket.mjs new "Smart Shortcut Suggestions" --type Feature [--appetite S|M|L] [--version 1.2.0] [--impact none|patch|minor|major] [--blueprint docs/architecture/ADW-Blueprint-Auth-Architecture.md] [--depends-on "<plan-or-key>"] [--context "<findings>"] [--branch]
+# Automatically creates docs/plans/<PREFIX>-Plan-<Topic>-<YYYY-MM>.plan.md (supports --type Feature|Bug|Refactor|Spike [--timebox 2h])
+node scripts/ticket.mjs new "Smart Shortcut Suggestions" --type Feature [--appetite S|M|L] [--timebox 2h] [--version 1.2.0] [--impact none|patch|minor|major] [--blueprint docs/architecture/ADW-Blueprint-Auth-Architecture.md] [--depends-on "<plan-or-key>"] [--context "<findings>"] [--branch]
 
 # List unblocked ready plans (dependencies satisfied) or atomically claim/release a plan for a worker
 node scripts/ticket.mjs ready [--blueprint <path>] [--claim --agent <client>] [--release [<plan>]] [--json]
