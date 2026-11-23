@@ -1,7 +1,7 @@
 ---
 title: Plan - Feature: Dependency Graph Ready Queue And Map
 ticket: local://ADW:ADW-Plan-Dependency-Graph-Ready-Queue-And-Map-2026-11
-status: in-progress
+status: shipped
 priority: 
 state: 
 due: 
@@ -20,6 +20,7 @@ reviewSession: reviewer-argon-low
 reviewModel: gemini-4-argon-low
 baseBranch: main
 reviewFingerprint: 447d0c75fde2e3466c4913584a9a5626cfe575d57c0a2c47200c49cd61f5eeea
+pr: https://github.com/AaronPG095/AI-Dev-Workflow/pull/48
 ---
 # Dependency Graph Ready Queue And Map
 
