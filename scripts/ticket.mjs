@@ -741,26 +741,43 @@ function lintPlan(plan) {
   const errors = [];
   const warnings = [];
   const cleanBody = plan.body.replace(/<!--[\s\S]*?-->/g, '');
-  const placeholderRe = /<(?:2-3 sentences:[^>]*|Compacted research:[^>]*|Unresolved assumptions[^>]*|Observable outcome|Checkable outcome|Step|Pre-mortem:[^>]*|What could go wrong[^>]*|What this plan deliberately[^>]*)>/i;
+  const placeholderRe = /<(?:2-3 sentences:[^>]*|Compacted research:[^>]*|Unresolved assumptions[^>]*|Observable outcome|Checkable outcome|Step|Pre-mortem:[^>]*|What could go wrong[^>]*|What this plan deliberately[^>]*|Hypothesis:[^>]*|Time-boxed findings[^>]*)>/i;
+  const hasPlaceholder = (textVal) =>
+    placeholderRe.test(
+      String(textVal || '').replace(/```[\s\S]*?```|`[^`\n]*`/g, ''),
+    );
 
   for (const heading of ['Summary', 'Acceptance criteria', 'Steps']) {
     const content = section(cleanBody, heading);
     if (!content) {
       errors.push(`Section "## ${heading}" is empty or missing.`);
-    } else if (placeholderRe.test(content)) {
+    } else if (hasPlaceholder(content)) {
       errors.push(`Section "## ${heading}" still contains template placeholder text.`);
+    }
+  }
+  const isSpike = /^Plan\s*-\s*Spike:/i.test(plan.meta.title || '');
+  if (isSpike) {
+    const hyp = section(cleanBody, 'Hypothesis');
+    if (!hyp) {
+      errors.push('Section "## Hypothesis" is empty or missing for Spike plan.');
+    } else if (hasPlaceholder(hyp)) {
+      errors.push('Section "## Hypothesis" still contains template placeholder text.');
+    }
+    const spikeAppetite = (plan.meta.appetite || '').trim().toUpperCase();
+    if (!spikeAppetite || spikeAppetite === 'L') {
+      warnings.push('Spike plans should be time-boxed with appetite S or M.');
     }
   }
   for (const heading of ['Risks', 'Out of scope']) {
     const content = section(cleanBody, heading);
     if (!content) {
       warnings.push(`Section "## ${heading}" is empty or missing.`);
-    } else if (placeholderRe.test(content)) {
+    } else if (hasPlaceholder(content)) {
       errors.push(`Section "## ${heading}" still contains template placeholder text.`);
     }
   }
   const ctxContent = section(cleanBody, 'Context');
-  if (ctxContent && placeholderRe.test(ctxContent)) {
+  if (ctxContent && hasPlaceholder(ctxContent)) {
     errors.push('Section "## Context" still contains template placeholder text.');
   }
 
@@ -3021,9 +3038,11 @@ const commands = {
     const rawTopic = opts.files[0] || opts.topic || '';
     if (!rawTopic)
       fail(
-        'usage: node scripts/ticket.mjs new "<Topic>" [--type Feature|Bug|Refactor|Process|Docs] [--priority <p>] [--state <s>] [--due <YYYY-MM-DD>] [--branch]',
+        'usage: node scripts/ticket.mjs new "<Topic>" [--type Feature|Bug|Refactor|Spike|Process|Docs] [--priority <p>] [--state <s>] [--due <YYYY-MM-DD>] [--branch]',
       );
     const type = opts.type || 'Feature';
+    const isSpike = type.toLowerCase() === 'spike';
+    const isRefactor = type.toLowerCase() === 'refactor';
     const topic = rawTopic.replace(/^["']|["']$/g, '').trim();
     const kebabTopic = topic
       .replace(/[^a-zA-Z0-9]+/g, '-')
@@ -3038,10 +3057,15 @@ const commands = {
     const priority = opts.priority || '';
     const state = opts.state || '';
     const due = opts.due || '';
-    const appetite = (opts.appetite || '').trim().toUpperCase();
+    const appetite = (opts.appetite || (isSpike ? 'S' : '')).trim().toUpperCase();
     if (appetite && !['S', 'M', 'L'].includes(appetite)) {
       fail(`--appetite must be S, M, or L (got "${opts.appetite}")`);
     }
+    const timebox = (
+      opts.timebox !== undefined ? String(opts.timebox) : isSpike ? '2h' : ''
+    )
+      .replace(/^["']|["']$/g, '')
+      .trim();
     const verCfg = config.versioning || {};
     const version =
       opts.version !== undefined
@@ -3090,9 +3114,10 @@ const commands = {
           .filter(Boolean)
           .map((c) => `- [ ] ${c}`)
           .join('\n')
-      : '- [ ] AC1: <Observable outcome>';
+      : isSpike
+        ? '- [ ] AC1: Documented answer and go/no-go recommendation recorded in Findings & Recommendation'
+        : '- [ ] AC1: <Observable outcome>';
 
-    const isRefactor = type.toLowerCase() === 'refactor';
     const stepsList = rawSteps
       ? rawSteps
           .split(/[|\n]/)
@@ -3100,9 +3125,14 @@ const commands = {
           .filter(Boolean)
           .map((s) => `- [ ] ${s}`)
           .join('\n')
-      : isRefactor
-        ? '- [ ] Lock existing behaviour with characterization tests before structural changes (AC1)'
-        : '- [ ] <Step> (AC1)';
+      : isSpike
+        ? [
+            `- [ ] Run time-boxed prototype or experiment within ${timebox || '2h'} budget (AC1)`,
+            '- [ ] Record findings, trade-offs, and recommendation in "## Findings & Recommendation" (AC1)',
+          ].join('\n')
+        : isRefactor
+          ? '- [ ] Lock existing behaviour with characterization tests before structural changes (AC1)'
+          : '- [ ] <Step> (AC1)';
 
     const templatePath = join(repoRoot, config.plansDir, '_template.plan.md');
     let template = existsSync(templatePath)
@@ -3158,16 +3188,36 @@ const commands = {
           `See architecture blueprint: \`${blueprintRel}\``,
         );
       }
-      if (rawCriteria) {
+      if (rawCriteria || isSpike) {
         content = content.replace(
           /- \[ \] (?:AC1: )?<[^>]+>/,
           criteriaList,
         );
       }
-      if (rawSteps || isRefactor) {
+      if (rawSteps || isRefactor || isSpike) {
         content = content.replace(
           /- \[ \] <Step>(?: \(AC1\))?/,
           stepsList,
+        );
+      }
+      if (timebox) {
+        if (/^appetite:/m.test(content)) {
+          content = content.replace(
+            /^(appetite:.*$)/m,
+            `$1\ntimebox: ${timebox}`,
+          );
+        } else {
+          content = content.replace(/\n---\n/, `\ntimebox: ${timebox}\n---\n`);
+        }
+      }
+      if (isSpike) {
+        content = content.replace(
+          /## Acceptance criteria/,
+          '## Hypothesis\n\n<Hypothesis: What question or unknown are we answering, and what would prove or disprove it?>\n\n## Acceptance criteria',
+        );
+        content = content.replace(
+          /## Risks/,
+          '## Findings & Recommendation\n\n<Time-boxed findings, decision (go / no-go / ADR), and follow-up links.>\n\n## Risks',
         );
       }
     } else {
@@ -3180,6 +3230,7 @@ const commands = {
         `state: ${state}`,
         `due: ${due}`,
         `appetite: ${appetite}`,
+        ...(timebox ? [`timebox: ${timebox}`] : []),
         `version: ${version}`,
         `impact: ${impact}`,
         ...(blueprintRel ? [`blueprint: ${blueprintRel}`] : []),
@@ -3201,6 +3252,14 @@ const commands = {
         '## Open questions',
         '',
         '<Unresolved assumptions or `- [ ] Question?` items to resolve before `start`; write `None` when clear.>',
+        ...(isSpike
+          ? [
+              '',
+              '## Hypothesis',
+              '',
+              '<Hypothesis: What question or unknown are we answering, and what would prove or disprove it?>',
+            ]
+          : []),
         '',
         '## Acceptance criteria',
         '',
@@ -3209,6 +3268,14 @@ const commands = {
         '## Steps',
         '',
         stepsList,
+        ...(isSpike
+          ? [
+              '',
+              '## Findings & Recommendation',
+              '',
+              '<Time-boxed findings, decision (go / no-go / ADR), and follow-up links.>',
+            ]
+          : []),
         '',
         '## Risks',
         '',
@@ -3232,6 +3299,8 @@ const commands = {
       content = content
         .replace(/<Compacted research:[^>]*>/g, 'None noted.')
         .replace(/<Unresolved assumptions[^>]*>/g, 'None')
+        .replace(/<Hypothesis:[^>]*>/g, 'None noted.')
+        .replace(/<Time-boxed findings[^>]*>/g, 'None noted.')
         .replace(/<Pre-mortem:[^>]*>/g, 'None noted.')
         .replace(/<What this plan deliberately[^>]*>/g, 'None noted.');
     }
