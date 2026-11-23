@@ -160,6 +160,7 @@ const BOOLEAN_FLAGS = new Set([
   '--pre-push',
   '--squash',
   '--merge',
+  '--merged',
   '--rebase',
   '--keep-branch',
 ]);
@@ -1075,14 +1076,14 @@ const text = (content) => [{ text: { content: content.slice(0, NOTION_TEXT_LIMIT
 
 // ---------- plan resolution & diff helpers ----------
 
-function allPlans(root = repoRoot) {
-  const dir = join(root, config.plansDir);
+function allPlans(root = repoRoot, plansDirRel = config.plansDir || 'docs/plans') {
+  const dir = join(root, plansDirRel);
   if (!existsSync(dir)) return [];
   return readdirSync(dir, { withFileTypes: true })
     .filter((entry) => entry.isFile() && entry.name.endsWith('.plan.md') && !entry.name.startsWith('_'))
     .map((entry) => join(dir, entry.name))
     .filter((full) => readFileSync(full, 'utf8').startsWith('---'))
-    .map((full) => worktreePlan(full, root));
+    .map((full) => worktreePlan(full, root, plansDirRel));
 }
 
 function worktreeGit(dir, args) {
@@ -1141,9 +1142,9 @@ function worktreeIsMerged(root, head) {
     });
 }
 
-function worktreePlan(full, root) {
-  if (!containsPath(join(root, config.plansDir), full))
-    fail(`plan is outside ${config.plansDir}: ${full}`);
+function worktreePlan(full, root, plansDirRel = config.plansDir || 'docs/plans') {
+  if (!containsPath(join(root, plansDirRel), full))
+    fail(`plan is outside ${plansDirRel}: ${full}`);
   assertWorktreePath(root, full);
   const plan = readPlan(full);
   plan.rel = relative(root, full).replace(/\\/g, '/');
@@ -1235,24 +1236,31 @@ function ensurePlanWorktree(entries, branch, plan, { name, noCreate = false } = 
   return { path, created: true };
 }
 
-function localPlanStatus(plan) {
+function localPlanStatusForDir(plan, dir = repoRoot, cfg = config) {
   const status = plan.meta.status;
   const ticket = plan.meta.ticket || '';
-  if (!isLocal || !ticket.startsWith('local://') ||
-      !['in-progress', 'shipped'].includes(status)) return status;
-  const branches = config.protectedBranches || ['main', 'master', 'develop'];
+  if (!['in-progress', 'shipped'].includes(status)) return status;
+  const branches = cfg.protectedBranches || ['main', 'master', 'develop'];
   for (const branch of branches) {
     for (const ref of [`refs/remotes/origin/${branch}`, `refs/heads/${branch}`]) {
-      const merged = git(['show', `${ref}:${plan.rel}`], { allowFail: true });
+      const merged = git(['show', `${ref}:${plan.rel}`], { allowFail: true, cwd: dir });
       if (!merged.startsWith('---\n')) continue;
       const committed = readPlanText(merged, plan.rel);
-      if (committed.meta.ticket !== ticket) continue;
+      if (ticket && committed.meta.ticket !== ticket) continue;
       const { items } = findCheckboxes(committed.body);
       if (items.length && items.every((item) =>
         item.isChecked || /\sdeferred:\s*\S/i.test(item.text))) return 'done';
     }
   }
   return status;
+}
+
+function localPlanStatus(plan) {
+  const status = plan.meta.status;
+  const ticket = plan.meta.ticket || '';
+  if (!isLocal || !ticket.startsWith('local://') ||
+      !['in-progress', 'shipped'].includes(status)) return status;
+  return localPlanStatusForDir(plan, repoRoot, config);
 }
 
 function resolvePlanAndTarget() {
@@ -5438,51 +5446,80 @@ const commands = {
   },
 
   async archive() {
-    const plansDir = join(repoRoot, config.plansDir || 'docs/plans');
-    const plans = opts.files[0]
-      ? [readPlan(opts.files[0])]
-      : opts.all
-        ? allPlans()
-        : [resolveActivePlan()];
-
+    const dirs = opts.fleet ? getKnownRepoDirs() : [repoRoot];
     let count = 0;
-    for (const plan of plans) {
-      const isDone =
-        plan.meta.status === 'done' ||
-        plan.meta.status === 'shipped' ||
-        problems(plan, { requireTicket: false, ignoreReview: true }).length ===
-          0;
 
-      if (!isDone && !opts.force) {
-        console.warn(
-          `Skipping ${plan.rel}: plan has open items or is not marked done/shipped (use --force to archive anyway).`,
-        );
-        continue;
-      }
+    for (const dir of dirs) {
+      const repoCfg = dir === repoRoot ? config : readRepoConfig(dir);
+      const plansDirRel = repoCfg.plansDir || 'docs/plans';
+      const plansDir = join(dir, plansDirRel);
+      const plans = opts.files[0]
+        ? [readPlan(opts.files[0])]
+        : opts.all || opts.merged || opts.fleet
+          ? allPlans(dir, plansDirRel)
+          : [resolveActivePlan()];
 
-      const month = plan.meta.completedAt?.slice(0, 7) || today().slice(0, 7);
-      const archiveDir = join(plansDir, 'archive', month);
-      mkdirSync(archiveDir, { recursive: true });
+      for (const plan of plans) {
+        const status = (plan.meta.status || '').toLowerCase();
+        const { items } = findCheckboxes(plan.body);
+        const allClosed =
+          items.length > 0 &&
+          items.every(
+            (item) => item.isChecked || /\sdeferred:\s*\S/i.test(item.text),
+          );
 
-      const destFile = join(archiveDir, basename(plan.full));
-      const relDest = relative(repoRoot, destFile).replace(/\\/g, '/');
-
-      let moved = false;
-      try {
-        git(['mv', plan.rel, relDest]);
-        moved = true;
-      } catch {
-        try {
-          renameSync(plan.full, destFile);
-          moved = true;
-        } catch (e) {
-          console.error(`Failed to move ${plan.rel}: ${e.message}`);
+        if (opts.merged) {
+          const isMergedDone =
+            status === 'done' ||
+            status === 'completed' ||
+            localPlanStatusForDir(plan, dir, repoCfg) === 'done' ||
+            (status === 'shipped' && allClosed);
+          if (!isMergedDone) continue;
+        } else {
+          const isDone =
+            status === 'done' ||
+            status === 'completed' ||
+            status === 'shipped' ||
+            problems(plan, { requireTicket: false, ignoreReview: true, dir })
+              .length === 0;
+          if (!isDone && !opts.force) {
+            console.warn(
+              `Skipping ${plan.rel}: plan has open items or is not marked done/shipped (use --force to archive anyway).`,
+            );
+            continue;
+          }
         }
-      }
 
-      if (moved) {
-        console.log(`Archived: ${plan.rel} -> ${relDest}`);
-        count++;
+        const month = plan.meta.completedAt?.slice(0, 7) || today().slice(0, 7);
+        const archiveDir = join(plansDir, 'archive', month);
+        const destFile = join(archiveDir, basename(plan.full));
+        const relDest = relative(dir, destFile).replace(/\\/g, '/');
+        const prefix = opts.fleet ? `[${basename(dir)}] ` : '';
+
+        if (opts.dryRun) {
+          console.log(`[dry-run] Would archive: ${prefix}${plan.rel} -> ${relDest}`);
+          count++;
+          continue;
+        }
+
+        mkdirSync(archiveDir, { recursive: true });
+        let moved = false;
+        try {
+          git(['mv', plan.rel, relDest], { cwd: dir });
+          moved = true;
+        } catch {
+          try {
+            renameSync(plan.full, destFile);
+            moved = true;
+          } catch (e) {
+            console.error(`Failed to move ${prefix}${plan.rel}: ${e.message}`);
+          }
+        }
+
+        if (moved) {
+          console.log(`Archived: ${prefix}${plan.rel} -> ${relDest}`);
+          count++;
+        }
       }
     }
     console.log(`Archived ${count} plan(s).`);
@@ -5563,6 +5600,12 @@ const commands = {
       console.log(
         `Branch:    ${branch} (${dirty === 0 ? 'clean' : `${dirty} uncommitted file(s)`})`,
       );
+      const protectedList = repoCfg.protectedBranches || ['main', 'master', 'develop'];
+      if (protectedList.includes(branch) && dirty > 0) {
+        console.log(
+          `Warning:   Protected branch "${branch}" has ${dirty} uncommitted file(s)`,
+        );
+      }
       console.log(`Worktrees: ${wtCount}`);
       console.log(
         `Tracker:   ${tracker}${tracker === 'notion' ? ` (Token: ${hasToken ? 'present' : 'MISSING'})` : ' (offline mode)'}`,

@@ -1,7 +1,7 @@
 ---
 title: Plan - Feature: Fast Verify And Fleet Hygiene
 ticket: local://ADW:ADW-Plan-Fast-Verify-And-Fleet-Hygiene-2026-11
-status: planned
+status: in-progress
 priority: 
 state: 
 due: 
@@ -11,6 +11,15 @@ impact:
 blueprint: docs/architecture/ADW-Blueprint-Workflow-Next-Gen-Refinements.md
 devTicketKey: ADW:ADW-Plan-Fast-Verify-And-Fleet-Hygiene-2026-11
 agent: Gemini
+branch: feat/fast-verify-and-fleet-hygiene
+worktree: AI-Dev-Workflow
+startedAt: 2026-11-23
+reviewedBy: Other
+reviewVerdict: pass
+reviewSession: reviewer-argon-low
+reviewModel: gemini-4-argon-low
+baseBranch: main
+reviewFingerprint: 1a013b51cadeb73260a2c87e7e96bf1211d26817468dbec448fe471fecefb7e6
 ---
 # Fast Verify And Fleet Hygiene
 
@@ -32,19 +41,19 @@ None
 
 ## Acceptance criteria
 
-- [ ] AC1: `fixture()` in `scripts/ticket.test.mjs` caches a pre-initialized template `.git` directory (`user.name = Test`, `user.email = test@example.invalid`) once per process, copies it on `f.git('init', ...)` while short-circuiting matching `f.git('config', ...)` calls, and copies `scripts/lib/` into the fixture when present.
-- [ ] AC2: `scripts/ticket.config.json` defines `verify.fast` (`node --check scripts/ticket.mjs`) and `scripts/workflow-manifest.json` includes `noSecretsPatterns` and `excludePaths` in `starterConfig.invariants`.
-- [ ] AC3: `ticket.mjs archive --merged [--fleet] [--dry-run]` archives any unarchived plan whose status is `done`/`completed`, whose `localPlanStatus(plan)` resolves to `done` on a protected branch, or whose status is `shipped` with all checkboxes closed (`--dry-run` previews without moving files).
-- [ ] AC4: `node scripts/sync.mjs [--all-known] --ensure-invariants` backfills `starterConfig.invariants` into existing downstream `scripts/ticket.config.json` files when `invariants` is missing without causing drift under `--check --bundle-only`, and `doctor [--fleet]` warns when a repository is on a dirty protected branch.
-- [ ] AC5: `node --test scripts/ticket.test.mjs` passes with hermetic tests for `archive --merged [--fleet]`, `sync.mjs --ensure-invariants`, and dirty-protected-branch `doctor` warnings; `README.md` and mirrored skills match byte-for-byte.
+- [x] AC1: `fixture()` in `scripts/ticket.test.mjs` caches a pre-initialized template `.git` directory (`user.name = Test`, `user.email = test@example.invalid`) once per process, copies it on `f.git('init', ...)` while short-circuiting matching `f.git('config', ...)` calls, and copies `scripts/lib/` into the fixture when present. verified(test): F1 test verifies getGitTemplateDir cache, short-circuited git config, and scripts/lib copy in scripts/ticket.test.mjs
+- [x] AC2: `scripts/ticket.config.json` defines `verify.fast` (`node --check scripts/ticket.mjs`) and `scripts/workflow-manifest.json` includes `noSecretsPatterns` and `excludePaths` in `starterConfig.invariants`. verified(test): F1 test and doctor verify verify.fast in ticket.config.json and starterConfig.invariants in workflow-manifest.json
+- [x] AC3: `ticket.mjs archive --merged [--fleet] [--dry-run]` archives any unarchived plan whose status is `done`/`completed`, whose `localPlanStatus(plan)` resolves to `done` on a protected branch, or whose status is `shipped` with all checkboxes closed (`--dry-run` previews without moving files). verified(test): F1 test verifies archive --merged [--dry-run] for shipped-closed and local-merged plans while preserving open plans
+- [x] AC4: `node scripts/sync.mjs [--all-known] --ensure-invariants` backfills `starterConfig.invariants` into existing downstream `scripts/ticket.config.json` files when `invariants` is missing without causing drift under `--check --bundle-only`, and `doctor [--fleet]` warns when a repository is on a dirty protected branch. verified(test): F1 test verifies sync.mjs --ensure-invariants backfill without --check --bundle-only drift and doctor dirty protected branch warning
+- [x] AC5: `node --test scripts/ticket.test.mjs` passes with hermetic tests for `archive --merged [--fleet]`, `sync.mjs --ensure-invariants`, and dirty-protected-branch `doctor` warnings; `README.md` and mirrored skills match byte-for-byte. verified(test): node --test scripts/ticket.test.mjs (95/95 pass) and doctor Invariants 4/4 passed
 
 ## Steps
 
-- [ ] Add template `.git` directory cache and automatic `scripts/lib/` copy support to `fixture()` in `scripts/ticket.test.mjs` (AC1).
-- [ ] Configure `verify.fast` in `scripts/ticket.config.json` and enrich `starterConfig.invariants` in `scripts/workflow-manifest.json` (AC2).
-- [ ] Implement `--merged`, `--fleet`, and `--dry-run` in `commands.archive()` and dirty-protected-branch warnings in `commands.doctor()` in `scripts/ticket.mjs` (AC3, AC4).
-- [ ] Add `--ensure-invariants` backfill support in `scripts/sync.mjs` (AC4).
-- [ ] Update `README.md`, `.agents/skills/dev-workflow/SKILL.md`, and `.claude/skills/dev-workflow/SKILL.md` identically, add hermetic tests in `scripts/ticket.test.mjs`, and run `node --test scripts/ticket.test.mjs` (AC5).
+- [x] Add template `.git` directory cache and automatic `scripts/lib/` copy support to `fixture()` in `scripts/ticket.test.mjs` (AC1). verified(test): done
+- [x] Configure `verify.fast` in `scripts/ticket.config.json` and enrich `starterConfig.invariants` in `scripts/workflow-manifest.json` (AC2). verified(test): done
+- [x] Implement `--merged`, `--fleet`, and `--dry-run` in `commands.archive()` and dirty-protected-branch warnings in `commands.doctor()` in `scripts/ticket.mjs` (AC3, AC4). verified(test): done
+- [x] Add `--ensure-invariants` backfill support in `scripts/sync.mjs` (AC4). verified(test): done
+- [x] Update `README.md`, `.agents/skills/dev-workflow/SKILL.md`, and `.claude/skills/dev-workflow/SKILL.md` identically, add hermetic tests in `scripts/ticket.test.mjs`, and run `node --test scripts/ticket.test.mjs` (AC5). verified(test): done
 
 ## Risks
 
@@ -64,3 +73,4 @@ None
 ## Progress log
 
 <!-- One line per session/review, added with `ticket.mjs log` or `ticket.mjs review` -->
+- 2026-11-23 14:24 UTC, Other (review: pass [standards: pass, spec: pass]): AC1-AC5 verified: cached git template fixture, verify.fast, archive --merged [--fleet] [--dry-run], sync --ensure-invariants, and doctor dirty-protected-branch warning implemented cleanly with hermetic tests and full mirror parity. [reviewer: reviewer-argon-low] (model: gemini-4-argon-low)
