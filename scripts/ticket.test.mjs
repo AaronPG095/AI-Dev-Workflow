@@ -4776,5 +4776,197 @@ test('F1: cached git fixture, verify.fast, archive --merged [--fleet] [--dry-run
   assert.deepEqual(backfilledCfg.invariants, manifest.starterConfig.invariants);
 });
 
+test('G1: hunk/most-recent escaped-defect precision, deduplicated auto-lessons on block->pass and Bug close-out, and recall across blueprints/docs', (t) => {
+  const f = fixture(t, '', [], {
+    tracker: 'local',
+    requireReview: false,
+    verifyCommand: 'node -e "process.exit(0)"',
+  });
+
+  const dayIso = (daysAgo) =>
+    new Date(Date.now() - daysAgo * 86400000).toISOString().slice(0, 10);
+
+  rmSync(join(f.root, 'docs/plans/FO-Plan-Test.plan.md'));
+  mkdirSync(join(f.root, 'src'), { recursive: true });
+  mkdirSync(join(f.root, 'docs/dev-workflow'), { recursive: true });
+  mkdirSync(join(f.root, 'docs/architecture'), { recursive: true });
+
+  // Create a 20-line shared file touched by >2 feature plans at distinct line ranges
+  const baseLines = Array.from({ length: 20 }, (_, i) => `export const line${i + 1} = ${i + 1};`);
+  writeFileSync(join(f.root, 'src/god.js'), baseLines.join('\n') + '\n');
+  writeFileSync(join(f.root, 'README.md'), '# Doc v0\n');
+  writeFileSync(join(f.root, 'Strings.resw'), '<root>v0</root>\n');
+
+  f.git('init', '-b', 'main');
+  f.git('config', 'user.name', 'Test');
+  f.git('config', 'user.email', 'test@example.invalid');
+  f.git('add', '.');
+  f.git('commit', '-m', 'chore: base', '--date', `${dayIso(12)}T10:00:00Z`);
+
+  const writeClosedPlan = (relPath, title, startedDaysAgo, completedDaysAgo) => {
+    const full = join(f.root, relPath);
+    mkdirSync(dirname(full), { recursive: true });
+    writeFileSync(
+      full,
+      [
+        '---',
+        `title: ${title}`,
+        `ticket: local://FO:${basename(relPath, '.plan.md')}`,
+        'status: done',
+        `startedAt: ${dayIso(startedDaysAgo)}`,
+        `completedAt: ${dayIso(completedDaysAgo)}`,
+        '---',
+        `# ${title}`,
+        '',
+        '## Summary',
+        `Summary for ${title}.`,
+        '',
+        '## Acceptance criteria',
+        '- [x] AC1: Works verified: test',
+        '',
+        '## Steps',
+        '- [x] Step 1',
+        '',
+      ].join('\n'),
+    );
+  };
+
+  // Feat1 touches line 2 of src/god.js + noise files
+  const lines1 = [...baseLines];
+  lines1[1] = 'export const line2 = 200;';
+  writeFileSync(join(f.root, 'src/god.js'), lines1.join('\n') + '\n');
+  writeFileSync(join(f.root, 'README.md'), '# Doc v1\n');
+  writeClosedPlan('docs/plans/FO-Plan-Feat1.plan.md', 'Plan - Feature: Feat 1', 11, 10);
+  f.git('add', '.');
+  f.git('commit', '-m', 'feat: Feat 1', '--date', `${dayIso(10)}T12:00:00Z`);
+
+  // Feat2 touches line 10 of src/god.js
+  const lines2 = [...lines1];
+  lines2[9] = 'export const line10 = 1000;';
+  writeFileSync(join(f.root, 'src/god.js'), lines2.join('\n') + '\n');
+  writeClosedPlan('docs/plans/FO-Plan-Feat2.plan.md', 'Plan - Feature: Feat 2', 9, 8);
+  f.git('add', '.');
+  f.git('commit', '-m', 'feat: Feat 2', '--date', `${dayIso(8)}T12:00:00Z`);
+
+  // Feat3 touches line 19 of src/god.js (unrelated hunk to line 10!)
+  const lines3 = [...lines2];
+  lines3[18] = 'export const line19 = 1900;';
+  writeFileSync(join(f.root, 'src/god.js'), lines3.join('\n') + '\n');
+  writeClosedPlan('docs/plans/FO-Plan-Feat3.plan.md', 'Plan - Feature: Feat 3', 7, 6);
+  f.git('add', '.');
+  f.git('commit', '-m', 'feat: Feat 3', '--date', `${dayIso(6)}T12:00:00Z`);
+
+  // Bug1 fixes line 10 of src/god.js (should attribute to Feat2 by hunk overlap, NOT Feat3 or Feat1!)
+  const linesBug = [...lines3];
+  linesBug[9] = 'export const line10 = 1001;';
+  writeFileSync(join(f.root, 'src/god.js'), linesBug.join('\n') + '\n');
+  writeFileSync(join(f.root, 'README.md'), '# Doc v2\n');
+  writeFileSync(join(f.root, 'Strings.resw'), '<root>v2</root>\n');
+  const bugPlanRel = 'docs/plans/FO-Plan-Bug1.plan.md';
+  writeFileSync(
+    join(f.root, bugPlanRel),
+    [
+      '---',
+      'title: Debug - Bug: Fix Line 10 Overflow',
+      'ticket: local://FO:FO-Plan-Bug1',
+      'status: in-progress',
+      `startedAt: ${dayIso(3)}`,
+      '---',
+      '# Fix Line 10 Overflow',
+      '',
+      '## Summary',
+      'Guard line 10 against integer overflow in shared module.',
+      '',
+      '## Acceptance criteria',
+      '- [x] AC1: No overflow verified: test',
+      '',
+      '## Steps',
+      '- [x] Fix line 10',
+      '',
+    ].join('\n'),
+  );
+  f.git('add', '.');
+  f.git('commit', '-m', 'fix: Fix Line 10 Overflow', '--date', `${dayIso(3)}T12:00:00Z`);
+
+  // 1. Verify stats attributes Bug1 ONLY to Feat2 (hunk match on line 10, noise files README.md/Strings.resw ignored)
+  const statsRes = f.run('stats', ['--json'], [], { omitPlan: true });
+  assert.equal(statsRes.status, 0, statsRes.stderr);
+  const statsData = JSON.parse(statsRes.stdout);
+  assert.equal(statsData.escapedDefects.length, 1);
+  assert.equal(statsData.escapedDefects[0].sourcePlan, 'docs/plans/FO-Plan-Feat2.plan.md');
+  assert.equal(statsData.escapedDefects[0].defectRef, bugPlanRel);
+  assert.deepEqual(statsData.escapedDefects[0].overlappingFiles, ['src/god.js']);
+
+  // 2. Auto-lesson on review block -> pass + deduplication
+  const blockRes = f.run('review', [
+    bugPlanRel,
+    '--agent',
+    'Codex',
+    '--verdict',
+    'block',
+    '--summary',
+    'Missing negative boundary check',
+  ], [], { omitPlan: true });
+  assert.equal(blockRes.status, 0, blockRes.stderr);
+
+  const passRes = f.run('review', [
+    bugPlanRel,
+    '--agent',
+    'Codex',
+    '--verdict',
+    'pass',
+    '--summary',
+    'Added negative boundary check and unit test',
+  ], [], { omitPlan: true });
+  assert.equal(passRes.status, 0, passRes.stderr);
+
+  const lessonsPath = join(f.root, 'docs/lessons.md');
+  assert.ok(existsSync(lessonsPath), 'docs/lessons.md should be auto-created on block->pass');
+  const afterReviewLessons = readFileSync(lessonsPath, 'utf8');
+  assert.match(afterReviewLessons, /review-blocker · docs\/plans\/FO-Plan-Bug1\.plan\.md \| Resolved review blocker \(Missing negative boundary check\): Added negative boundary check and unit test/);
+
+  // Re-stamping the same pass review does not duplicate the lesson
+  const passDup = f.run('review', [
+    bugPlanRel,
+    '--agent',
+    'Codex',
+    '--verdict',
+    'pass',
+    '--summary',
+    'Added negative boundary check and unit test',
+  ], [], { omitPlan: true });
+  assert.equal(passDup.status, 0, passDup.stderr);
+  assert.equal(readFileSync(lessonsPath, 'utf8'), afterReviewLessons);
+
+  // 3. Auto-lesson on Bug plan close-out (done / ship) + deduplication
+  const doneRes = f.run('done', [bugPlanRel], [], { omitPlan: true });
+  assert.equal(doneRes.status, 0, doneRes.stderr);
+  const afterDoneLessons = readFileSync(lessonsPath, 'utf8');
+  assert.match(afterDoneLessons, /bug-fix · docs\/plans\/FO-Plan-Bug1\.plan\.md \| Guard line 10 against integer overflow in shared module\./);
+
+  // Re-running done does not duplicate the bug-fix lesson
+  const doneDup = f.run('done', [bugPlanRel], [], { omitPlan: true });
+  assert.equal(doneDup.status, 0, doneDup.stderr);
+  assert.equal(readFileSync(lessonsPath, 'utf8'), afterDoneLessons);
+
+  // 4. recall searches docs/dev-workflow/ ([Doc]) and docs/architecture/ ([Blueprint])
+  writeFileSync(
+    join(f.root, 'docs/dev-workflow/setup-guide.md'),
+    '# Setup Guide\n\nUse UniqueWorkflowDocToken for multi-repo sync.\n',
+  );
+  writeFileSync(
+    join(f.root, 'docs/architecture/FO-Blueprint-Core.md'),
+    '# Core Blueprint\n\nUse UniqueArchBlueprintToken for system boundaries.\n',
+  );
+
+  const recallDoc = f.run('recall', ['UniqueWorkflowDocToken'], [], { omitPlan: true });
+  assert.equal(recallDoc.status, 0, recallDoc.stderr);
+  assert.match(recallDoc.stdout, /\[Doc\] docs\/dev-workflow\/setup-guide\.md/);
+
+  const recallBp = f.run('recall', ['UniqueArchBlueprintToken'], [], { omitPlan: true });
+  assert.equal(recallBp.status, 0, recallBp.stderr);
+  assert.match(recallBp.stdout, /\[Blueprint\] docs\/architecture\/FO-Blueprint-Core\.md/);
+});
+
 
 
