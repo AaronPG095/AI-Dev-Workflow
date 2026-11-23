@@ -1,7 +1,7 @@
 ---
 title: Plan - Bug: Fix ListFilesRel Junction EISDIR
 ticket: local://ADW:ADW-Plan-Fix-ListFilesRel-Junction-EISDIR-2026-11
-status: in-progress
+status: shipped
 priority: 
 state: 
 due: 
@@ -19,6 +19,7 @@ reviewVerdict: warn
 reviewSession: independent-junction-reviewer
 baseBranch: main
 reviewFingerprint: 5d9eaf0817e2af21d8f036e6e82d62680eeb94ac25fe87e540a9c8e0d39e8337
+pr: https://github.com/AaronPG095/AI-Dev-Workflow/pull/52
 ---
 # Fix ListFilesRel Junction EISDIR
 
