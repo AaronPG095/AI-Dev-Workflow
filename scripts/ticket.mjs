@@ -164,6 +164,8 @@ const BOOLEAN_FLAGS = new Set([
   '--merged',
   '--rebase',
   '--keep-branch',
+  '--claim',
+  '--release',
 ]);
 for (let i = 0; i < rest.length; i++) {
   const a = rest[i];
@@ -804,6 +806,17 @@ function lintPlan(plan) {
   if (blueprintRef && !existsSync(resolve(repoRoot, blueprintRef))) {
     errors.push(`Frontmatter "blueprint" references missing file: ${blueprintRef}`);
   }
+  if (parseDependsOn(plan).length > 0) {
+    const depState = resolveDependencyState(plan);
+    if (depState.missing.length > 0) {
+      errors.push(
+        `dependsOn references missing plan(s): ${depState.missing.join(', ')}`,
+      );
+    }
+    if (depState.cycle) {
+      errors.push('dependsOn contains a circular dependency.');
+    }
+  }
   if (
     plan.meta.impact &&
     !IMPACTS.includes(plan.meta.impact.trim().toLowerCase())
@@ -1262,6 +1275,231 @@ function localPlanStatus(plan) {
   if (!isLocal || !ticket.startsWith('local://') ||
       !['in-progress', 'shipped'].includes(status)) return status;
   return localPlanStatusForDir(plan, repoRoot, config);
+}
+
+function parseDependsOn(plan) {
+  const raw = (plan?.meta?.dependsOn || '').trim();
+  if (!raw) return [];
+  return raw
+    .split(/[,|]/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+function isPlanCompletedOrArchived(plan, dir = repoRoot, cfg = config) {
+  if (!plan) return false;
+  const rel = (plan.rel || '').replace(/\\/g, '/');
+  if (rel.includes('/archive/')) return true;
+  const status = (plan.meta?.status || '').toLowerCase();
+  if (status === 'done' || status === 'completed') return true;
+  if (localPlanStatusForDir(plan, dir, cfg) === 'done') return true;
+  if (status === 'shipped') {
+    const { items } = findCheckboxes(plan.body || '');
+    return (
+      items.length > 0 &&
+      items.every(
+        (item) => item.isChecked || /\sdeferred:\s*\S/i.test(item.text),
+      )
+    );
+  }
+  return false;
+}
+
+function matchPlanByDependencyToken(token, catalogPlans) {
+  const norm = String(token || '').replace(/\\/g, '/').trim();
+  if (!norm) return null;
+  const normLower = norm.toLowerCase();
+  return (
+    catalogPlans.find((p) => {
+      const rel = (p.rel || '').replace(/\\/g, '/');
+      const base = basename(rel);
+      const stem = basename(rel, '.plan.md');
+      const key = (p.meta?.devTicketKey || '').trim();
+      return (
+        rel.toLowerCase() === normLower ||
+        base.toLowerCase() === normLower ||
+        stem.toLowerCase() === normLower ||
+        (key && key.toLowerCase() === normLower)
+      );
+    }) || null
+  );
+}
+
+function resolveDependencyState(plan, catalogPlans = null, dir = repoRoot) {
+  const repoCfg = dir === repoRoot ? config : readRepoConfig(dir);
+  const catalog = catalogPlans || scanPlansIncludingArchive(dir);
+  const tokens = parseDependsOn(plan);
+  if (!tokens.length) {
+    return {
+      deps: [],
+      missing: [],
+      unclosed: [],
+      cycle: false,
+      ready: true,
+    };
+  }
+
+  const missing = [];
+  const unclosed = [];
+  const deps = [];
+
+  for (const token of tokens) {
+    const target = matchPlanByDependencyToken(token, catalog);
+    if (!target) {
+      missing.push(token);
+      deps.push({ token, found: false, rel: null, done: false });
+      continue;
+    }
+    const done = isPlanCompletedOrArchived(target, dir, repoCfg);
+    if (!done) unclosed.push(target.rel);
+    deps.push({ token, found: true, rel: target.rel, done });
+  }
+
+  let cycle = false;
+  const startRel = (plan.rel || '').replace(/\\/g, '/');
+  const visited = new Set();
+  const stack = [plan];
+  while (stack.length > 0) {
+    const cur = stack.pop();
+    for (const tok of parseDependsOn(cur)) {
+      const next = matchPlanByDependencyToken(tok, catalog);
+      if (!next) continue;
+      const nextRel = (next.rel || '').replace(/\\/g, '/');
+      if (nextRel === startRel) {
+        cycle = true;
+        break;
+      }
+      if (!visited.has(nextRel)) {
+        visited.add(nextRel);
+        stack.push(next);
+      }
+    }
+    if (cycle) break;
+  }
+
+  return {
+    deps,
+    missing,
+    unclosed,
+    cycle,
+    ready: missing.length === 0 && unclosed.length === 0 && !cycle,
+  };
+}
+
+function collectRepoSymbolMap(dir = repoRoot, { filter = '', maxFiles = 40 } = {}) {
+  const filterNorm = String(filter || '').replace(/\\/g, '/').trim().toLowerCase();
+  const includeTests = /test|spec/.test(filterNorm);
+  const trackedRaw = git(['ls-files', '-z'], { allowFail: true, cwd: dir });
+  const rawFiles = trackedRaw
+    ? trackedRaw.split('\0').filter(Boolean)
+    : listFilesRel(dir);
+  const extRe = /\.(?:mjs|js|ts|tsx|cs|py|go|rs)$/i;
+  const skipDirRe = /^(?:node_modules|dist|build|coverage|\.worktrees|\.git)\//i;
+
+  const candidates = [];
+  for (const f of rawFiles) {
+    const norm = f.replace(/\\/g, '/');
+    if (!extRe.test(norm) || skipDirRe.test(norm)) continue;
+    if (!includeTests && isTestFile(norm)) continue;
+    if (filterNorm && !norm.toLowerCase().includes(filterNorm)) continue;
+    candidates.push(norm);
+  }
+  candidates.sort();
+  const selected = candidates.slice(0, Math.max(1, maxFiles));
+
+  const files = [];
+  for (const rel of selected) {
+    const full = join(dir, rel);
+    if (!existsSync(full)) continue;
+    let content = '';
+    try {
+      content = readFileSync(full, 'utf8');
+    } catch {
+      continue;
+    }
+    const lines = content.replace(/\r\n/g, '\n').split('\n');
+    const symbols = [];
+    let inCommandsObj = false;
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const lineNum = i + 1;
+
+      if (/^(?:export\s+)?const\s+commands\s*=\s*\{/.test(line)) {
+        inCommandsObj = true;
+        symbols.push({ kind: 'const', name: 'commands', line: lineNum });
+        continue;
+      }
+      if (inCommandsObj) {
+        if (/^\};/.test(line)) {
+          inCommandsObj = false;
+          continue;
+        }
+        const cmdMatch = line.match(
+          /^\s{2}(?:async\s+)?(?:'([a-zA-Z0-9_-]+)'|"([a-zA-Z0-9_-]+)"|([a-zA-Z0-9_-]+))\s*\(\)\s*\{/,
+        );
+        if (cmdMatch) {
+          const cmdName = cmdMatch[1] || cmdMatch[2] || cmdMatch[3];
+          symbols.push({ kind: 'command', name: `commands.${cmdName}`, line: lineNum });
+          continue;
+        }
+      }
+
+      let m =
+        line.match(/^export\s+(?:async\s+)?function\s+([A-Za-z0-9_$]+)/) ||
+        line.match(/^export\s+class\s+([A-Za-z0-9_$]+)/) ||
+        line.match(/^export\s+const\s+([A-Za-z0-9_$]+)/);
+      if (m) {
+        const kind = line.includes('class ')
+          ? 'class'
+          : line.includes('function ')
+            ? 'function'
+            : 'const';
+        symbols.push({ kind, name: m[1], line: lineNum });
+        continue;
+      }
+
+      m = line.match(/^(?:async\s+)?function\s+([A-Za-z0-9_$]+)\s*\(/);
+      if (m) {
+        symbols.push({ kind: 'function', name: m[1], line: lineNum });
+        continue;
+      }
+
+      m = line.match(
+        /^\s*public\s+(?:sealed\s+|abstract\s+|partial\s+|static\s+)*(class|interface|record|struct|enum)\s+([A-Za-z0-9_]+)/,
+      );
+      if (m) {
+        symbols.push({ kind: m[1], name: m[2], line: lineNum });
+        continue;
+      }
+
+      m =
+        line.match(/^(?:async\s+)?def\s+([A-Za-z0-9_]+)\s*\(/) ||
+        line.match(/^class\s+([A-Za-z0-9_]+)/) ||
+        line.match(/^func\s+(?:\([^)]+\)\s*)?([A-Za-z0-9_]+)\s*\(/) ||
+        line.match(/^pub\s+(?:async\s+)?fn\s+([A-Za-z0-9_]+)/) ||
+        line.match(/^pub\s+(?:struct|enum|trait)\s+([A-Za-z0-9_]+)/);
+      if (m) {
+        const kind = /^(?:class|pub\s+(?:struct|enum|trait))/.test(line)
+          ? 'type'
+          : 'function';
+        symbols.push({ kind, name: m[1], line: lineNum });
+      }
+    }
+
+    files.push({
+      file: rel,
+      lines: lines.length,
+      symbols: symbols.slice(0, 200),
+    });
+  }
+
+  return {
+    repo: basename(dir),
+    totalMatchedFiles: candidates.length,
+    shownFiles: files.length,
+    files,
+  };
 }
 
 function resolvePlanAndTarget() {
@@ -3167,6 +3405,7 @@ const commands = {
       if (!existsSync(bpFull)) fail(`blueprint not found: ${rawBp}`);
       blueprintRel = relative(repoRoot, bpFull).replace(/\\/g, '/');
     }
+    const dependsOn = (opts.dependsOn || '').replace(/^["']|["']$/g, '').trim();
     const rawCriteria = (opts.criteria || '')
       .replace(/^["']|["']$/g, '')
       .trim();
@@ -3222,6 +3461,14 @@ const commands = {
           `\nblueprint: ${blueprintRel}\n---\n`,
         );
       }
+      if (/^dependsOn:/m.test(content)) {
+        content = content.replace(/^dependsOn:.*$/m, `dependsOn: ${dependsOn}`);
+      } else if (dependsOn) {
+        content = content.replace(
+          /\n---\n/,
+          `\ndependsOn: ${dependsOn}\n---\n`,
+        );
+      }
       if (summary) {
         content = content.replace(
           /<2-3 sentences: what changes and why\.>/,
@@ -3264,6 +3511,7 @@ const commands = {
         `version: ${version}`,
         `impact: ${impact}`,
         ...(blueprintRel ? [`blueprint: ${blueprintRel}`] : []),
+        ...(dependsOn ? [`dependsOn: ${dependsOn}`] : []),
         '---',
         `# ${topic}`,
         '',
@@ -5257,6 +5505,115 @@ const commands = {
   async blueprint() {
     const rawTopic = opts.files[0] || opts.topic || '';
     const archDir = join(repoRoot, 'docs', 'architecture');
+    if (rawTopic.trim().toLowerCase() === 'status') {
+      const rawBpArg = (opts.files[1] || opts.blueprint || '').replace(/^["']|["']$/g, '').trim();
+      let bpRel = '';
+      if (rawBpArg) {
+        const bpFull = resolve(repoRoot, rawBpArg);
+        bpRel = existsSync(bpFull)
+          ? relative(repoRoot, bpFull).replace(/\\/g, '/')
+          : rawBpArg.replace(/\\/g, '/');
+      } else {
+        const archFiles = existsSync(archDir)
+          ? readdirSync(archDir)
+              .filter((f) => f.endsWith('.md') && !f.startsWith('_'))
+              .sort()
+          : [];
+        if (!archFiles.length) {
+          fail('no architecture blueprints found in docs/architecture/');
+        }
+        bpRel = `docs/architecture/${archFiles[0]}`;
+      }
+
+      const catalog = scanPlansIncludingArchive(repoRoot);
+      const bpBase = basename(bpRel);
+      const childPlans = catalog.filter((p) => {
+        const ref = (p.meta.blueprint || '').replace(/\\/g, '/').trim();
+        return ref && (ref === bpRel || basename(ref) === bpBase);
+      });
+
+      const counts = {
+        total: childPlans.length,
+        done: 0,
+        'in-progress': 0,
+        ready: 0,
+        blocked: 0,
+      };
+      let totalBoxes = 0;
+      let checkedBoxes = 0;
+
+      const slices = childPlans.map((p) => {
+        const { items } = findCheckboxes(p.body);
+        const ticked = items.filter((it) => it.isChecked).length;
+        totalBoxes += items.length;
+        checkedBoxes += ticked;
+
+        const completed = isPlanCompletedOrArchived(p, repoRoot, config);
+        const depState = resolveDependencyState(p, catalog, repoRoot);
+        const st = (p.meta.status || 'draft').toLowerCase();
+        let sliceState = 'ready';
+        if (completed) {
+          sliceState = 'done';
+          counts.done++;
+        } else if (!depState.ready) {
+          sliceState = 'blocked';
+          counts.blocked++;
+        } else if (st === 'in-progress') {
+          sliceState = 'in-progress';
+          counts['in-progress']++;
+        } else {
+          sliceState = 'ready';
+          counts.ready++;
+        }
+
+        return {
+          plan: p.rel,
+          title: p.meta.title || basename(p.rel),
+          status: p.meta.status || 'draft',
+          sliceState,
+          progress: `${ticked}/${items.length}`,
+          ticked,
+          total: items.length,
+          dependsOn: parseDependsOn(p),
+          blockedBy: [...depState.missing, ...depState.unclosed],
+          claimedBy: p.meta.claimedBy || null,
+        };
+      });
+
+      const payload = {
+        blueprint: bpRel,
+        counts,
+        checkboxes: { checked: checkedBoxes, total: totalBoxes },
+        slices,
+      };
+
+      if (opts.json) {
+        console.log(JSON.stringify(payload, null, 2));
+        return;
+      }
+
+      console.log(`=== Blueprint Status: ${bpRel} ===`);
+      console.log(
+        `Slices: ${counts.total} total (done: ${counts.done}, in-progress: ${counts['in-progress']}, ready: ${counts.ready}, blocked: ${counts.blocked}) | Checkboxes: ${checkedBoxes}/${totalBoxes}`,
+      );
+      if (!slices.length) {
+        console.log('No plans linked to this blueprint yet.');
+        return;
+      }
+      for (const s of slices) {
+        const depNote = s.blockedBy.length
+          ? ` [blocked by: ${s.blockedBy.join(', ')}]`
+          : s.dependsOn.length
+            ? ` [deps satisfied: ${s.dependsOn.join(', ')}]`
+            : '';
+        const claimNote = s.claimedBy ? ` (claimed by ${s.claimedBy})` : '';
+        console.log(
+          `- [${s.sliceState}] ${s.plan} (${s.progress}) — ${s.title}${depNote}${claimNote}`,
+        );
+      }
+      return;
+    }
+
     if (!rawTopic || rawTopic.trim().toLowerCase() === 'list') {
       const files = existsSync(archDir)
         ? readdirSync(archDir)
@@ -6523,16 +6880,35 @@ const commands = {
         })
         : catalog.filter(active).map(({ plan }) => plan);
       if (!targetPlans.length) fail('no active or planned plans found to spawn in wave.');
-      console.log(`=== Wave Orchestration: Spawning ${targetPlans.length} Worktree(s) ===\n`);
-      const claimed = new Set();
+      const allKnown = scanPlansIncludingArchive(main.path);
+      const spawnablePlans = [];
       for (const plan of targetPlans) {
+        if (!opts.force && parseDependsOn(plan).length > 0) {
+          const depState = resolveDependencyState(plan, allKnown, main.path);
+          if (!depState.ready) {
+            const blockers = [...depState.missing, ...depState.unclosed];
+            console.log(
+              `Skipping ${plan.rel}: [blocked by: ${blockers.join(', ') || 'circular dependency'}]`,
+            );
+            continue;
+          }
+        }
+        spawnablePlans.push(plan);
+      }
+      if (!spawnablePlans.length) {
+        console.log('No unblocked plans ready to spawn in wave.');
+        return;
+      }
+      console.log(`=== Wave Orchestration: Spawning ${spawnablePlans.length} Worktree(s) ===\n`);
+      const claimed = new Set();
+      for (const plan of spawnablePlans) {
         if (worktreePlanClosed(plan)) fail(`cannot spawn a closed plan: ${plan.rel}`);
         const branch = planWorktreeBranch(plan);
         if (claimed.has(branch)) fail(`multiple plans claim worktree branch: ${branch}`);
         claimed.add(branch);
       }
       const allocations = [...entries];
-      for (const plan of targetPlans) {
+      for (const plan of spawnablePlans) {
         const branch = planWorktreeBranch(plan);
         const worktree = ensurePlanWorktree(allocations, branch, plan);
         if (!allocations.some((entry) => entry.branch === branch))
@@ -6543,8 +6919,8 @@ const commands = {
         if (!opts.dryRun)
           console.log(`  Builder brief: cd "${worktree.path}" && node scripts/ticket.mjs step --role builder\n`);
       }
-      if (opts.dryRun) return console.log(`[dry-run] ${targetPlans.length} worktree target(s).`);
-      return console.log(`Wave spawn complete: ${targetPlans.length} worktree(s) active.`);
+      if (opts.dryRun) return console.log(`[dry-run] ${spawnablePlans.length} worktree target(s).`);
+      return console.log(`Wave spawn complete: ${spawnablePlans.length} worktree(s) active.`);
     }
 
     if (opts.prune || opts.files[0] === 'prune') {
@@ -7258,6 +7634,177 @@ const commands = {
         console.log(
           `  • [${p.releaseState}] ${p.rel} (${p.type}, impact: ${p.impact}) — ${p.shortTitle}`,
         );
+      }
+    }
+  },
+
+  async ready() {
+    if (opts.release) {
+      const plan = opts.files[0] ? readPlan(opts.files[0]) : resolveActivePlan();
+      delete plan.meta.claimedBy;
+      delete plan.meta.claimedAt;
+      writePlan(plan);
+      if (opts.json) {
+        console.log(JSON.stringify({ released: plan.rel }, null, 2));
+      } else {
+        console.log(`Released claim on ${plan.rel}`);
+      }
+      return;
+    }
+
+    const catalog = scanPlansIncludingArchive(repoRoot);
+    const activePlans = allPlans(repoRoot).filter(
+      (p) => !isPlanCompletedOrArchived(p, repoRoot, config),
+    );
+    const bpFilter = (opts.blueprint || '').replace(/\\/g, '/').trim();
+    const filtered = bpFilter
+      ? activePlans.filter((p) => {
+          const ref = (p.meta.blueprint || '').replace(/\\/g, '/').trim();
+          return ref && (ref === bpFilter || basename(ref) === basename(bpFilter));
+        })
+      : activePlans;
+
+    const prioRank = {
+      emergency: 5,
+      critical: 4,
+      high: 3,
+      medium: 2,
+      low: 1,
+    };
+    filtered.sort((a, b) => {
+      const pa = prioRank[(a.meta.priority || '').toLowerCase()] || 0;
+      const pb = prioRank[(b.meta.priority || '').toLowerCase()] || 0;
+      if (pb !== pa) return pb - pa;
+      return a.rel.localeCompare(b.rel);
+    });
+
+    const reqAgent = (opts.agent || process.env.AI_CLIENT || '').trim();
+    const readyList = [];
+    const blockedList = [];
+    const claimedList = [];
+
+    for (const p of filtered) {
+      const depState = resolveDependencyState(p, catalog, repoRoot);
+      const claimedBy = (p.meta.claimedBy || '').trim();
+      const item = {
+        plan: p.rel,
+        title: p.meta.title || basename(p.rel),
+        status: p.meta.status || 'draft',
+        priority: p.meta.priority || null,
+        blueprint: p.meta.blueprint || null,
+        dependsOn: parseDependsOn(p),
+        blockedBy: [...depState.missing, ...depState.unclosed],
+        cycle: depState.cycle,
+        claimedBy: claimedBy || null,
+        claimedAt: p.meta.claimedAt || null,
+      };
+      if (!depState.ready) {
+        blockedList.push(item);
+      } else if (
+        claimedBy &&
+        (!reqAgent || claimedBy.toLowerCase() !== reqAgent.toLowerCase())
+      ) {
+        claimedList.push(item);
+      } else {
+        readyList.push({ item, planObj: p });
+      }
+    }
+
+    if (opts.claim) {
+      if (!readyList.length) {
+        fail('no unblocked, unclaimed plans ready to claim');
+      }
+      const agent = reqAgent || 'Other';
+      const target = readyList[0].planObj;
+      const nowIso = new Date().toISOString();
+      target.meta.claimedBy = agent;
+      target.meta.claimedAt = nowIso;
+      writePlan(target);
+      if (opts.json) {
+        console.log(
+          JSON.stringify(
+            {
+              claimed: target.rel,
+              claimedBy: agent,
+              claimedAt: nowIso,
+            },
+            null,
+            2,
+          ),
+        );
+      } else {
+        console.log(`Claimed ${target.rel} for ${agent} (${nowIso})`);
+      }
+      return;
+    }
+
+    const payload = {
+      ready: readyList.map((r) => r.item),
+      blocked: blockedList,
+      claimed: claimedList,
+    };
+
+    if (opts.json) {
+      console.log(JSON.stringify(payload, null, 2));
+      return;
+    }
+
+    console.log(
+      `=== Ready Plan Queue (${payload.ready.length} ready, ${payload.blocked.length} blocked, ${payload.claimed.length} claimed) ===`,
+    );
+    if (payload.ready.length) {
+      console.log('\nReady:');
+      for (const r of payload.ready) {
+        const deps = r.dependsOn.length ? ` [deps: ${r.dependsOn.join(', ')}]` : '';
+        console.log(`  • ${r.plan} (${r.status}) — ${r.title}${deps}`);
+      }
+    }
+    if (payload.claimed.length) {
+      console.log('\nClaimed:');
+      for (const c of payload.claimed) {
+        console.log(`  • ${c.plan} [claimed by ${c.claimedBy}] — ${c.title}`);
+      }
+    }
+    if (payload.blocked.length) {
+      console.log('\nBlocked:');
+      for (const b of payload.blocked) {
+        const reason = b.cycle
+          ? 'circular dependency'
+          : b.blockedBy.join(', ');
+        console.log(`  • ${b.plan} [blocked by: ${reason}] — ${b.title}`);
+      }
+    }
+    if (!payload.ready.length && !payload.claimed.length && !payload.blocked.length) {
+      console.log('No open plans in queue.');
+    }
+  },
+
+  async map() {
+    const filter = (opts.files[0] || opts.filter || '').trim();
+    const maxFiles =
+      opts.max !== undefined ? Math.max(1, parseInt(opts.max, 10) || 40) : 40;
+    const mapData = collectRepoSymbolMap(repoRoot, { filter, maxFiles });
+
+    if (opts.json) {
+      console.log(JSON.stringify(mapData, null, 2));
+      return;
+    }
+
+    console.log(
+      `=== Repository Symbol Map: ${mapData.repo} (${mapData.shownFiles}/${mapData.totalMatchedFiles} files${filter ? `, filter: "${filter}"` : ''}) ===`,
+    );
+    if (!mapData.files.length) {
+      console.log('No matching source files found.');
+      return;
+    }
+    for (const f of mapData.files) {
+      console.log(`\n${f.file} (${f.lines} lines):`);
+      if (!f.symbols.length) {
+        console.log('  (no top-level symbols extracted)');
+        continue;
+      }
+      for (const sym of f.symbols) {
+        console.log(`  L${sym.line}: [${sym.kind}] ${sym.name}`);
       }
     }
   },

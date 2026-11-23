@@ -3217,6 +3217,7 @@ test('T1.5: runInvariants enforces mirrorDirs, readmeCliSync, zeroDependencies, 
       'log', 'handoff', 'resume', 'pack', 'review', 'check', 'lint', 'ship', 'pr', 'merge', 'done',
       'overview', 'hook', 'adr', 'exec', 'wt', 'recall', 'archive', 'doctor', 'verify',
       'hygiene', 'switch', 'split', 'fleet', 'wave', 'lesson', 'stats', 'release', 'blueprint',
+      'ready', 'map',
     ].join(' '),
   );
   writeFileSync(join(f.root, 'package.json'), JSON.stringify({ name: 'test', dependencies: {} }));
@@ -4966,6 +4967,197 @@ test('G1: hunk/most-recent escaped-defect precision, deduplicated auto-lessons o
   const recallBp = f.run('recall', ['UniqueArchBlueprintToken'], [], { omitPlan: true });
   assert.equal(recallBp.status, 0, recallBp.stderr);
   assert.match(recallBp.stdout, /\[Blueprint\] docs\/architecture\/FO-Blueprint-Core\.md/);
+});
+
+test('H1: dependsOn lint/resolution, ready --claim/--release, blueprint status, wave dependency gating, and map symbol outline', (t) => {
+  const f = fixture(t, '', [], {
+    tracker: 'local',
+    requireReview: false,
+  });
+
+  rmSync(join(f.root, 'docs/plans/FO-Plan-Test.plan.md'));
+  mkdirSync(join(f.root, 'src'), { recursive: true });
+  writeFileSync(
+    join(f.root, 'src/service.js'),
+    [
+      'export class AuthService {',
+      '  login() {}',
+      '}',
+      'export async function verifyToken(token) {',
+      '  return Boolean(token);',
+      '}',
+      'export const DEFAULT_TTL = 3600;',
+    ].join('\n') + '\n',
+  );
+
+  f.git('init', '-b', 'main');
+  f.git('config', 'user.name', 'Test');
+  f.git('config', 'user.email', 'test@example.invalid');
+
+  // 1. Scaffold blueprint and 2 dependent plans (Plan B depends on Plan A)
+  const bpCreate = f.run('blueprint', ['Next Gen Auth'], [], { omitPlan: true });
+  assert.equal(bpCreate.status, 0, bpCreate.stderr);
+  const bpRel = 'docs/architecture/FO-Blueprint-Next-Gen-Auth.md';
+
+  const newA = f.run(
+    'new',
+    [
+      'Slice A Base',
+      '--blueprint',
+      bpRel,
+      '--priority',
+      'high',
+      '--summary',
+      'Base auth slice.',
+      '--criteria',
+      'AC1: Base works',
+      '--steps',
+      'Build base (AC1)',
+      '--create',
+      '--agent',
+      'Gemini',
+    ],
+    [],
+    { omitPlan: true },
+  );
+  assert.equal(newA.status, 0, newA.stderr);
+  const planAFile = readdirSync(join(f.root, 'docs/plans')).find((n) => n.includes('Slice-A-Base'));
+  const planARel = `docs/plans/${planAFile}`;
+
+  const newB = f.run(
+    'new',
+    [
+      'Slice B Dependent',
+      '--blueprint',
+      bpRel,
+      '--depends-on',
+      planAFile,
+      '--summary',
+      'Dependent auth slice.',
+      '--criteria',
+      'AC1: Dependent works',
+      '--steps',
+      'Build dependent (AC1)',
+      '--create',
+      '--agent',
+      'Gemini',
+    ],
+    [],
+    { omitPlan: true },
+  );
+  assert.equal(newB.status, 0, newB.stderr);
+  const planBFile = readdirSync(join(f.root, 'docs/plans')).find((n) => n.includes('Slice-B-Dependent'));
+  const planBRel = `docs/plans/${planBFile}`;
+
+  f.git('add', '.');
+  f.git('commit', '-m', 'chore: add blueprint and plans A & B');
+
+  // 2. lint flags missing and circular dependencies
+  const planBFull = join(f.root, planBRel);
+  const planBOrig = readFileSync(planBFull, 'utf8');
+  writeFileSync(
+    planBFull,
+    planBOrig.replace(`dependsOn: ${planAFile}`, 'dependsOn: FO-Plan-DoesNotExist.plan.md'),
+  );
+  const lintMissing = f.run('lint', [planBRel], [], { omitPlan: true });
+  assert.notEqual(lintMissing.status, 0);
+  assert.match(lintMissing.stdout + lintMissing.stderr, /dependsOn references missing plan/);
+
+  // Create circular dependency A <-> B
+  const planAFull = join(f.root, planARel);
+  const planAOrig = readFileSync(planAFull, 'utf8');
+  writeFileSync(planBFull, planBOrig);
+  writeFileSync(
+    planAFull,
+    planAOrig.replace(/\n---\n/, `\ndependsOn: ${planBFile}\n---\n`),
+  );
+  const lintCycle = f.run('lint', [planARel], [], { omitPlan: true });
+  assert.notEqual(lintCycle.status, 0);
+  assert.match(lintCycle.stdout + lintCycle.stderr, /circular dependency/i);
+  writeFileSync(planAFull, planAOrig);
+
+  // 3. ready queue lists Plan A as ready and Plan B as blocked
+  const ready1 = f.run('ready', ['--blueprint', bpRel, '--json'], [], { omitPlan: true });
+  assert.equal(ready1.status, 0, ready1.stderr);
+  const q1 = JSON.parse(ready1.stdout);
+  assert.equal(q1.ready.length, 1);
+  assert.equal(q1.ready[0].plan, planARel);
+  assert.equal(q1.blocked.length, 1);
+  assert.equal(q1.blocked[0].plan, planBRel);
+
+  // 4. ready --claim stamps claimedBy/claimedAt on Plan A; another agent sees it as claimed
+  const claimRes = f.run('ready', ['--claim', '--agent', 'Gemini', '--json'], [], { omitPlan: true });
+  assert.equal(claimRes.status, 0, claimRes.stderr);
+  const claimData = JSON.parse(claimRes.stdout);
+  assert.equal(claimData.claimed, planARel);
+  assert.equal(claimData.claimedBy, 'Gemini');
+
+  const readyOther = f.run('ready', ['--agent', 'Codex', '--json'], [], { omitPlan: true });
+  assert.equal(readyOther.status, 0, readyOther.stderr);
+  const qOther = JSON.parse(readyOther.stdout);
+  assert.equal(qOther.ready.length, 0);
+  assert.equal(qOther.claimed.length, 1);
+  assert.equal(qOther.claimed[0].claimedBy, 'Gemini');
+
+  // Release claim on Plan A
+  const releaseRes = f.run('ready', ['--release', planARel], [], { omitPlan: true });
+  assert.equal(releaseRes.status, 0, releaseRes.stderr);
+  assert.doesNotMatch(readFileSync(planAFull, 'utf8'), /^claimedBy:/m);
+
+  // 5. wave --spawn --dry-run skips blocked Plan B and only targets Plan A
+  const waveDry = f.run('wave', ['--spawn', '--dry-run'], [], { omitPlan: true });
+  assert.equal(waveDry.status, 0, waveDry.stderr);
+  assert.match(waveDry.stdout, /Skipping docs\/plans\/FO-Plan-Slice-B-Dependent.*\[blocked by:/);
+  assert.match(waveDry.stdout, /\[dry-run\] 1 worktree target\(s\)/);
+
+  // 6. blueprint status reports 0 done, 1 ready, 1 blocked
+  const bpStatus1 = f.run('blueprint', ['status', bpRel, '--json'], [], { omitPlan: true });
+  assert.equal(bpStatus1.status, 0, bpStatus1.stderr);
+  const bps1 = JSON.parse(bpStatus1.stdout);
+  assert.equal(bps1.counts.total, 2);
+  assert.equal(bps1.counts.ready, 1);
+  assert.equal(bps1.counts.blocked, 1);
+  assert.equal(bps1.counts.done, 0);
+
+  // Complete Plan A -> Plan B becomes ready!
+  assert.equal(
+    f.run('tick', [planARel, '1', '--verified', 'unit test'], [], { omitPlan: true }).status,
+    0,
+  );
+  assert.equal(
+    f.run('tick', [planARel, '1', '--verified', 'done'], [], { omitPlan: true }).status,
+    0,
+  );
+  assert.equal(f.run('done', [planARel], [], { omitPlan: true }).status, 0);
+
+  const ready2 = f.run('ready', ['--json'], [], { omitPlan: true });
+  assert.equal(ready2.status, 0, ready2.stderr);
+  const q2 = JSON.parse(ready2.stdout);
+  assert.equal(q2.ready.length, 1);
+  assert.equal(q2.ready[0].plan, planBRel);
+  assert.equal(q2.blocked.length, 0);
+
+  const bpStatus2 = f.run('blueprint', ['status', bpRel], [], { omitPlan: true });
+  assert.equal(bpStatus2.status, 0, bpStatus2.stderr);
+  assert.match(bpStatus2.stdout, /Slices: 2 total \(done: 1, in-progress: 0, ready: 1, blocked: 0\)/);
+  assert.match(bpStatus2.stdout, /\[deps satisfied:/);
+
+  // 7. map extracts symbols from src/service.js and scripts/ticket.mjs
+  const mapJson = f.run('map', ['src/service.js', '--json'], [], { omitPlan: true });
+  assert.equal(mapJson.status, 0, mapJson.stderr);
+  const mapData = JSON.parse(mapJson.stdout);
+  assert.equal(mapData.shownFiles, 1);
+  assert.equal(mapData.files[0].file, 'src/service.js');
+  const symNames = mapData.files[0].symbols.map((s) => s.name);
+  assert.ok(symNames.includes('AuthService'));
+  assert.ok(symNames.includes('verifyToken'));
+  assert.ok(symNames.includes('DEFAULT_TTL'));
+
+  const mapText = f.run('map', ['ticket.mjs', '--max', '1'], [], { omitPlan: true });
+  assert.equal(mapText.status, 0, mapText.stderr);
+  assert.match(mapText.stdout, /scripts\/ticket\.mjs/);
+  assert.match(mapText.stdout, /\[command\] commands\.ready/);
+  assert.match(mapText.stdout, /\[command\] commands\.map/);
 });
 
 

@@ -161,12 +161,19 @@ Requires **Node.js 22+**. When `<plan>` is omitted on a feature branch, `ticket.
 
 ```powershell
 # 1. Plan Scaffolding, Splitting & Ignition
-# Optional for new projects / multi-PR initiatives: scaffold or list architecture blueprints in docs/architecture/
+# Optional for new projects / multi-PR initiatives: scaffold, list, or inspect child-plan rollup status of architecture blueprints in docs/architecture/
 node scripts/ticket.mjs blueprint "Auth Architecture" [--version 1.2.0] [--force]
 node scripts/ticket.mjs blueprint [list]
+node scripts/ticket.mjs blueprint status [<blueprint-path>] [--json]
 
 # Automatically creates docs/plans/<PREFIX>-Plan-<Topic>-<YYYY-MM>.plan.md
-node scripts/ticket.mjs new "Smart Shortcut Suggestions" --type Feature [--appetite S|M|L] [--version 1.2.0] [--impact none|patch|minor|major] [--blueprint docs/architecture/ADW-Blueprint-Auth-Architecture.md] [--context "<findings>"] [--branch]
+node scripts/ticket.mjs new "Smart Shortcut Suggestions" --type Feature [--appetite S|M|L] [--version 1.2.0] [--impact none|patch|minor|major] [--blueprint docs/architecture/ADW-Blueprint-Auth-Architecture.md] [--depends-on "<plan-or-key>"] [--context "<findings>"] [--branch]
+
+# List unblocked ready plans (dependencies satisfied) or atomically claim/release a plan for a worker
+node scripts/ticket.mjs ready [--blueprint <path>] [--claim --agent <client>] [--release [<plan>]] [--json]
+
+# Generate a zero-dependency repository symbol outline (exported functions, classes, and CLI commands with file:L<line> coordinates)
+node scripts/ticket.mjs map [<path-or-filter>] [--max <N>] [--json]
 
 # Fast one-command ignition: scaffold, set criteria, checkout branch, ticket, and start Doing
 node scripts/ticket.mjs new "Fast Feature" --summary "..." --appetite M --version 1.2.0 --impact minor --criteria "c1|c2" --steps "s1|s2" --branch --create --start --agent Gemini
