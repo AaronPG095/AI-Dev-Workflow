@@ -1,7 +1,7 @@
 ---
 title: Plan - Feature: Fast Verify And Fleet Hygiene
 ticket: local://ADW:ADW-Plan-Fast-Verify-And-Fleet-Hygiene-2026-11
-status: in-progress
+status: shipped
 priority: 
 state: 
 due: 
@@ -20,6 +20,7 @@ reviewSession: reviewer-argon-low
 reviewModel: gemini-4-argon-low
 baseBranch: main
 reviewFingerprint: 1a013b51cadeb73260a2c87e7e96bf1211d26817468dbec448fe471fecefb7e6
+pr: https://github.com/AaronPG095/AI-Dev-Workflow/pull/46
 ---
 # Fast Verify And Fleet Hygiene
 
