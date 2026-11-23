@@ -140,9 +140,14 @@ AI-Dev-Workflow/
 ├── scripts/
 │   ├── hooks/
 │   │   └── adw-hook.mjs           # Opt-in runtime hook handler (PreToolUse, PostToolUse, Stop)
+│   ├── lib/
+│   │   ├── markdown-plan.mjs      # Pure markdown & plan checkbox parser helpers
+│   │   ├── invariants-lint.mjs    # Pure invariant, test-file, and diff-filter helpers
+│   │   ├── stats-lessons.mjs      # Workflow lessons & escaped-defect stats helpers
+│   │   └── symbols-map.mjs        # Zero-dep repo symbol outline & dependency token parser
 │   ├── ticket.mjs                 # Zero-dependency workflow & review CLI (Node 22+)
 │   ├── ticket.config.json         # Repository configuration (local mode default)
-│   ├── ticket.test.mjs            # Hermetic unit and integration tests (node:test)
+│   ├── ticket.test.mjs            # 98 hermetic unit and integration tests (node:test)
 │   ├── workflow-manifest.json     # Versioned distribution manifest for sync & installers
 │   ├── sync.mjs                   # Cross-platform sync and drift engine (--remote & local)
 │   ├── sync-repos.ps1             # PowerShell wrapper for multi-repo sync

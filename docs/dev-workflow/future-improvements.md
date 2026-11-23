@@ -4,20 +4,16 @@ Parked ideas from workflow pattern research (build only when `ticket.mjs stats` 
 
 ## Candidates
 
-1. **Plan dependencies, `ready` queue & worker claim semantics (`dependsOn`, `ready`)**
-   - *When:* You regularly run multi-plan parallel `wave` batches with ordering constraints.
-   - *Idea:* Optional `dependsOn:` frontmatter keys, `ticket.mjs ready` listing unblocked plans, and atomic worker claim metadata so concurrent agents don't pick colliding plans.
-2. **Repo symbol map summary (`ticket.mjs map`)**
-   - *When:* Onboarding cold agents to larger codebases (e.g., Fluent repos).
-   - *Idea:* Zero-dep AST/regex outline of top exported functions/classes and entrypoints to populate `## Context` faster.
-3. **Role→model routing & `run` review-round budget**
-   - *When:* Using `ticket.mjs run` autonomously with heterogeneous model runners.
-   - *Idea:* Config mapping `builder`/`reviewer`/`fixer` to separate runner commands plus `maxReviewRounds` circuit-breaker.
+1. **[Shipped] Plan dependencies, `ready` queue & worker claim semantics (`dependsOn`, `ready`)**
+   - *Shipped in:* `ADW-Plan-Dependency-Graph-Ready-Queue-And-Map-2026-11.plan.md` (`dependsOn:` frontmatter + `new --depends-on`, `ticket.mjs ready [--blueprint] [--claim] [--release]`, `ticket.mjs blueprint status`, and dependency-gated `wave --spawn`).
+2. **[Shipped] Repo symbol map summary (`ticket.mjs map`)**
+   - *Shipped in:* `ADW-Plan-Dependency-Graph-Ready-Queue-And-Map-2026-11.plan.md` (`ticket.mjs map [<filter>] [--max <N>] [--json]` via `scripts/lib/symbols-map.mjs`).
+3. **[Shipped] Role→model routing & `run` review-round budget**
+   - *Shipped in:* `ADW-Plan-Role-Model-Routing-And-Architecture-Blueprints-2026-11.plan.md` (`agentic.models` mapping `planner`, `builder`, `fixer`, and `reviewer`, surfaced in `step --role`, `prime`, `review --prompt`, and `run` via `ADW_MODEL`).
 4. **`Spike` plan type**
    - *When:* Exploratory prototypes are mixed into Feature plans.
    - *Idea:* `new --type Spike` with time-boxed appetite and hypothesis/answer outcome sections instead of implementation steps.
-5. **Modularise `scripts/ticket.mjs`**
-   - *When:* Single-file maintenance slows down edits.
-   - *Idea:* Split into focused ESM modules under `scripts/lib/` with `sync`/`workflow-manifest.json` updated identically—preceded by characterization tests.
+5. **[Shipped] Modularise `scripts/ticket.mjs`**
+   - *Shipped in:* `ADW-Plan-Modularize-Ticket-Cli-2026-11.plan.md` (extracted `scripts/lib/markdown-plan.mjs`, `scripts/lib/invariants-lint.mjs`, `scripts/lib/stats-lessons.mjs`, and `scripts/lib/symbols-map.mjs`, synced via `scripts/workflow-manifest.json`).
 6. **Non-goals to keep excluding**
    - Multi-persona agent bloat, 3–4 docs per feature, JSON task lists replacing markdown, or built-in non-zero-dep mutation testing.

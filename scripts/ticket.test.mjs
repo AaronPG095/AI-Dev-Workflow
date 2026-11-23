@@ -2599,6 +2599,9 @@ test('fleet/overview active-plan parity, ci-check archive validation/exemption, 
     const dir = join(fleetRoot, name);
     mkdirSync(join(dir, 'scripts'), { recursive: true });
     copyFileSync(join(scripts, 'ticket.mjs'), join(dir, 'scripts/ticket.mjs'));
+    if (existsSync(join(scripts, 'lib'))) {
+      cpSync(join(scripts, 'lib'), join(dir, 'scripts/lib'), { recursive: true });
+    }
     writeFileSync(
       join(dir, 'scripts/ticket.config.json'),
       JSON.stringify({ ...defaultNotionConfig, tracker: 'local', ...cfg }, null, 2),
@@ -5158,6 +5161,69 @@ test('H1: dependsOn lint/resolution, ready --claim/--release, blueprint status, 
   assert.match(mapText.stdout, /scripts\/ticket\.mjs/);
   assert.match(mapText.stdout, /\[command\] commands\.ready/);
   assert.match(mapText.stdout, /\[command\] commands\.map/);
+});
+
+test('I1: characterization of scripts/lib/* ESM modules, command surface parity, and sync --check --bundle-only', async (t) => {
+  const mdLib = await import('./lib/markdown-plan.mjs');
+  const invLib = await import('./lib/invariants-lint.mjs');
+  const statsLib = await import('./lib/stats-lessons.mjs');
+  const symLib = await import('./lib/symbols-map.mjs');
+
+  // 1. markdown-plan.mjs exports & behavior
+  const sampleDoc = '---\ntitle: Plan - Feature: Lib\n---\n# Lib\n\n## Summary\nHello lib.\n\n## Open questions\n- [ ] Question 1?\n\n## Acceptance criteria\n- [ ] AC1: First\n- [x] AC2: Second verified: ok\n';
+  const body = mdLib.bodyOf(sampleDoc);
+  assert.equal(mdLib.section(body, 'Summary'), 'Hello lib.');
+  assert.equal(mdLib.countOpenQuestions(body), 1);
+  const appended = mdLib.appendToSection(body, 'Summary', 'More text.');
+  assert.match(mdLib.section(appended, 'Summary'), /Hello lib\.[\s\S]*More text\./);
+  const cbs = mdLib.findCheckboxes(body);
+  assert.equal(cbs.items.length, 3);
+  assert.equal(mdLib.missingCheckboxes(body, body).length, 0);
+
+  // 2. invariants-lint.mjs exports & behavior
+  assert.equal(invLib.isTestFile('scripts/ticket.test.mjs'), true);
+  assert.equal(invLib.isTestFile('scripts/ticket.mjs'), false);
+  assert.equal(invLib.isIgnoredDiffPath('pnpm-lock.yaml', ['pnpm-lock.yaml', '*.min.js']), true);
+  assert.equal(invLib.isIgnoredDiffPath('bundle.min.js', ['pnpm-lock.yaml', '*.min.js']), true);
+  assert.equal(invLib.tailLines('a\nb\nc\n', 2), 'b\nc');
+  assert.equal(invLib.percentile([1, 2, 3, 4], 0.5), 2.5);
+  assert.equal(invLib.round1(1.26), 1.3);
+
+  // 3. stats-lessons.mjs exports & behavior
+  assert.equal(statsLib.parsePlanTypeFromMeta({ title: 'Plan - Refactor: Clean' }), 'Refactor');
+  assert.equal(statsLib.parsePlanTypeFromMeta({ title: 'Debug - Bug: Crash' }), 'Bug');
+  assert.ok(Number.isFinite(statsLib.parseIsoDayOrMs('2026-11-23')));
+  assert.equal(statsLib.isNoiseFileForDefects('README.md'), true);
+  assert.equal(statsLib.isNoiseFileForDefects('Strings.resw'), true);
+  assert.equal(statsLib.isNoiseFileForDefects('src/core.js'), false);
+  assert.equal(statsLib.rangesOverlap([[10, 20]], [[15, 25]]), true);
+  assert.equal(statsLib.rangesOverlap([[10, 12]], [[20, 25]]), false);
+
+  // 4. symbols-map.mjs exports & behavior
+  assert.deepEqual(
+    symLib.parseDependsOn({ meta: { dependsOn: 'PlanA.plan.md, PlanB.plan.md | ADW:KeyC' } }),
+    ['PlanA.plan.md', 'PlanB.plan.md', 'ADW:KeyC'],
+  );
+  const libMap = symLib.collectRepoSymbolMap(dirname(scripts), { filter: 'scripts/lib/' });
+  assert.equal(libMap.shownFiles, 4);
+
+  // 5. workflow-manifest.json and sync.mjs --check --bundle-only .
+  const manifest = JSON.parse(readFileSync(join(scripts, 'workflow-manifest.json'), 'utf8'));
+  for (const modPath of [
+    'scripts/lib/markdown-plan.mjs',
+    'scripts/lib/invariants-lint.mjs',
+    'scripts/lib/stats-lessons.mjs',
+    'scripts/lib/symbols-map.mjs',
+  ]) {
+    assert.ok(manifest.copy.includes(modPath), `manifest.copy missing ${modPath}`);
+  }
+
+  const syncRes = spawnSync(
+    process.execPath,
+    [join(scripts, 'sync.mjs'), dirname(scripts), '--check', '--bundle-only'],
+    { encoding: 'utf8' },
+  );
+  assert.equal(syncRes.status, 0, syncRes.stdout + syncRes.stderr);
 });
 
 
