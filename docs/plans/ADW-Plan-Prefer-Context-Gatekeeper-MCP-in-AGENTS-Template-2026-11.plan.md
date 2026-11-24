@@ -1,7 +1,7 @@
 ---
 title: Plan - Feature: Prefer Context Gatekeeper MCP in AGENTS Template
 ticket: local://ADW:ADW-Plan-Prefer-Context-Gatekeeper-MCP-in-AGENTS-Template-2026-11
-status: in-progress
+status: shipped
 priority: 
 state: 
 due: 
@@ -19,6 +19,7 @@ reviewVerdict: pass
 reviewSession: 5b2c2c3a-c15b-46e2-adf9-5f97be1d751d
 baseBranch: main
 reviewFingerprint: 911ba27a974f27c7df3e5aebfe0ca26f782d253aab4ebb87e05bb468727be41a
+pr: https://github.com/AaronPG095/AI-Dev-Workflow/pull/54
 ---
 # Prefer Context Gatekeeper MCP in AGENTS Template
 
