@@ -31,16 +31,16 @@ None
 
 ## Acceptance criteria
 
-- [ ] F1 test in scripts/ticket.test.mjs passes both in AI-Dev-Workflow and when downstream ticket.config.json sets custom verify.fast
-- [ ] Agent runtime hooks installed and tracked in .claude/settings.json (3/3 events)
-- [ ] docs/lessons.md includes the 3 seeded workflow lessons alongside existing lessons and passes ticket.test.mjs
+- [x] F1 test in scripts/ticket.test.mjs passes both in AI-Dev-Workflow and when downstream ticket.config.json sets custom verify.fast verified: ticket.test.mjs F1 gated ADW check on prefix===ADW and asserts fixtureCfg.verify.fast; 100/100 tests passed
+- [x] Agent runtime hooks installed and tracked in .claude/settings.json (3/3 events) verified: hook status --agent-hooks confirmed 3/3 events in tracked .claude/settings.json
+- [x] docs/lessons.md includes the 3 seeded workflow lessons alongside existing lessons and passes ticket.test.mjs verified: 3 lessons appended alongside #52 lesson, recall hooks --lessons matched, 100/100 ticket.test.mjs passed
 
 ## Steps
 
-- [ ] Update F1 assertion in scripts/ticket.test.mjs to be downstream-hermetic
-- [ ] Install and stage .claude/settings.json via ticket.mjs hook install --agent-hooks
-- [ ] Append the 3 seeded lessons from .worktrees/seed-lessons/docs/lessons.md into docs/lessons.md
-- [ ] Run node --test scripts/ticket.test.mjs, independent subagent review, check, PR, and merge
+- [x] Update F1 assertion in scripts/ticket.test.mjs to be downstream-hermetic
+- [x] Install and stage .claude/settings.json via ticket.mjs hook install --agent-hooks
+- [x] Append the 3 seeded lessons from .worktrees/seed-lessons/docs/lessons.md into docs/lessons.md
+- [x] Run node --test scripts/ticket.test.mjs, independent subagent review, check, PR, and merge
 
 ## Risks
 
