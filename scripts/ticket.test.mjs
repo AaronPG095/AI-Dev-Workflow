@@ -4642,7 +4642,11 @@ test('F1: cached git fixture, verify.fast, archive --merged [--fleet] [--dry-run
 
   // 2. verify --tier fast works and repo config + manifest have fast / invariants configured
   const repoCfg = JSON.parse(readFileSync(join(scripts, 'ticket.config.json'), 'utf8'));
-  assert.equal(repoCfg.verify?.fast, 'node --check scripts/ticket.mjs');
+  if (repoCfg.prefix === 'ADW') {
+    assert.equal(repoCfg.verify?.fast, 'node --check scripts/ticket.mjs');
+  }
+  const fixtureCfg = JSON.parse(readFileSync(join(f.root, 'scripts', 'ticket.config.json'), 'utf8'));
+  assert.equal(fixtureCfg.verify?.fast, 'node --check scripts/ticket.mjs');
   const manifest = JSON.parse(readFileSync(join(scripts, 'workflow-manifest.json'), 'utf8'));
   assert.ok(Array.isArray(manifest.starterConfig?.invariants?.noSecretsPatterns));
   assert.ok(Array.isArray(manifest.starterConfig?.invariants?.excludePaths));
