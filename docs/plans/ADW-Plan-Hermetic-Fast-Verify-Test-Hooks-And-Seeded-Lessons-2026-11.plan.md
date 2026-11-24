@@ -1,7 +1,7 @@
 ---
 title: Plan - Bug: Hermetic Fast Verify Test Hooks And Seeded Lessons
 ticket: local://ADW:ADW-Plan-Hermetic-Fast-Verify-Test-Hooks-And-Seeded-Lessons-2026-11
-status: in-progress
+status: shipped
 priority: 
 state: 
 due: 
@@ -19,6 +19,7 @@ reviewVerdict: pass
 reviewSession: ff858aae-7974-41c2-a77b-ecb412ed3d9d
 baseBranch: main
 reviewFingerprint: 2fd4703e085ac65477670dba787032ffa42c34dfaae05732aab98ff109421bb6
+pr: https://github.com/AaronPG095/AI-Dev-Workflow/pull/53
 ---
 # Hermetic Fast Verify Test Hooks And Seeded Lessons
 
