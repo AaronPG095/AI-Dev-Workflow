@@ -5320,5 +5320,92 @@ test('listFilesRel traverses directory junctions/symlinks without EISDIR', async
   assert.equal(checkRes.status, 0, checkRes.stderr);
 });
 
+test('K1: lean AGENTS.md budget, progressive agentic-workflow refs, batch tick, verify --quiet, pack --compact, and doctor/stats --compact', async (t) => {
+  // 1. renderDevProcessSection stays under 2000 chars and agentic-workflow SKILL.md < 2500 chars
+  const { renderDevProcessSection } = await import('./sync.mjs');
+  const rendered = renderDevProcessSection({ prefix: 'FO' });
+  assert.ok(rendered.length < 2000, `Expected <2000 chars, got ${rendered.length}`);
+  const rootDir = dirname(scripts);
+  const agenticSkill = readFileSync(join(rootDir, '.agents/skills/agentic-workflow/SKILL.md'), 'utf8');
+  assert.ok(agenticSkill.length < 2500, `Expected router <2500 chars, got ${agenticSkill.length}`);
+  for (const ref of ['level-a.md', 'level-b.md', 'level-c.md']) {
+    assert.ok(existsSync(join(rootDir, '.agents/skills/agentic-workflow/references', ref)));
+    assert.ok(existsSync(join(rootDir, '.claude/skills/agentic-workflow/references', ref)));
+  }
+
+  // 2. Batch tick (1,2 and --all-steps)
+  const f = fixture(t, 'ticket: local://FO:FO-Plan-Test\n', [], {
+    tracker: 'local',
+    requireReview: false,
+    verify: {
+      fast: 'node -e "console.log(\'noisy-pass-output\')"',
+      fail: 'node -e "console.error(\'boom-tail\'); process.exit(1)"',
+    },
+  });
+  writeFileSync(
+    f.plan,
+    [
+      '---',
+      'title: Plan - Feature: Batch Tick',
+      'ticket: local://FO:FO-Plan-Test',
+      'status: in-progress',
+      '---',
+      '# Batch Tick',
+      '',
+      '## Summary',
+      'Test batch tick.',
+      '',
+      '## Acceptance criteria',
+      '- [ ] AC1: First',
+      '- [ ] AC2: Second',
+      '',
+      '## Steps',
+      '- [ ] Step A',
+      '- [ ] Step B',
+      '',
+    ].join('\n'),
+  );
+  const batchCriteria = f.run('tick', ['1,2', '--verified', 'batch test ok']);
+  assert.equal(batchCriteria.status, 0, batchCriteria.stderr);
+  assert.match(batchCriteria.stdout, /Ticked 2 item\(s\).*\[1, 2\]/);
+
+  const batchSteps = f.run('tick', ['--all-steps']);
+  assert.equal(batchSteps.status, 0, batchSteps.stderr);
+  assert.match(batchSteps.stdout, /Ticked 2 item\(s\)/);
+  assert.match(batchSteps.stdout, /All criteria and steps in the plan are now completed!/);
+
+  // 3. verify --quiet suppresses noisy stdout on pass and prints tail on fail
+  const vQuietPass = f.run('verify', ['--tier', 'fast', '--quiet'], [], { omitPlan: true });
+  assert.equal(vQuietPass.status, 0, vQuietPass.stderr);
+  assert.match(vQuietPass.stdout, /✓ Verification \(fast\) passed/);
+  assert.doesNotMatch(vQuietPass.stdout, /noisy-pass-output/);
+
+  const vQuietFail = f.run('verify', ['--tier', 'fail', '--quiet'], [], { omitPlan: true });
+  assert.notEqual(vQuietFail.status, 0);
+  assert.match(vQuietFail.stderr, /boom-tail/);
+
+  // 4. pack --compact truncates large files tightly (40/150)
+  f.git('init', '-b', 'main');
+  f.git('config', 'user.name', 'Test');
+  f.git('config', 'user.email', 'test@example.invalid');
+  f.git('add', '.');
+  f.git('commit', '-m', 'init');
+  const bigLines = Array.from({ length: 80 }, (_, i) => `export const v${i} = ${i};`).join('\n');
+  writeFileSync(join(f.root, 'big.js'), `${bigLines}\n`);
+  f.git('add', 'big.js');
+  const packCompact = f.run('pack', ['--compact']);
+  assert.equal(packCompact.status, 0, packCompact.stderr);
+  assert.match(packCompact.stdout, /truncated/);
+
+  // 5. doctor --compact & stats --compact
+  const docCompact = f.run('doctor', ['--compact'], [], { omitPlan: true });
+  assert.equal(docCompact.status, 0, docCompact.stderr);
+  assert.match(docCompact.stdout, /Repo\s+Branch\s+Sync\s+Inv\s+Status/);
+
+  const statsCompact = f.run('stats', ['--compact'], [], { omitPlan: true });
+  assert.equal(statsCompact.status, 0, statsCompact.stderr);
+  assert.match(statsCompact.stdout, /Repo\s+Plans\s+Cycle\(med\)\s+Pass%\s+Escaped/);
+});
+
 
 

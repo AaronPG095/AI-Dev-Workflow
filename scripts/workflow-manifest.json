@@ -18,6 +18,12 @@
     ".claude/skills/quick-review/SKILL.md",
     ".agents/skills/agentic-workflow/SKILL.md",
     ".claude/skills/agentic-workflow/SKILL.md",
+    ".agents/skills/agentic-workflow/references/level-a.md",
+    ".agents/skills/agentic-workflow/references/level-b.md",
+    ".agents/skills/agentic-workflow/references/level-c.md",
+    ".claude/skills/agentic-workflow/references/level-a.md",
+    ".claude/skills/agentic-workflow/references/level-b.md",
+    ".claude/skills/agentic-workflow/references/level-c.md",
     ".github/pull_request_template.md"
   ],
   "prefix": [

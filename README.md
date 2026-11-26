@@ -147,7 +147,7 @@ AI-Dev-Workflow/
 │   │   └── symbols-map.mjs        # Zero-dep repo symbol outline & dependency token parser
 │   ├── ticket.mjs                 # Zero-dependency workflow & review CLI (Node 22+)
 │   ├── ticket.config.json         # Repository configuration (local mode default)
-│   ├── ticket.test.mjs            # 100 hermetic unit and integration tests (node:test)
+│   ├── ticket.test.mjs            # 101 hermetic unit and integration tests (node:test)
 │   ├── workflow-manifest.json     # Versioned distribution manifest for sync & installers
 │   ├── sync.mjs                   # Cross-platform sync and drift engine (--remote & local)
 │   ├── sync-repos.ps1             # PowerShell wrapper for multi-repo sync
@@ -202,8 +202,10 @@ node scripts/ticket.mjs switch [<plan|branch>] [--path]
 # Shell navigation alias helper:
 cd $(node scripts/ticket.mjs switch <branch> --path)
 
-# Tick checkboxes by index or substring without editing markdown files (enforces --verified or --verify-cmd on criteria; --red records failing reproduction before fixing)
+# Tick checkboxes by index, comma-separated batch (1,2,3), --all-steps, or substring without editing markdown files
 node scripts/ticket.mjs tick 1 --verified "tests pass"
+node scripts/ticket.mjs tick 1,2,3 --verified "batch checks pass"
+node scripts/ticket.mjs tick --all-steps
 node scripts/ticket.mjs tick 1 --verify-cmd "npm test" [--evidence-type test|cmd|manual|inspect]
 node scripts/ticket.mjs tick 1 --red "node --test scripts/failing.test.mjs"
 node scripts/ticket.mjs defer 2 --reason "covered in follow-up"
@@ -218,14 +220,14 @@ node scripts/ticket.mjs resume [--verify]
 node scripts/ticket.mjs overview
 
 # 4. Review, Tiered Verification & Hygiene
-# Run configured verification tiers (e.g. fast, test, full) or all tiers
-node scripts/ticket.mjs verify [--tier <name>|--all]
+# Run configured verification tiers (e.g. fast, test, full) or all tiers (--quiet prints 1-line summary on pass)
+node scripts/ticket.mjs verify [--tier <name>|--all] [--quiet]
 
 # Inspect working tree for disallowed artifacts (.tmp, test-results, coverage, *.log), oversized files, and dangling worktrees
 node scripts/ticket.mjs hygiene
 
-# Generate a 0-token review packet (includes Test Integrity check); optionally embed test results for a specific tier
-node scripts/ticket.mjs pack [--test] [--tier <name>]
+# Generate a 0-token review packet (includes Test Integrity check; --compact caps diff lines to 40/150); optionally embed test results
+node scripts/ticket.mjs pack [--test] [--tier <name>] [--compact]
 
 # Generate a structured review prompt for sub-agents or secondary models
 node scripts/ticket.mjs review --prompt
@@ -267,7 +269,7 @@ node scripts/ticket.mjs lesson "<takeaway>" [--tags <a,b>] [--plan <path>]
 node scripts/ticket.mjs recall "Notion" [--lessons] [--fleet]
 
 # Local workflow metrics (cycle time, review block/self-review rates, deferrals, retries, hunk/most-recent 14-day escaped defects)
-node scripts/ticket.mjs stats [--fleet] [--days <N>] [--all-overlaps] [--json]
+node scripts/ticket.mjs stats [--fleet] [--days <N>] [--all-overlaps] [--compact] [--json]
 
 # Safely archive completed or merged plans to docs/plans/archive/<YYYY-MM>/
 node scripts/ticket.mjs archive [--all|--merged] [--fleet] [--dry-run]
@@ -278,7 +280,7 @@ node scripts/ticket.mjs wt new [<plan>] [--name <dir>]
 node scripts/ticket.mjs wt prune [--fleet] [--all] [--dry-run]
 
 # Workspace and fleet diagnostic audit (drift, hooks, tracker tokens, worktrees, dirty state)
-node scripts/ticket.mjs doctor [--fleet]
+node scripts/ticket.mjs doctor [--fleet] [--compact]
 
 # Unified Fleet Dashboard across all repositories (branches, dirty status, active plans, review verdicts)
 node scripts/ticket.mjs fleet
