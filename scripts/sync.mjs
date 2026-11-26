@@ -9,7 +9,7 @@
 //   node scripts/sync.mjs --remote [--check] [--dry-run]
 //   node scripts/sync.mjs <repo-path> [--check] [--dry-run] [--init-prefix <PREFIX>]
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync, lstatSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, lstatSync, readdirSync, rmSync } from 'node:fs';
 import { dirname, join, resolve, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -43,6 +43,7 @@ const opts = {
   dryRun: false,
   ensureInvariants: false,
   ensureIgnore: false,
+  universal: false,
   initPrefix: '',
   remote: false,
   upstream: 'AaronPG095/AI-Dev-Workflow',
@@ -56,6 +57,7 @@ for (let i = 0; i < args.length; i++) {
   else if (a === '--dry-run' || a === '-DryRun') opts.dryRun = true;
   else if (a === '--ensure-invariants' || a === '-EnsureInvariants') opts.ensureInvariants = true;
   else if (a === '--ensure-ignore' || a === '-EnsureIgnore') opts.ensureIgnore = true;
+  else if (a === '--universal' || a === '-Universal') opts.universal = true;
   else if (a === '--remote' || a === '-Remote') opts.remote = true;
   else if (a === '--upstream' || a === '-Upstream') opts.upstream = args[++i] || opts.upstream;
   else if (a === '--branch' || a === '-Branch') opts.branch = args[++i] || opts.branch;
@@ -161,22 +163,41 @@ function disablePullRequestTrigger(text) {
   );
 }
 
-export function renderDevProcessSection({ prefix, noNewFilesUnder = ['src'], maxChangedLines = 40 }) {
+export function renderDevProcessSection({ prefix, noNewFilesUnder = ['src'], maxChangedLines = 40, universal = false }) {
   const folders = noNewFilesUnder.map(f => `\`${f}/\``).join(', ');
+  const cli = universal ? 'adw' : 'node scripts/ticket.mjs';
   return [
     '## Development process (every AI: Claude, Codex, Gemini/Antigravity, Cursor)',
     '',
     `Non-trivial changes follow these six steps. Only trivial changes with at most ${maxChangedLines} changed lines, no new files under ${folders}, and no managed workflow changes may skip them. Label those PRs \`no-plan\`.`,
     '',
     '1. **Plan.** Investigate read-only, propose a plan, wait for approval, and quote it under Notes (use `blueprint` for multi-PR initiatives).',
-    `2. **Plan doc.** Create \`docs/plans/${prefix}-Plan-<Topic>-<YYYY-MM>.plan.md\` via \`node scripts/ticket.mjs new "<Topic>"\` (one PR per plan; split if larger).`,
-    `3. **Ticket.** Run \`node scripts/ticket.mjs create <plan> --agent <Claude|Codex|Gemini|Other>\` (${prefix} prefix, To Do, Development, stable \`Dev Ticket Key\` / \`local://\`). Preserve \`devTicketKey\` on rename; never run concurrent creates.`,
-    '4. **Implement.** Branch, commit plan, run `node scripts/ticket.mjs start [<plan>]`. Use `prime`/`resume` on cold starts, `context-gatekeeper` (`run_compact` + `fetch_chunk`; `repo_map` → `symbol_outline` → `read_symbol`) for verbose output or large files, and `tick`/`defer` (never delete checkboxes). Progress stays in the plan; run `handoff` before stopping.',
-    '5. **Review.** Run `node scripts/ticket.mjs pack [<plan>] [--test]`, complete a mandatory independent review (`requireReview: true`, `allowSelfReview: false`) using `quick-review`, and stamp `review --agent <client> --reviewer-id <id> --verdict <pass|warn|block> --summary "..."`.',
-    '6. **Finish.** Run `node scripts/ticket.mjs check [<plan>]`, open/link PR (`pr` or `ship --pr <url>`), and `merge` (never mark Task Done pre-merge).',
+    `2. **Plan doc.** Create \`docs/plans/${prefix}-Plan-<Topic>-<YYYY-MM>.plan.md\` via \`${cli} new "<Topic>"\` (one PR per plan; split if larger).`,
+    `3. **Ticket.** Run \`${cli} create <plan> --agent <Claude|Codex|Gemini|Other>\` (${prefix} prefix, To Do, Development, stable \`Dev Ticket Key\` / \`local://\`). Preserve \`devTicketKey\` on rename; never run concurrent creates.`,
+    `4. **Implement.** Branch, commit plan, run \`${cli} start [<plan>]\`. Use \`prime\`/\`resume\` on cold starts, \`context-gatekeeper\` (\`run_compact\` + \`fetch_chunk\`; \`repo_map\` → \`symbol_outline\` → \`read_symbol\`) for verbose output or large files, and \`tick\`/\`defer\` (never delete checkboxes). Progress stays in the plan; run \`handoff\` before stopping.`,
+    `5. **Review.** Run \`${cli} pack [<plan>] [--test]\`, complete a mandatory independent review (\`requireReview: true\`, \`allowSelfReview: false\`) using \`quick-review\`, and stamp \`review --agent <client> --reviewer-id <id> --verdict <pass|warn|block> --summary "..."\`.`,
+    `6. **Finish.** Run \`${cli} check [<plan>]\`, open/link PR (\`pr\` or \`ship --pr <url>\`), and \`merge\` (never mark Task Done pre-merge).`,
     '',
-    'If `ticket.mjs` fails, stop and report. Detailed flags: `dev-workflow` skill & `README.md`.',
-    'Pre-push guardrail: `node scripts/ticket.mjs hook install`. Sync: `node scripts/sync.mjs --remote`.',
+    `If \`${universal ? 'adw' : 'ticket.mjs'}\` fails, stop and report. Detailed flags: \`dev-workflow\` skill & \`README.md\`.`,
+    universal
+      ? `Pre-push guardrail: \`adw hook install\`. Universal CLI: \`AI-Dev-Workflow\`.`
+      : 'Pre-push guardrail: `node scripts/ticket.mjs hook install`. Sync: `node scripts/sync.mjs --remote`.',
+  ].join('\n');
+}
+
+export function renderReusablePlanCheckWorkflow(branchesJson = '["main"]') {
+  return [
+    'name: Plan check',
+    '',
+    'on:',
+    '  pull_request:',
+    `    branches: ${branchesJson}`,
+    '    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]',
+    '',
+    'jobs:',
+    '  plan-check:',
+    '    uses: AaronPG095/AI-Dev-Workflow/.github/workflows/reusable-plan-check.yml@main',
+    '',
   ].join('\n');
 }
 
@@ -233,6 +254,7 @@ async function sync() {
     throw new Error('--bundle-only requires --check');
   const { manifest, files } = await loadBundle();
   const updates = [];
+  const removals = [];
 
   for (const rawRepo of opts.repos) {
     const repo = resolve(rawRepo);
@@ -265,6 +287,64 @@ async function sync() {
       updates.push({ repoName, path, destination, text: expected + '\n', missing: current === null });
     }
 
+    const isSelf = process.platform === 'win32'
+      ? repo.toLowerCase() === workflowRoot.toLowerCase()
+      : repo === workflowRoot;
+    const canonicalSelf = opts.bundleOnly && !opts.remote && isSelf;
+
+    if (opts.universal && !isSelf && !opts.bundleOnly) {
+      cfg.mode = 'universal';
+      if (Array.isArray(cfg.invariants?.mirrorDirs)) {
+        cfg.invariants.mirrorDirs = cfg.invariants.mirrorDirs.filter(
+          (pair) => !(Array.isArray(pair) && pair[0] === '.agents/skills' && pair[1] === '.claude/skills'),
+        );
+      }
+      compare('scripts/ticket.config.json', JSON.stringify(cfg, null, 2));
+      compare('.github/workflows/plan-check.yml', renderReusablePlanCheckWorkflow(branches));
+      for (const path of manifest.prefix) {
+        compare(path, files.get(path).replace(/\b[\w-]+-Plan-/g, () => prefix + '-Plan-'));
+      }
+      const agents = readNorm(join(repo, 'AGENTS.md')) || '';
+      compare('AGENTS.md', patchAgentsMd(agents, repoName, {
+        prefix,
+        noNewFilesUnder: cfg.noPlan?.noNewFilesUnder || ['src'],
+        maxChangedLines: cfg.noPlan?.maxChangedLines || 40,
+        universal: true,
+      }));
+      const claude = readNorm(join(repo, 'CLAUDE.md')) || '';
+      compare('CLAUDE.md', patchClaudeMd(claude));
+      for (const rel of [
+        'scripts/ticket.mjs',
+        'scripts/sync.mjs',
+        'scripts/ticket.test.mjs',
+        'scripts/adw-hook.mjs',
+        'scripts/workflow-manifest.json',
+        'scripts/lib',
+        '.agents/skills/dev-workflow',
+        '.agents/skills/quick-review',
+        '.agents/skills/agentic-workflow',
+        '.claude/skills/dev-workflow',
+        '.claude/skills/quick-review',
+        '.claude/skills/agentic-workflow',
+      ]) {
+        const full = join(repo, rel);
+        if (existsSync(full)) removals.push({ repo, repoName, rel, full });
+      }
+      const ignorePath = join(repo, '.ignore');
+      if (existsSync(ignorePath)) {
+        const lines = readFileSync(ignorePath, 'utf8')
+          .replace(/\r\n/g, '\n')
+          .split('\n')
+          .map((l) => l.trim())
+          .filter(Boolean);
+        const managedSet = new Set([MANAGED_IGNORE_HEADER, ...MANAGED_IGNORE_ENTRIES]);
+        if (lines.every((l) => managedSet.has(l))) {
+          removals.push({ repo, repoName, rel: '.ignore', full: ignorePath });
+        }
+      }
+      continue;
+    }
+
     if (!configExists) {
       compare('scripts/ticket.config.json', JSON.stringify(cfg, null, 2));
     } else if (opts.ensureInvariants && !cfg.invariants) {
@@ -272,10 +352,6 @@ async function sync() {
       compare('scripts/ticket.config.json', JSON.stringify(cfg, null, 2));
     }
     for (const path of manifest.copy) compare(path, files.get(path));
-    const isSelf = process.platform === 'win32'
-      ? repo.toLowerCase() === workflowRoot.toLowerCase()
-      : repo === workflowRoot;
-    const canonicalSelf = opts.bundleOnly && !opts.remote && isSelf;
     for (const path of manifest.prefix)
       compare(path, canonicalSelf ? files.get(path) :
         files.get(path).replace(/\b[\w-]+-Plan-/g, () => prefix + '-Plan-'));
@@ -321,9 +397,28 @@ async function sync() {
       if (!opts.dryRun) console.log('[UPDATED] ' + update.repoName + ': ' + update.path);
     }
   }
-  if (!updates.length) console.log('Workflow bundle is up to date.');
-  if (opts.check && updates.length) {
-    console.log('Detected ' + updates.length + ' drifted/missing managed files.');
+  for (const rem of removals) {
+    if (opts.check) {
+      console.log('[VENDORED] ' + rem.repoName + ': ' + rem.rel);
+    } else if (opts.dryRun) {
+      console.log('  [dry-run] remove ' + rem.full);
+    } else {
+      rmSync(rem.full, { recursive: true, force: true });
+      console.log('[REMOVED] ' + rem.repoName + ': ' + rem.rel);
+    }
+  }
+  if (!opts.check && !opts.dryRun && removals.length) {
+    const cleanedRepos = new Set(removals.map((r) => r.repo));
+    for (const r of cleanedRepos) {
+      for (const emptyRel of ['.agents/skills', '.claude/skills', '.agents', '.claude']) {
+        const d = join(r, emptyRel);
+        if (existsSync(d) && readdirSync(d).length === 0) rmSync(d, { recursive: true, force: true });
+      }
+    }
+  }
+  if (!updates.length && !removals.length) console.log('Workflow bundle is up to date.');
+  if (opts.check && (updates.length || removals.length)) {
+    console.log('Detected ' + (updates.length + removals.length) + ' drifted/missing/vendored managed files.');
     process.exitCode = 1;
   }
 }

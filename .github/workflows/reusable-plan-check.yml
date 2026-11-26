@@ -1,0 +1,47 @@
+name: Reusable Plan check
+
+on:
+  workflow_call:
+    inputs:
+      workflow-ref:
+        description: Branch or commit SHA of AI-Dev-Workflow to run
+        required: false
+        type: string
+        default: main
+
+permissions:
+  contents: read
+
+jobs:
+  plan-check:
+    name: Plan is closed out
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: repo
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/checkout@v4
+        with:
+          repository: AaronPG095/AI-Dev-Workflow
+          ref: ${{ inputs.workflow-ref }}
+          path: adw-cli
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Check changed plans
+        working-directory: repo
+        env:
+          NO_PLAN: ${{ contains(github.event.pull_request.labels.*.name, 'no-plan') && '1' || '' }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          git restore --source="$BASE_SHA" --worktree -- scripts/ticket.config.json 2>/dev/null || true
+          ADW_REPO_ROOT="$GITHUB_WORKSPACE/repo" node "$GITHUB_WORKSPACE/adw-cli/scripts/ticket.mjs" ci-check --base "$BASE_SHA" --head "$HEAD_SHA"
+          git restore --source=HEAD --worktree -- scripts/ticket.config.json 2>/dev/null || true

@@ -374,6 +374,10 @@ When developing locally with sibling repositories in the same parent folder:
 .\scripts\sync-repos.ps1 -AllKnown
 node scripts/sync.mjs --all-known [--ensure-invariants] [--ensure-ignore]
 
+# Or switch to Universal (`adw`) Mode (install once globally, remove per-repo vendored copies)
+node scripts/install-global.mjs [--check|--uninstall]
+node scripts/sync.mjs --all-known --universal
+
 # Bootstrap a brand-new repository with starter config
 .\scripts\sync-repos.ps1 C:\path\to\my-repo -InitPrefix MYP
 ```

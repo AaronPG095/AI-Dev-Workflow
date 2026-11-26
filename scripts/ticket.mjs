@@ -71,10 +71,35 @@ import {
 } from './lib/symbols-map.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const repoRoot = resolve(here, '..');
-const config = JSON.parse(
-  readFileSync(join(here, 'ticket.config.json'), 'utf8'),
-);
+const workflowRoot = resolve(here, '..');
+function resolveRepoRoot() {
+  if (process.env.ADW_REPO_ROOT) return resolve(process.env.ADW_REPO_ROOT);
+  if (process.env.ADW_GLOBAL === '1') {
+    let candidate = process.cwd();
+    try {
+      const top = execFileSync('git', ['rev-parse', '--show-toplevel'], {
+        cwd: candidate,
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+      }).trim();
+      if (top) candidate = resolve(top);
+    } catch {}
+    if (!existsSync(join(candidate, 'scripts', 'ticket.config.json'))) {
+      console.error(
+        `ticket: missing scripts/ticket.config.json in ${candidate}. Run inside a configured repo or set ADW_REPO_ROOT.`,
+      );
+      process.exit(1);
+    }
+    return candidate;
+  }
+  return workflowRoot;
+}
+const repoRoot = resolveRepoRoot();
+const configPath =
+  process.env.ADW_REPO_ROOT || process.env.ADW_GLOBAL === '1'
+    ? join(repoRoot, 'scripts', 'ticket.config.json')
+    : join(here, 'ticket.config.json');
+const config = JSON.parse(readFileSync(configPath, 'utf8'));
 const NOTION_VERSION = '2025-09-03';
 const NOTION_TEXT_LIMIT = 1990;
 if (config.tracker !== undefined && !['local', 'notion'].includes(config.tracker))
@@ -1612,9 +1637,16 @@ function formatFilteredDiff(
 }
 
 function getKnownRepoDirs() {
-  const parentDir = dirname(repoRoot);
-  const candidateDirs = [];
-  const knownNames = config.knownRepos || [
+  let knownNames = config.knownRepos;
+  let parentDir = dirname(repoRoot);
+  if (!knownNames) {
+    try {
+      const globalCfg = JSON.parse(readFileSync(join(here, 'ticket.config.json'), 'utf8'));
+      knownNames = globalCfg.knownRepos;
+      parentDir = dirname(workflowRoot);
+    } catch {}
+  }
+  knownNames = knownNames || [
     'FluentOverlay',
     'Fluent-Studio-Website',
     'FluentTimer',
@@ -1623,6 +1655,7 @@ function getKnownRepoDirs() {
     'AI-Cortex',
     'AI-Dev-Workflow',
   ];
+  const candidateDirs = [];
   for (const name of knownNames) {
     const p = join(parentDir, name);
     if (existsSync(p) && !candidateDirs.includes(p)) candidateDirs.push(p);
@@ -5347,19 +5380,37 @@ const commands = {
         '  done',
         'done',
         '',
-        'if [ -f "scripts/ticket.mjs" ]; then',
-        '  node scripts/ticket.mjs check >/dev/null 2>&1',
-        '  if [ $? -ne 0 ]; then',
-        '    echo "Note: Active plan check did not pass yet. CI will enforce plan completion on PR."',
-        '  fi',
-        '  if [ -n "$pushed_head" ]; then',
-        '    node scripts/ticket.mjs verify --pre-push --pushed-head "$pushed_head"',
-        '    rc=$?',
-        '    if [ $rc -ne 0 ]; then',
-        '      exit $rc',
-        '    fi',
-        '  fi',
-        'fi',
+        ...(config.mode === 'universal'
+          ? [
+              'if command -v adw >/dev/null 2>&1; then',
+              '  adw check >/dev/null 2>&1',
+              '  if [ $? -ne 0 ]; then',
+              '    echo "Note: Active plan check did not pass yet. CI will enforce plan completion on PR."',
+              '  fi',
+              '  if [ -n "$pushed_head" ]; then',
+              '    adw verify --pre-push --pushed-head "$pushed_head"',
+              '    rc=$?',
+              '    if [ $rc -ne 0 ]; then',
+              '      exit $rc',
+              '    fi',
+              '  fi',
+              'fi',
+            ]
+          : [
+              'if [ -f "scripts/ticket.mjs" ]; then',
+              '  node scripts/ticket.mjs check >/dev/null 2>&1',
+              '  if [ $? -ne 0 ]; then',
+              '    echo "Note: Active plan check did not pass yet. CI will enforce plan completion on PR."',
+              '  fi',
+              '  if [ -n "$pushed_head" ]; then',
+              '    node scripts/ticket.mjs verify --pre-push --pushed-head "$pushed_head"',
+              '    rc=$?',
+              '    if [ $rc -ne 0 ]; then',
+              '      exit $rc',
+              '    fi',
+              '  fi',
+              'fi',
+            ]),
         '',
         'exit 0',
       ].join('\n');
@@ -6033,11 +6084,25 @@ const commands = {
         !process.env.NOTION_TOKEN && !readEnvToken(join(dir, '.env'))
       );
 
-      const syncCheck = spawnSync(process.execPath, [
-        join(here, 'sync.mjs'), dir, '--check', '--bundle-only',
-      ], { cwd: repoRoot, encoding: 'utf8', timeout: 30_000 });
-      const syncDrift = syncCheck.status === 0 ? 'synced to local bundle' :
-        syncCheck.status === 1 ? 'drift detected' : 'incomplete (run sync --check)';
+      const isUniversalRepo = repoCfg.mode === 'universal';
+      let syncStatus = 0;
+      let syncDrift = 'synced to local bundle';
+      if (isUniversalRepo) {
+        const wfPath = join(dir, '.github', 'workflows', 'plan-check.yml');
+        const hasCaller =
+          existsSync(wfPath) && /reusable-plan-check\.yml/.test(readFileSync(wfPath, 'utf8'));
+        syncStatus = hasCaller ? 0 : 1;
+        syncDrift = hasCaller
+          ? 'universal (reusable CI caller)'
+          : 'missing reusable plan-check.yml caller';
+      } else {
+        const syncCheck = spawnSync(process.execPath, [
+          join(here, 'sync.mjs'), dir, '--check', '--bundle-only',
+        ], { cwd: repoRoot, encoding: 'utf8', timeout: 30_000 });
+        syncStatus = syncCheck.status;
+        syncDrift = syncCheck.status === 0 ? 'synced to local bundle' :
+          syncCheck.status === 1 ? 'drift detected' : 'incomplete (run sync --check)';
+      }
 
       const inv = runInvariants(repoCfg, dir);
       const protectedList = repoCfg.protectedBranches || ['main', 'master', 'develop'];
@@ -6053,7 +6118,9 @@ const commands = {
         compactRows.push({
           repo: name,
           branch,
-          sync: syncCheck.status === 0 ? 'synced' : syncCheck.status === 1 ? 'DRIFT' : 'ERR',
+          sync: isUniversalRepo
+            ? syncStatus === 0 ? 'universal' : 'DRIFT'
+            : syncStatus === 0 ? 'synced' : syncStatus === 1 ? 'DRIFT' : 'ERR',
           inv: invShort,
           warn: warns.slice(0, 48),
         });
