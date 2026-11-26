@@ -5467,5 +5467,67 @@ test('L1: quick-review --compact, sync --ensure-ignore, and merge --archive', as
   assert.ok(!existsSync(f.plan));
 });
 
+test('M1: universal adw CLI (ADW_REPO_ROOT/ADW_GLOBAL), doctor universal mode, and sync --universal migration', async (t) => {
+  const rootDir = dirname(scripts);
+  const targetDir = mkdtempSync(join(tmpdir(), 'adw-universal-'));
+  t.after(() => rmSync(targetDir, { recursive: true, force: true }));
+
+  mkdirSync(join(targetDir, 'scripts', 'lib'), { recursive: true });
+  mkdirSync(join(targetDir, '.agents', 'skills', 'dev-workflow'), { recursive: true });
+  mkdirSync(join(targetDir, '.agents', 'skills', 'custom-skill'), { recursive: true });
+  mkdirSync(join(targetDir, '.claude', 'skills', 'quick-review'), { recursive: true });
+  writeFileSync(
+    join(targetDir, 'scripts', 'ticket.config.json'),
+    JSON.stringify(
+      {
+        prefix: 'UNI',
+        tracker: 'local',
+        protectedBranches: ['main'],
+        invariants: { mirrorDirs: [['.agents/skills', '.claude/skills']] },
+      },
+      null,
+      2,
+    ),
+  );
+  writeFileSync(join(targetDir, 'scripts', 'ticket.mjs'), '// vendored\n');
+  writeFileSync(join(targetDir, 'scripts', 'lib', 'dummy.mjs'), '// vendored lib\n');
+  writeFileSync(join(targetDir, '.agents', 'skills', 'dev-workflow', 'SKILL.md'), '# vendored\n');
+  writeFileSync(join(targetDir, '.agents', 'skills', 'custom-skill', 'SKILL.md'), '# custom\n');
+  writeFileSync(join(targetDir, '.claude', 'skills', 'quick-review', 'SKILL.md'), '# vendored\n');
+
+  const syncRes = spawnSync(
+    process.execPath,
+    [join(rootDir, 'scripts', 'sync.mjs'), targetDir, '--universal'],
+    { cwd: rootDir, encoding: 'utf8' },
+  );
+  assert.equal(syncRes.status, 0, syncRes.stderr || syncRes.stdout);
+
+  const cfgAfter = JSON.parse(readFileSync(join(targetDir, 'scripts', 'ticket.config.json'), 'utf8'));
+  assert.equal(cfgAfter.mode, 'universal');
+  assert.deepEqual(cfgAfter.invariants.mirrorDirs, []);
+  assert.ok(!existsSync(join(targetDir, 'scripts', 'ticket.mjs')));
+  assert.ok(!existsSync(join(targetDir, 'scripts', 'lib')));
+  assert.ok(!existsSync(join(targetDir, '.agents', 'skills', 'dev-workflow')));
+  assert.ok(!existsSync(join(targetDir, '.claude', 'skills', 'quick-review')));
+  assert.ok(existsSync(join(targetDir, '.agents', 'skills', 'custom-skill', 'SKILL.md')));
+
+  const wfText = readFileSync(join(targetDir, '.github', 'workflows', 'plan-check.yml'), 'utf8');
+  assert.match(wfText, /reusable-plan-check\.yml@main/);
+  const agentsText = readFileSync(join(targetDir, 'AGENTS.md'), 'utf8');
+  assert.match(agentsText, /adw create <plan>/);
+
+  const adwDoc = spawnSync(
+    process.execPath,
+    [join(rootDir, 'scripts', 'adw.mjs'), 'doctor', '--compact'],
+    {
+      cwd: targetDir,
+      env: { ...process.env, ADW_REPO_ROOT: targetDir },
+      encoding: 'utf8',
+    },
+  );
+  assert.equal(adwDoc.status, 0, adwDoc.stderr || adwDoc.stdout);
+  assert.match(adwDoc.stdout, /universal/);
+});
+
 
 

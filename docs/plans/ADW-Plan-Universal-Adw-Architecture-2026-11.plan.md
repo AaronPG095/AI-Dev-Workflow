@@ -1,7 +1,7 @@
 ---
 title: Plan - Feature: Universal Adw Architecture
 ticket: local://ADW:ADW-Plan-Universal-Adw-Architecture-2026-11
-status: planned
+status: in-progress
 priority: 
 state: 
 due: 
@@ -11,6 +11,14 @@ impact:
 dependsOn: 
 devTicketKey: ADW:ADW-Plan-Universal-Adw-Architecture-2026-11
 agent: Gemini
+branch: feat/universal-adw-architecture
+worktree: AI-Dev-Workflow
+startedAt: 2026-11-26
+reviewedBy: Other
+reviewVerdict: pass
+reviewSession: independent-plan-m-reviewer
+baseBranch: main
+reviewFingerprint: ac7b2315df235fe3e5d072a2655875eea67324b3d55ae20141f978869aad10cd
 ---
 # Universal Adw Architecture
 
@@ -30,19 +38,19 @@ None
 
 ## Acceptance criteria
 
-- [ ] AC1: Zero-dependency `package.json` (`"bin": { "adw": "./scripts/adw.mjs" }`), `scripts/adw.mjs` (`ADW_GLOBAL=1`), and `ADW_REPO_ROOT`/`ADW_GLOBAL` resolution in `scripts/ticket.mjs` allow `adw <cmd>` to run against any git repository from `process.cwd()` while keeping `node scripts/ticket.mjs` 100% backwards-compatible.
-- [ ] AC2: `scripts/install-global.mjs` (with `--check` and `--uninstall`) idempotently links `adw` on `PATH` via `npm link` and symlinks/junctions `dev-workflow`, `quick-review`, and `agentic-workflow` into `~/.gemini/config/skills/`, `~/.claude/skills/`, and `~/.agents/skills/` without touching other user skills.
-- [ ] AC3: `.github/workflows/reusable-plan-check.yml` and `.github/workflows/reusable-ticket-done.yml` provide `workflow_call` CI gates that check out the caller repo and `AI-Dev-Workflow`, restore `scripts/ticket.config.json` from `BASE_SHA`, and execute `ci-check` / `ci-done` with `ADW_REPO_ROOT`.
-- [ ] AC4: `scripts/ticket.mjs` (`doctor`, `hook`, `getKnownRepoDirs`) and `scripts/sync.mjs --universal` support `"mode": "universal"` — validating the reusable caller in `doctor`, emitting `adw` in `hook` and `AGENTS.md`, setting `mode: "universal"`, removing vendored workflow scripts/skills while preserving repo-custom skills, and updating `README.md`.
-- [ ] AC5: Unit test `M1` in `scripts/ticket.test.mjs` covers `ADW_REPO_ROOT` / `ADW_GLOBAL`, `doctor` universal mode, and `sync.mjs --universal` migration (preserving repo-custom skills); full suite passes (`103/103`).
+- [x] AC1: Zero-dependency `package.json` (`"bin": { "adw": "./scripts/adw.mjs" }`), `scripts/adw.mjs` (`ADW_GLOBAL=1`), and `ADW_REPO_ROOT`/`ADW_GLOBAL` resolution in `scripts/ticket.mjs` allow `adw <cmd>` to run against any git repository from `process.cwd()` while keeping `node scripts/ticket.mjs` 100% backwards-compatible. verified(test): M1 + full test suite (103/103), doctor --compact, sync --check --bundle-only, and skill mirror check passed
+- [x] AC2: `scripts/install-global.mjs` (with `--check` and `--uninstall`) idempotently links `adw` on `PATH` via `npm link` and symlinks/junctions `dev-workflow`, `quick-review`, and `agentic-workflow` into `~/.gemini/config/skills/`, `~/.claude/skills/`, and `~/.agents/skills/` without touching other user skills. verified(test): M1 + full test suite (103/103), doctor --compact, sync --check --bundle-only, and skill mirror check passed
+- [x] AC3: `.github/workflows/reusable-plan-check.yml` and `.github/workflows/reusable-ticket-done.yml` provide `workflow_call` CI gates that check out the caller repo and `AI-Dev-Workflow`, restore `scripts/ticket.config.json` from `BASE_SHA`, and execute `ci-check` / `ci-done` with `ADW_REPO_ROOT`. verified(test): M1 + full test suite (103/103), doctor --compact, sync --check --bundle-only, and skill mirror check passed
+- [x] AC4: `scripts/ticket.mjs` (`doctor`, `hook`, `getKnownRepoDirs`) and `scripts/sync.mjs --universal` support `"mode": "universal"` — validating the reusable caller in `doctor`, emitting `adw` in `hook` and `AGENTS.md`, setting `mode: "universal"`, removing vendored workflow scripts/skills while preserving repo-custom skills, and updating `README.md`. verified(test): M1 + full test suite (103/103), doctor --compact, sync --check --bundle-only, and skill mirror check passed
+- [x] AC5: Unit test `M1` in `scripts/ticket.test.mjs` covers `ADW_REPO_ROOT` / `ADW_GLOBAL`, `doctor` universal mode, and `sync.mjs --universal` migration (preserving repo-custom skills); full suite passes (`103/103`). verified(test): M1 + full test suite (103/103), doctor --compact, sync --check --bundle-only, and skill mirror check passed
 
 ## Steps
 
-- [ ] Add `package.json`, `scripts/adw.mjs`, and `ADW_REPO_ROOT` / `ADW_GLOBAL` / universal-mode support in `scripts/ticket.mjs` (AC1, AC4)
-- [ ] Add `scripts/install-global.mjs` with `--check` and `--uninstall` (AC2)
-- [ ] Add `.github/workflows/reusable-plan-check.yml` and `.github/workflows/reusable-ticket-done.yml` (AC3)
-- [ ] Add `--universal` migration mode and `renderReusablePlanCheckWorkflow()` in `scripts/sync.mjs` (AC4)
-- [ ] Update `README.md`, add `M1` test in `scripts/ticket.test.mjs`, and verify `103/103` tests, `doctor --compact`, `sync --check --bundle-only`, and skill mirrors (AC5)
+- [x] Add `package.json`, `scripts/adw.mjs`, and `ADW_REPO_ROOT` / `ADW_GLOBAL` / universal-mode support in `scripts/ticket.mjs` (AC1, AC4)
+- [x] Add `scripts/install-global.mjs` with `--check` and `--uninstall` (AC2)
+- [x] Add `.github/workflows/reusable-plan-check.yml` and `.github/workflows/reusable-ticket-done.yml` (AC3)
+- [x] Add `--universal` migration mode and `renderReusablePlanCheckWorkflow()` in `scripts/sync.mjs` (AC4)
+- [x] Update `README.md`, add `M1` test in `scripts/ticket.test.mjs`, and verify `103/103` tests, `doctor --compact`, `sync --check --bundle-only`, and skill mirrors (AC5)
 
 ## Risks
 
@@ -62,3 +70,4 @@ None
 ## Progress log
 
 <!-- One line per session/review, added with `ticket.mjs log` or `ticket.mjs review` -->
+- 2026-11-26 09:57 UTC, Other (review: pass [standards: pass, spec: pass]): Plan M AC1-AC5 verified: adw global CLI, install-global.mjs, reusable CI workflows with BASE_SHA config restore, universal doctor/hook/sync --universal (preserving custom skills), skills parity clean, and 103/103 tests pass. [reviewer: independent-plan-m-reviewer]
