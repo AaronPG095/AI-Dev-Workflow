@@ -31,13 +31,13 @@ None
 
 ## Acceptance criteria
 
-- [ ] AC1: `Context-Gatekeeper-MCP` is listed in `knownRepos` in `scripts/ticket.config.json`.
-- [ ] AC2: `node --check scripts/ticket.mjs` and `node --test scripts/ticket.test.mjs` pass cleanly, and `node scripts/ticket.mjs overview` includes `Context-Gatekeeper-MCP`.
+- [x] AC1: `Context-Gatekeeper-MCP` is listed in `knownRepos` in `scripts/ticket.config.json`. verified: Context-Gatekeeper-MCP is in knownRepos in scripts/ticket.config.json
+- [x] AC2: `node --check scripts/ticket.mjs` and `node --test scripts/ticket.test.mjs` pass cleanly, and `node scripts/ticket.mjs overview` includes `Context-Gatekeeper-MCP`. verified: node --check scripts/ticket.mjs, node --test scripts/ticket.test.mjs (100/100 passed), and ticket.mjs overview includes Context-Gatekeeper-MCP
 
 ## Steps
 
-- [ ] Add `"Context-Gatekeeper-MCP"` to `knownRepos` in `scripts/ticket.config.json`. (AC1)
-- [ ] Verify `ticket.mjs` tests and fleet `overview` output. (AC2)
+- [x] Add `"Context-Gatekeeper-MCP"` to `knownRepos` in `scripts/ticket.config.json`. (AC1) verified: Added Context-Gatekeeper-MCP to knownRepos in scripts/ticket.config.json
+- [x] Verify `ticket.mjs` tests and fleet `overview` output. (AC2) verified: Verified 100/100 tests pass and overview lists Context-Gatekeeper-MCP
 - [ ] Run `pack`, complete independent sub-agent review, and ship PR #55. (AC2)
 
 ## Risks
