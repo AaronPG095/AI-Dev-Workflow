@@ -207,6 +207,7 @@ const BOOLEAN_FLAGS = new Set([
   '--all-steps',
   '--quiet',
   '--compact',
+  '--archive',
 ]);
 for (let i = 0; i < rest.length; i++) {
   const a = rest[i];
@@ -4911,6 +4912,12 @@ const commands = {
       if (hasTicket(plan.meta.ticket)) {
         console.log(`Dry run: close ticket ${plan.meta.ticket}`);
       }
+      if (opts.archive) {
+        const month = plan.meta.completedAt?.slice(0, 7) || today().slice(0, 7);
+        console.log(
+          `Dry run: archive ${plan.rel} -> ${(config.plansDir || 'docs/plans')}/archive/${month}/${basename(plan.full)}`,
+        );
+      }
       return;
     }
 
@@ -4932,6 +4939,19 @@ const commands = {
       console.log(`Ticket set to Done: ${plan.meta.ticket}`);
     }
     autoCaptureBugLesson(plan);
+    if (opts.archive && existsSync(plan.full)) {
+      const month = plan.meta.completedAt?.slice(0, 7) || today().slice(0, 7);
+      const archiveDir = join(repoRoot, config.plansDir || 'docs/plans', 'archive', month);
+      const destFile = join(archiveDir, basename(plan.full));
+      const relDest = relative(repoRoot, destFile).replace(/\\/g, '/');
+      mkdirSync(archiveDir, { recursive: true });
+      try {
+        git(['mv', plan.rel, relDest]);
+      } catch {
+        renameSync(plan.full, destFile);
+      }
+      console.log(`Archived: ${plan.rel} -> ${relDest}`);
+    }
   },
 
   async 'ci-check'() {

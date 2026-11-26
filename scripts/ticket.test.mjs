@@ -5407,5 +5407,65 @@ test('K1: lean AGENTS.md budget, progressive agentic-workflow refs, batch tick, 
   assert.match(statsCompact.stdout, /Repo\s+Plans\s+Cycle\(med\)\s+Pass%\s+Escaped/);
 });
 
+test('L1: quick-review --compact, sync --ensure-ignore, and merge --archive', async (t) => {
+  // 1. patchIgnoreFile idempotency and preservation of existing entries
+  const { patchIgnoreFile } = await import('./sync.mjs');
+  const first = patchIgnoreFile('custom.log\n');
+  assert.match(first, /custom\.log/);
+  assert.match(first, /# managed by AI-Dev-Workflow/);
+  assert.match(first, /\.agents\/skills\//);
+  assert.match(first, /scripts\/ticket\.mjs/);
+  assert.equal(patchIgnoreFile(first), first);
+
+  // 2. sync.mjs --check --bundle-only --ensure-ignore skips workflowRoot (exits 0 without flagging .ignore)
+  const rootDir = dirname(scripts);
+  const selfCheck = spawnSync(
+    process.execPath,
+    [join(rootDir, 'scripts/sync.mjs'), rootDir, '--check', '--bundle-only', '--ensure-ignore'],
+    { cwd: rootDir, encoding: 'utf8' },
+  );
+  assert.equal(selfCheck.status, 0, selfCheck.stderr || selfCheck.stdout);
+  assert.doesNotMatch(selfCheck.stdout, /\.ignore/);
+
+  // 3. sync.mjs <tempRepo> --ensure-ignore writes .ignore and leaves .gitignore untouched
+  const targetDir = mkdtempSync(join(tmpdir(), 'adw-sync-ignore-'));
+  t.after(() => rmSync(targetDir, { recursive: true, force: true }));
+  mkdirSync(join(targetDir, 'scripts'), { recursive: true });
+  writeFileSync(
+    join(targetDir, 'scripts/ticket.config.json'),
+    JSON.stringify({ tracker: 'local', projectPrefix: 'IG', defaultBranch: 'main' }, null, 2),
+  );
+  writeFileSync(join(targetDir, '.gitignore'), 'node_modules/\n');
+  const syncRes = spawnSync(
+    process.execPath,
+    [join(rootDir, 'scripts/sync.mjs'), targetDir, '--ensure-ignore'],
+    { cwd: rootDir, encoding: 'utf8' },
+  );
+  assert.equal(syncRes.status, 0, syncRes.stderr || syncRes.stdout);
+  const targetIgnore = readFileSync(join(targetDir, '.ignore'), 'utf8');
+  assert.match(targetIgnore, /# managed by AI-Dev-Workflow/);
+  assert.match(targetIgnore, /\.agents\/skills\//);
+  assert.equal(readFileSync(join(targetDir, '.gitignore'), 'utf8'), 'node_modules/\n');
+
+  // 4. merge --archive (--dry-run and actual move)
+  const f = fixture(t, `ticket: local://FO:FO-Plan-Test\npr: ${repository.url}/pull/1\n`, [], {
+    tracker: 'local',
+    requireReview: false,
+  });
+  const mergeDry = f.run('merge', ['--archive', '--dry-run'], undefined, {
+    github: doneGitHubFixture(readFileSync(f.plan, 'utf8'), { merged: true, state: 'closed' }),
+  });
+  assert.equal(mergeDry.status, 0, mergeDry.stderr);
+  assert.match(mergeDry.stdout, /Dry run: archive .*docs\/plans\/archive\/\d{4}-\d{2}\//);
+  assert.ok(existsSync(f.plan));
+
+  const mergeReal = f.run('merge', ['--archive'], undefined, {
+    github: doneGitHubFixture(readFileSync(f.plan, 'utf8'), { merged: true, state: 'closed' }),
+  });
+  assert.equal(mergeReal.status, 0, mergeReal.stderr);
+  assert.match(mergeReal.stdout, /Archived: .* -> docs\/plans\/archive\/\d{4}-\d{2}\//);
+  assert.ok(!existsSync(f.plan));
+});
+
 
 
