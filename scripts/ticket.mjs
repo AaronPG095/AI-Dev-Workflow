@@ -148,6 +148,12 @@ const WORKFLOW_FILES = new Set([
   '.claude/skills/dev-workflow/SKILL.md',
   '.agents/skills/agentic-workflow/SKILL.md',
   '.claude/skills/agentic-workflow/SKILL.md',
+  '.agents/skills/agentic-workflow/references/level-a.md',
+  '.agents/skills/agentic-workflow/references/level-b.md',
+  '.agents/skills/agentic-workflow/references/level-c.md',
+  '.claude/skills/agentic-workflow/references/level-a.md',
+  '.claude/skills/agentic-workflow/references/level-b.md',
+  '.claude/skills/agentic-workflow/references/level-c.md',
   '.github/pull_request_template.md',
   '.github/workflows/plan-check.yml',
   '.github/workflows/ticket-done.yml',
@@ -198,6 +204,9 @@ const BOOLEAN_FLAGS = new Set([
   '--keep-branch',
   '--claim',
   '--release',
+  '--all-steps',
+  '--quiet',
+  '--compact',
 ]);
 for (let i = 0; i < rest.length; i++) {
   const a = rest[i];
@@ -3033,6 +3042,23 @@ function pruneLinkedWorktrees({ dirs, dryRun = false, filter }) {
   return { totalPruned, candidates };
 }
 
+function printTable(columns, rows) {
+  const widths = Object.fromEntries(
+    columns.map((c) => [c.key, Math.max(c.label.length, ...rows.map((r) => String(r[c.key]).length))]),
+  );
+  const formatRow = (obj, isHeader = false) =>
+    columns
+      .map((c) => {
+        const val = String(isHeader ? c.label : obj[c.key]);
+        return c.align === 'right' ? val.padStart(widths[c.key]) : val.padEnd(widths[c.key]);
+      })
+      .join('  ');
+  const headerLine = formatRow(null, true);
+  console.log(headerLine);
+  console.log('-'.repeat(headerLine.length));
+  for (const r of rows) console.log(formatRow(r));
+}
+
 const commands = {
   async new() {
     const rawTopic = opts.files[0] || opts.topic || '';
@@ -3422,15 +3448,107 @@ const commands = {
 
   async tick() {
     const { plan, target } = resolvePlanAndTarget();
-    if (!target) {
+    if (!target && !opts.allSteps) {
       fail(
-        'usage: node scripts/ticket.mjs tick [<plan>] <index|substring> [--verified "<evidence>"]',
+        'usage: node scripts/ticket.mjs tick [<plan>] <index|i1,i2,...|substring|--all-steps> [--verified "<evidence>"]',
       );
     }
     const { lines, items } = findCheckboxes(plan.body);
     const openItems = items.filter((it) => it.openIndex !== null);
     if (!openItems.length) {
       fail(`all checkboxes in ${plan.rel} are already completed or deferred.`);
+    }
+
+    const isBatchList = !opts.allSteps && /^\d+(?:,\d+)+$/.test(target.trim());
+    if (opts.allSteps || isBatchList) {
+      if (opts.red) fail('cannot combine batch tick with --red');
+      let targets = [];
+      if (opts.allSteps) {
+        targets = openItems.filter((it) => it.section.toLowerCase() === 'steps');
+        if (!targets.length) {
+          fail(`no open items in "## Steps" in ${plan.rel}`);
+        }
+      } else {
+        const indices = [
+          ...new Set(
+            target
+              .trim()
+              .split(',')
+              .map((n) => parseInt(n, 10)),
+          ),
+        ];
+        for (const idx of indices) {
+          const found = openItems.find((it) => it.openIndex === idx);
+          if (!found) {
+            fail(
+              `open item [${idx}] not found in ${plan.rel} (available open items: 1..${openItems.length})`,
+            );
+          }
+          targets.push(found);
+        }
+      }
+
+      let verifiedText = (opts.verified || opts.v || '').trim();
+      const evidenceType = (opts.evidenceType || '').toLowerCase().trim();
+      if (evidenceType && !EVIDENCE_TYPES.has(evidenceType)) {
+        fail(
+          `--evidence-type must be one of: ${[...EVIDENCE_TYPES].join(', ')}`,
+        );
+      }
+      if (opts.verifyCmd) {
+        const cmdRes = runVerifyCmd(opts.verifyCmd, { captureOutput: true });
+        if (!cmdRes.ok) {
+          fail(`verify command failed (exit != 0); batch tick aborted: ${opts.verifyCmd}`);
+        }
+        const shortSha =
+          git(['rev-parse', '--short', 'HEAD'], { allowFail: true }) ||
+          'working-tree';
+        const note = verifiedText ? ` (${verifiedText})` : '';
+        verifiedText = `\`${opts.verifyCmd}\` exit 0 @${shortSha}${note}`;
+      }
+      const needsEvidence = targets.some(
+        (m) =>
+          m.section.toLowerCase() === 'acceptance criteria' &&
+          !verifiedText &&
+          !VERIFIED_RE.test(m.text),
+      );
+      if (needsEvidence) {
+        fail(
+          'ticking acceptance criteria requires verified evidence. Pass --verified "<how it was checked and result>" or --verify-cmd "<cmd>".',
+        );
+      }
+
+      const prefix = opts.verifyCmd
+        ? `verified(${evidenceType || 'cmd'})`
+        : evidenceType
+          ? `verified(${evidenceType})`
+          : 'verified';
+      for (const m of targets) {
+        let updatedText = m.text;
+        if (verifiedText) {
+          if (VERIFIED_RE.test(updatedText)) {
+            updatedText = updatedText.replace(
+              /verified(?:\((?:test|cmd|manual|inspect)\))?:.*$/i,
+              `${prefix}: ${verifiedText}`,
+            );
+          } else {
+            updatedText = `${updatedText} ${prefix}: ${verifiedText}`;
+          }
+        }
+        lines[m.lineIndex] = `${m.prefix}x${m.delim}${updatedText}`;
+      }
+      plan.body = lines.join('\n');
+      writePlan(plan);
+      console.log(
+        `Ticked ${targets.length} item(s) in ${plan.rel}: [${targets.map((m) => m.openIndex).join(', ')}]`,
+      );
+      const afterItems = findCheckboxes(plan.body).items.filter(
+        (it) => it.openIndex !== null,
+      );
+      if (!afterItems.length) {
+        console.log('All criteria and steps in the plan are now completed!');
+      }
+      return;
     }
 
     let match = null;
@@ -4212,9 +4330,11 @@ const commands = {
     const plan = onePlan();
     const base = resolveDiffBase(repoRoot, plan);
     const maxFileLines = Number(
-      opts['max-file-lines'] || config.packMaxFileLines || 120,
+      opts['max-file-lines'] || (opts.compact ? 40 : config.packMaxFileLines || 120),
     );
-    const maxLines = Number(opts['max-lines'] || config.packMaxLines || 400);
+    const maxLines = Number(
+      opts['max-lines'] || (opts.compact ? 150 : config.packMaxLines || 400),
+    );
     const ignorePatterns = [
       ...DEFAULT_PACK_IGNORE,
       ...(config.packIgnore || []),
@@ -5826,14 +5946,19 @@ const commands = {
   async doctor() {
     const dirs = opts.fleet ? getKnownRepoDirs() : [repoRoot];
     console.log(
-      `=== AI-Dev-Workflow Doctor (${dirs.length} repo${dirs.length === 1 ? '' : 's'}) ===\n`,
+      `=== AI-Dev-Workflow Doctor (${dirs.length} repo${dirs.length === 1 ? '' : 's'}) ===${opts.compact ? '' : '\n'}`,
     );
+    const compactRows = [];
 
     for (const dir of dirs) {
       const name = basename(dir);
       const isGit = existsSync(join(dir, '.git'));
       if (!isGit) {
-        console.log(`[${name}] NOT A GIT REPOSITORY\n`);
+        if (opts.compact) {
+          compactRows.push({ repo: name, branch: '-', sync: 'no-git', inv: '-', warn: 'not a git repo' });
+        } else {
+          console.log(`[${name}] NOT A GIT REPOSITORY\n`);
+        }
         continue;
       }
 
@@ -5894,12 +6019,31 @@ const commands = {
       const syncDrift = syncCheck.status === 0 ? 'synced to local bundle' :
         syncCheck.status === 1 ? 'drift detected' : 'incomplete (run sync --check)';
 
+      const inv = runInvariants(repoCfg, dir);
+      const protectedList = repoCfg.protectedBranches || ['main', 'master', 'develop'];
+      const dirtyProtected = protectedList.includes(branch) && dirty > 0;
+      if (opts.compact) {
+        const invShort = inv.total ? (inv.passed ? `${inv.total}/${inv.total}` : 'FAIL') : 'none';
+        const warns = [
+          dirtyProtected ? `dirty ${branch}(${dirty})` : dirty > 0 ? `dirty(${dirty})` : '',
+          !inv.passed ? inv.failures[0] : '',
+        ]
+          .filter(Boolean)
+          .join('; ') || 'ok';
+        compactRows.push({
+          repo: name,
+          branch,
+          sync: syncCheck.status === 0 ? 'synced' : syncCheck.status === 1 ? 'DRIFT' : 'ERR',
+          inv: invShort,
+          warn: warns.slice(0, 48),
+        });
+        continue;
+      }
       console.log(`Repo:      ${name} (${dir})`);
       console.log(
         `Branch:    ${branch} (${dirty === 0 ? 'clean' : `${dirty} uncommitted file(s)`})`,
       );
-      const protectedList = repoCfg.protectedBranches || ['main', 'master', 'develop'];
-      if (protectedList.includes(branch) && dirty > 0) {
+      if (dirtyProtected) {
         console.log(
           `Warning:   Protected branch "${branch}" has ${dirty} uncommitted file(s)`,
         );
@@ -5916,7 +6060,6 @@ const commands = {
       console.log(
         `Review:    ${isRequireReview(repoCfg) ? (isAllowSelfReview(repoCfg) ? 'required (self-review override allowed)' : 'required (independent sub-agent / second model; self-review blocked)') : 'DISABLED (requireReview: false)'}`,
       );
-      const inv = runInvariants(repoCfg, dir);
       console.log(
         `Invariants:${inv.total ? (inv.passed ? ` ${inv.total}/${inv.total} passed` : ` FAILED (${inv.failures[0]})`) : ' none configured'}`,
       );
@@ -5938,6 +6081,18 @@ const commands = {
         console.log(`Verify:    ${tierEntries[0][1]}`);
       }
       console.log('---');
+    }
+    if (opts.compact) {
+      printTable(
+        [
+          { key: 'repo', label: 'Repo' },
+          { key: 'branch', label: 'Branch' },
+          { key: 'sync', label: 'Sync' },
+          { key: 'inv', label: 'Inv' },
+          { key: 'warn', label: 'Status' },
+        ],
+        compactRows,
+      );
     }
   },
 
@@ -5977,8 +6132,20 @@ const commands = {
     }
 
     if (opts.all) {
-      console.log(`Running all verification tiers: ${tierKeys.join(' -> ')}\n`);
+      if (!opts.quiet) console.log(`Running all verification tiers: ${tierKeys.join(' -> ')}\n`);
       for (const t of tierKeys) {
+        const t0 = Date.now();
+        if (opts.quiet) {
+          const res = runVerifyCmd(tiers[t], { captureOutput: true, silent: true });
+          const elapsed = `${((Date.now() - t0) / 1000).toFixed(1)}s`;
+          if (!res.ok) {
+            const tail = tailLines(res.output, 20);
+            if (tail) console.error(tail);
+            fail(`verification tier "${t}" failed (exit ${res.status})`);
+          }
+          console.log(`✓ Verification (${t}) passed (${elapsed})`);
+          continue;
+        }
         console.log(`=== Tier: ${t} (${tiers[t]}) ===`);
         try {
           execSync(tiers[t], {
@@ -5993,7 +6160,7 @@ const commands = {
         }
       }
       if (pushSnapshot) assertPrSnapshot(pushSnapshot.branch, pushSnapshot.head, 'pre-push verification');
-      console.log('All verification tiers passed.');
+      if (!opts.quiet) console.log('All verification tiers passed.');
       return;
     }
 
@@ -6003,6 +6170,20 @@ const commands = {
       fail(
         `unknown verification tier "${requestedTier}". Available tiers: ${tierKeys.join(', ')}`,
       );
+    }
+
+    if (opts.quiet) {
+      const t0 = Date.now();
+      const res = runVerifyCmd(resolved.cmd, { captureOutput: true, silent: true });
+      const elapsed = `${((Date.now() - t0) / 1000).toFixed(1)}s`;
+      if (!res.ok) {
+        const tail = tailLines(res.output, 20);
+        if (tail) console.error(tail);
+        fail(`verification (${resolved.tier}) failed (exit ${res.status})`);
+      }
+      if (pushSnapshot) assertPrSnapshot(pushSnapshot.branch, pushSnapshot.head, 'pre-push verification');
+      console.log(`✓ Verification (${resolved.tier}) passed (${elapsed})`);
+      return;
     }
 
     console.log(`Running verification (${resolved.tier}): ${resolved.cmd}...`);
@@ -6593,22 +6774,6 @@ const commands = {
       && !worktreePlanClosed(plan);
     const dashboardActive = (item) =>
       active(item) || (item.entry !== main && item.plan.meta.status === 'in-progress');
-    const printTable = (columns, rows) => {
-      const widths = Object.fromEntries(
-        columns.map((c) => [c.key, Math.max(c.label.length, ...rows.map((r) => String(r[c.key]).length))]),
-      );
-      const formatRow = (obj, isHeader = false) =>
-        columns
-          .map((c) => {
-            const val = String(isHeader ? c.label : obj[c.key]);
-            return c.align === 'right' ? val.padStart(widths[c.key]) : val.padEnd(widths[c.key]);
-          })
-          .join('  ');
-      const headerLine = formatRow(null, true);
-      console.log(headerLine);
-      console.log('-'.repeat(headerLine.length));
-      for (const r of rows) console.log(formatRow(r));
-    };
 
     if (opts.spawn || opts.files[0] === 'spawn') {
       const targetPlans = specifiedPlans.length
@@ -6850,6 +7015,27 @@ const commands = {
       if (opts.json) {
         return console.log(JSON.stringify(s, null, 2));
       }
+      if (opts.compact) {
+        printTable(
+          [
+            { key: 'repo', label: 'Repo' },
+            { key: 'plans', label: 'Plans', align: 'right' },
+            { key: 'cycle', label: 'Cycle(med)' },
+            { key: 'reviews', label: 'Pass%' },
+            { key: 'escaped', label: 'Escaped' },
+          ],
+          [
+            {
+              repo: s.repo,
+              plans: String(s.totalPlans),
+              cycle: s.cycleTimeDays.median !== null ? `${s.cycleTimeDays.median}d` : '-',
+              reviews: `${s.reviews.passRate}%`,
+              escaped: String(s.escapedDefects.length),
+            },
+          ],
+        );
+        return;
+      }
       printRepoStatsReport(s);
       return;
     }
@@ -6942,6 +7128,26 @@ const commands = {
 
     if (opts.json) {
       return console.log(JSON.stringify(fleetSummary, null, 2));
+    }
+    if (opts.compact) {
+      console.log(`=== Fleet Workflow Stats (${perRepo.length} repos, ${days || 'all'}d) ===`);
+      printTable(
+        [
+          { key: 'repo', label: 'Repo' },
+          { key: 'plans', label: 'Plans', align: 'right' },
+          { key: 'cycle', label: 'Cycle(med)' },
+          { key: 'reviews', label: 'Pass%' },
+          { key: 'escaped', label: 'Escaped' },
+        ],
+        perRepo.map((r) => ({
+          repo: r.repo,
+          plans: String(r.totalPlans),
+          cycle: r.cycleTimeDays.median !== null ? `${r.cycleTimeDays.median}d` : '-',
+          reviews: `${r.reviews.passRate}%`,
+          escaped: String(r.escapedDefects.length),
+        })),
+      );
+      return;
     }
     printRepoStatsReport(fleetSummary, { isFleet: true });
   },
