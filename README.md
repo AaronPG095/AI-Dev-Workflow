@@ -251,7 +251,7 @@ node scripts/ticket.mjs pr [--base <protected-branch>] [--verify] [--auto] [--dr
 node scripts/ticket.mjs ship --pr https://github.com/owner/repo/pull/1 [--retro "<takeaway>"]
 
 # Merge PR via GitHub CLI and close the Notion Task locally (0 Actions minutes):
-node scripts/ticket.mjs merge [<plan>] [--squash|--merge|--rebase] [--keep-branch]
+node scripts/ticket.mjs merge [<plan>] [--squash|--merge|--rebase] [--keep-branch] [--archive]
 node scripts/ticket.mjs done [<plan>] [--pr <url>]
 
 # Run configured verification tier (or pre-push check when prePushVerify is enabled):
@@ -372,7 +372,7 @@ When developing locally with sibling repositories in the same parent folder:
 
 # Sync latest workflow files across all repositories
 .\scripts\sync-repos.ps1 -AllKnown
-node scripts/sync.mjs --all-known [--ensure-invariants]
+node scripts/sync.mjs --all-known [--ensure-invariants] [--ensure-ignore]
 
 # Bootstrap a brand-new repository with starter config
 .\scripts\sync-repos.ps1 C:\path\to\my-repo -InitPrefix MYP

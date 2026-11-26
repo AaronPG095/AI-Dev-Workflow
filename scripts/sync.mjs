@@ -42,6 +42,7 @@ const opts = {
   bundleOnly: false,
   dryRun: false,
   ensureInvariants: false,
+  ensureIgnore: false,
   initPrefix: '',
   remote: false,
   upstream: 'AaronPG095/AI-Dev-Workflow',
@@ -54,6 +55,7 @@ for (let i = 0; i < args.length; i++) {
   else if (a === '--bundle-only') opts.bundleOnly = true;
   else if (a === '--dry-run' || a === '-DryRun') opts.dryRun = true;
   else if (a === '--ensure-invariants' || a === '-EnsureInvariants') opts.ensureInvariants = true;
+  else if (a === '--ensure-ignore' || a === '-EnsureIgnore') opts.ensureIgnore = true;
   else if (a === '--remote' || a === '-Remote') opts.remote = true;
   else if (a === '--upstream' || a === '-Upstream') opts.upstream = args[++i] || opts.upstream;
   else if (a === '--branch' || a === '-Branch') opts.branch = args[++i] || opts.branch;
@@ -202,6 +204,30 @@ export function patchClaudeMd(existingText) {
   return `@AGENTS.md\n\n${normalized}\n`;
 }
 
+const MANAGED_IGNORE_HEADER = '# managed by AI-Dev-Workflow';
+const MANAGED_IGNORE_ENTRIES = [
+  '.agents/skills/',
+  '.claude/skills/',
+  'docs/plans/archive/',
+  'scripts/ticket.mjs',
+  'scripts/sync.mjs',
+  'scripts/ticket.test.mjs',
+];
+
+export function patchIgnoreFile(existingText = '') {
+  const normalized = (existingText || '').replace(/\r\n/g, '\n');
+  const lines = normalized ? normalized.split('\n') : [];
+  const existingSet = new Set(lines.map((l) => l.trim()));
+  const missing = MANAGED_IGNORE_ENTRIES.filter((entry) => !existingSet.has(entry));
+  if (!missing.length) return normalized.endsWith('\n') || !normalized ? normalized : `${normalized}\n`;
+  const out = [...lines];
+  while (out.length && out[out.length - 1] === '') out.pop();
+  if (out.length) out.push('');
+  if (!existingSet.has(MANAGED_IGNORE_HEADER)) out.push(MANAGED_IGNORE_HEADER);
+  out.push(...missing);
+  return `${out.join('\n')}\n`;
+}
+
 async function sync() {
   if (opts.bundleOnly && !opts.check)
     throw new Error('--bundle-only requires --check');
@@ -246,7 +272,10 @@ async function sync() {
       compare('scripts/ticket.config.json', JSON.stringify(cfg, null, 2));
     }
     for (const path of manifest.copy) compare(path, files.get(path));
-    const canonicalSelf = opts.bundleOnly && !opts.remote && repo === workflowRoot;
+    const isSelf = process.platform === 'win32'
+      ? repo.toLowerCase() === workflowRoot.toLowerCase()
+      : repo === workflowRoot;
+    const canonicalSelf = opts.bundleOnly && !opts.remote && isSelf;
     for (const path of manifest.prefix)
       compare(path, canonicalSelf ? files.get(path) :
         files.get(path).replace(/\b[\w-]+-Plan-/g, () => prefix + '-Plan-'));
@@ -277,6 +306,9 @@ async function sync() {
     }));
     const claude = readNorm(join(repo, 'CLAUDE.md')) || '';
     compare('CLAUDE.md', patchClaudeMd(claude));
+    if (opts.ensureIgnore && !isSelf) {
+      compare('.ignore', patchIgnoreFile(readNorm(join(repo, '.ignore')) || ''));
+    }
   }
 
   // Validate all source and target inputs before changing a managed file.
