@@ -1,7 +1,7 @@
 ---
 title: Plan - Feature: Fleet Token Hygiene And Fast Verify
 ticket: local://ADW:ADW-Plan-Fleet-Token-Hygiene-And-Fast-Verify-2026-11
-status: in-progress
+status: shipped
 priority: 
 state: 
 due: 
@@ -19,6 +19,7 @@ reviewVerdict: pass
 reviewSession: independent-plan-l-reviewer
 baseBranch: main
 reviewFingerprint: 83320940e17f49c9412df3ad8f947a911b208a3a9b9b4db30c33a1db9114296b
+pr: https://github.com/AaronPG095/AI-Dev-Workflow/pull/57
 ---
 # Fleet Token Hygiene And Fast Verify
 
