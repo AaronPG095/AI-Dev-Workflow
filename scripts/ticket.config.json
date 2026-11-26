@@ -51,6 +51,11 @@
     "Fluent-Studio-Atlas",
     "AI-Cortex",
     "Context-Gatekeeper-MCP",
+    "Durable-Workflow-Engine",
+    "Fluent-Studio-Automations",
+    "my-minimalist-portfolio",
+    "Local-LLM-Router-Proxy",
+    "MCP-Audit",
     "AI-Dev-Workflow"
   ],
   "agentic": {
