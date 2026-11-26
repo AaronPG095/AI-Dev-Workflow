@@ -1,7 +1,7 @@
 ---
 title: Plan - Feature: Token Lean Context And Compact Cli
 ticket: local://ADW:ADW-Plan-Token-Lean-Context-And-Compact-Cli-2026-11
-status: in-progress
+status: shipped
 priority: 
 state: 
 due: 
@@ -19,6 +19,7 @@ reviewVerdict: pass
 reviewSession: independent-plan-k-reviewer
 baseBranch: main
 reviewFingerprint: c0b23bbe4e0ffe897b8c21b3b395e22264aa9d5fbc74dc9b26f29f6347f87d18
+pr: https://github.com/AaronPG095/AI-Dev-Workflow/pull/56
 ---
 # Token Lean Context And Compact Cli
 
