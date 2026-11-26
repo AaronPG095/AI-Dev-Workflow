@@ -1,7 +1,7 @@
 ---
 title: Plan - Feature: Universal Adw Architecture
 ticket: local://ADW:ADW-Plan-Universal-Adw-Architecture-2026-11
-status: in-progress
+status: shipped
 priority: 
 state: 
 due: 
@@ -19,6 +19,7 @@ reviewVerdict: pass
 reviewSession: independent-plan-m-reviewer
 baseBranch: main
 reviewFingerprint: ac7b2315df235fe3e5d072a2655875eea67324b3d55ae20141f978869aad10cd
+pr: https://github.com/AaronPG095/AI-Dev-Workflow/pull/58
 ---
 # Universal Adw Architecture
 
