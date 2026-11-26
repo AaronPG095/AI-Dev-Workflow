@@ -1,7 +1,7 @@
 ---
 title: Plan - Feature: Add Fleet Repos To Known Repos
 ticket: local://ADW:ADW-Plan-Add-Fleet-Repos-To-Known-Repos-2026-11
-status: in-progress
+status: shipped
 priority: 
 state: 
 due: 
@@ -19,6 +19,7 @@ reviewVerdict: pass
 reviewSession: independent-known-repos-reviewer
 baseBranch: main
 reviewFingerprint: 132ceb0239e6456dd2e9c82a2055bd38f71990fb744fb7f10f214844334980cc
+pr: https://github.com/AaronPG095/AI-Dev-Workflow/pull/59
 ---
 # Add Fleet Repos To Known Repos
 
