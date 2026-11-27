@@ -41,7 +41,7 @@ Expand the AI-Dev-Workflow with automated PR lifecycle management (`ticket.mjs p
 - [x] Update `AGENTS.md`, `.agents/skills/`, and documentation.
 - [x] Verify test suite passes 100%.
 - [x] Pack, review, check, and ship V3 in `AI-Dev-Workflow`.
-- [x] Roll out complete V3 suite across all 5 downstream repositories verified: PRs merged across FluentOverlay (#35), FluentTimer (#7), TokenHUD (#3), Fluent-Studio-Atlas (#3), Fluent-Studio-Website (#39)
+- [x] Roll out complete V3 suite across all 5 downstream repositories verified: PRs merged across example-desktop-app (#35), FluentTimer (#7), TokenHUD (#3), private-atlas-repo (#3), example-web-app (#39)
 
 ## Risks
 
@@ -50,11 +50,11 @@ Expand the AI-Dev-Workflow with automated PR lifecycle management (`ticket.mjs p
 
 ## Out of scope
 
-- Direct database writes to personal Life OS Notes (decisions strictly belong in git).
+- Direct database writes to personal personal workspace Notes (decisions strictly belong in git).
 
 ## Notes
 
-- Aaron approved all 5 steps and confirmed keeping technical docs strictly in git rather than personal Life OS Notes: "I agree that GitHub and the repos should definitely be the location where this information gets stored. Let's implement all of the mentioned steps."
+- Aaron approved all 5 steps and confirmed keeping technical docs strictly in git rather than personal personal workspace Notes: "I agree that GitHub and the repos should definitely be the location where this information gets stored. Let's implement all of the mentioned steps."
 
 ## Progress log
 

@@ -29,7 +29,7 @@ Expand the token-lean AI-Dev-Workflow suite to Version 4 with zero-token plan mu
 - [x] Enhance `new` and `start` commands in `scripts/ticket.mjs` with `--create` and `--start` flags for single-command task ignition. verified: subtest 40 in scripts/ticket.test.mjs passes
 - [x] Implement `recall` command in `scripts/ticket.mjs` for keyword search across in-repo ADRs and plan notes, with optional `--fleet` flag. verified: subtest 41 in scripts/ticket.test.mjs passes
 - [x] Implement `archive` command in `scripts/ticket.mjs` to move completed/shipped plans into `docs/plans/archive/<YYYY-MM>/`. verified: subtest 42 in scripts/ticket.test.mjs passes
-- [x] Centralize `knownRepos` (including `AI-Cortex`) in `scripts/ticket.config.json` and implement `doctor` command for fleet-wide health diagnostics. verified: subtest 43 in scripts/ticket.test.mjs passes
+- [x] Centralize `knownRepos` (including `private-ai-repo`) in `scripts/ticket.config.json` and implement `doctor` command for fleet-wide health diagnostics. verified: subtest 43 in scripts/ticket.test.mjs passes
 - [x] Add unit tests in `scripts/ticket.test.mjs` covering all new commands and capabilities. verified: 44/44 unit tests pass in scripts/ticket.test.mjs
 - [x] Update documentation (`README.md`, `AGENTS.md`, `.agents/skills/`, `.claude/skills/`). verified: all docs and skill files updated and synchronized
 - [x] All unit and integration tests pass hermetically (`node --test scripts/ticket.test.mjs`). verified: all 44 unit tests pass in node:test
@@ -58,7 +58,7 @@ Expand the token-lean AI-Dev-Workflow suite to Version 4 with zero-token plan mu
 
 ## Out of scope
 
-- Storing engineering decisions or notes in personal Notion Life OS notes (ADRs and Git remain authoritative).
+- Storing engineering decisions or notes in personal Notion personal workspace notes (ADRs and Git remain authoritative).
 - External npm dependencies (must remain 0 external dependencies on Node.js 22+).
 
 ## Notes

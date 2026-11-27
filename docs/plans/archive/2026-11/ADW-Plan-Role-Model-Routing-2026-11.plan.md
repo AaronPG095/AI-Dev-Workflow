@@ -62,7 +62,7 @@ None
 
 ## Out of scope
 
-- Running `sync.mjs` across other local repos (`FluentOverlay`, `FluentTimer`, etc.) in this PR.
+- Running `sync.mjs` across other local repos (`example-desktop-app`, `FluentTimer`, etc.) in this PR.
 - Enforcing or blocking reviews when `--model` does not match `agentic.models.reviewer` (kept informational/optional for cross-client compatibility).
 
 ## Notes

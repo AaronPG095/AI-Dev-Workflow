@@ -27,7 +27,7 @@ Strip inherited Git hook environment variables (`GIT_DIR`, `GIT_WORK_TREE`, `GIT
 
 ## Context
 
-- Pushing from `FluentOverlay/.worktrees/sync-option-a` ran `.git/hooks/pre-push` -> `node scripts/ticket.mjs verify --pre-push` -> `node --test scripts/ticket.test.mjs`, where Git's inherited `GIT_DIR` hijacked temp `git init`/`git diff` calls inside `ticket.test.mjs` (`fatal: this operation must be run in a work tree`).
+- Pushing from `example-desktop-app/.worktrees/sync-option-a` ran `.git/hooks/pre-push` -> `node scripts/ticket.mjs verify --pre-push` -> `node --test scripts/ticket.test.mjs`, where Git's inherited `GIT_DIR` hijacked temp `git init`/`git diff` calls inside `ticket.test.mjs` (`fatal: this operation must be run in a work tree`).
 - Adding `verifyExecEnv()` in `scripts/ticket.mjs` and replacing `{ ...process.env, CI: '1' }` across verification runners ensures child commands never inherit parent hook `GIT_*` pointers.
 
 ## Open questions
@@ -50,11 +50,11 @@ None
 
 ## Out of scope
 
-- Modifying `Fluent-Studio-Website`'s Next.js version or `.githooks/pre-push` (`pnpm audit --prod` advisory).
+- Modifying `example-web-app`'s Next.js version or `.githooks/pre-push` (`pnpm audit --prod` advisory).
 
 ## Notes
 
-- Continuation of Aaron's approved Option A plan ("proceed with plan / Option A"), fixing `GIT_DIR` leakage discovered during live `FluentOverlay` pre-push verification inside a linked worktree.
+- Continuation of Aaron's approved Option A plan ("proceed with plan / Option A"), fixing `GIT_DIR` leakage discovered during live `example-desktop-app` pre-push verification inside a linked worktree.
 
 ## Progress log
 

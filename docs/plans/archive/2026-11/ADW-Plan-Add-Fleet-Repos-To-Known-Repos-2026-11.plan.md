@@ -25,11 +25,11 @@ pr: https://github.com/AaronPG095/AI-Dev-Workflow/pull/59
 
 ## Summary
 
-Register all 5 remaining ADW repositories (`Durable-Workflow-Engine`, `Fluent-Studio-Automations`, `my-minimalist-portfolio`, `Local-LLM-Router-Proxy`, `MCP-Audit`) in `scripts/ticket.config.json` `knownRepos` so fleet-wide `adw doctor`, `stats`, `recall`, and `sync` cover all 13 workspace repositories.
+Register all 5 remaining ADW repositories (`Durable-Workflow-Engine`, `private-automations-repo`, `my-minimalist-portfolio`, `Local-LLM-Router-Proxy`, `MCP-Audit`) in `scripts/ticket.config.json` `knownRepos` so fleet-wide `adw doctor`, `stats`, `recall`, and `sync` cover all 13 workspace repositories.
 
 ## Context
 
-- `scripts/ticket.config.json` `knownRepos` previously listed 8 repositories (`FluentOverlay`, `Fluent-Studio-Website`, `FluentTimer`, `TokenHUD`, `Fluent-Studio-Atlas`, `AI-Cortex`, `Context-Gatekeeper-MCP`, `AI-Dev-Workflow`).
+- `scripts/ticket.config.json` `knownRepos` previously listed 8 repositories (`example-desktop-app`, `example-web-app`, `FluentTimer`, `TokenHUD`, `private-atlas-repo`, `private-ai-repo`, `Context-Gatekeeper-MCP`, `AI-Dev-Workflow`).
 - `scripts/ticket.config.json` is a managed workflow file (`noPlan` cannot skip the plan gate).
 
 ## Open questions
@@ -38,7 +38,7 @@ None
 
 ## Acceptance criteria
 
-- [x] AC1: `scripts/ticket.config.json` `knownRepos` includes `Durable-Workflow-Engine`, `Fluent-Studio-Automations`, `my-minimalist-portfolio`, `Local-LLM-Router-Proxy`, and `MCP-Audit` (13 total). verified(cmd): adw doctor --fleet --compact exited 0 across all 13 repos (12 universal, 1 synced)
+- [x] AC1: `scripts/ticket.config.json` `knownRepos` includes `Durable-Workflow-Engine`, `private-automations-repo`, `my-minimalist-portfolio`, `Local-LLM-Router-Proxy`, and `MCP-Audit` (13 total). verified(cmd): adw doctor --fleet --compact exited 0 across all 13 repos (12 universal, 1 synced)
 - [x] AC2: `adw doctor --fleet --compact` exits 0 and reports all 13 repositories (12 `universal`, 1 `synced`). verified(cmd): adw doctor --fleet --compact exited 0 across all 13 repos (12 universal, 1 synced)
 
 ## Steps

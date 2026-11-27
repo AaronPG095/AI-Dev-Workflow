@@ -23,7 +23,7 @@ Unify active-plan resolution across `overview` and `fleet` via a shared `resolve
 
 ## Acceptance criteria
 
-- [x] `resolveRepoActivePlan(dir, branch, repoCfg)` cleanly resolves active plans across both `overview` and `fleet` so `fleet` matches `overview` for branch-matched plans. verified: overview and fleet both show FO-Plan-Header-Translations-Slider-Sync-And-Favourites-Fix-2026-11 on FluentOverlay
+- [x] `resolveRepoActivePlan(dir, branch, repoCfg)` cleanly resolves active plans across both `overview` and `fleet` so `fleet` matches `overview` for branch-matched plans. verified: overview and fleet both show FO-Plan-Header-Translations-Slider-Sync-And-Favourites-Fix-2026-11 on example-desktop-app
 - [x] `ci-check` validates that newly archived plans under `${config.plansDir}/archive/` are closed (`isClosed`) and excludes verified archive moves from `no-plan`'s `maxChangedLines` count. verified: ci-check regression test passed archive move, no-plan exclusion, and unclosed rejection
 - [x] `hook [install|uninstall|status]` supports `--fleet` across all known repos, and both `hook` and `doctor` use shared worktree-aware `resolveHookPath(dir)` (`git rev-parse --git-path hooks`). verified: hook [install|status|uninstall] --fleet and doctor use resolveHookPath including custom .githooks
 - [x] `docs/dev-workflow/setup-other-repos.md` and `README.md` document tiered `verify`/`hygiene`/`agentic` config options and `hook ... [--fleet]`. verified: setup-other-repos.md Option A/B include verify/hygiene/agentic; README.md documents hook --fleet

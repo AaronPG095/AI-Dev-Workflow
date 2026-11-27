@@ -21,14 +21,14 @@ pr: https://github.com/AaronPG095/AI-Dev-Workflow/pull/33
 
 ## Summary
 
-Add first-class, opt-in Versioning and Release Train management to `AI-Dev-Workflow` so multi-release products (like `FluentOverlay`) can connect a single canonical forward roadmap (`docs/ROADMAP.md`), conflict-free per-plan release metadata (`version` and `impact` frontmatter), Notion `Target Version` task stamping, and zero-token CLI release tooling (`node scripts/ticket.mjs release status|notes|closeout|init`).
+Add first-class, opt-in Versioning and Release Train management to `AI-Dev-Workflow` so multi-release products (like `example-desktop-app`) can connect a single canonical forward roadmap (`docs/ROADMAP.md`), conflict-free per-plan release metadata (`version` and `impact` frontmatter), Notion `Target Version` task stamping, and zero-token CLI release tooling (`node scripts/ticket.mjs release status|notes|closeout|init`).
 
 ## Context
 
 - `scripts/ticket.mjs:58-82` defines `FRONTMATTER_ORDER`, `OPTIONAL`, and plan parsing/serialization (`readPlanText`, `writePlan`), while `docs/plans/_template.plan.md:1-10` defines the V5 plan frontmatter.
-- Historical v4 workflows in `Fluent-Studio-Website` (`b3154de65039`) required every PR to edit a shared `release/fluentoverlay-release-intent.json` file, causing merge conflicts across parallel worktrees; storing `version` and `impact` (`none | patch | minor | major`) per-plan in YAML frontmatter eliminates cross-branch conflicts.
+- Historical v4 workflows in `example-web-app` (`<redacted-sha>`) required every PR to edit a shared `release/example-desktop-app-release-intent.json` file, causing merge conflicts across parallel worktrees; storing `version` and `impact` (`none | patch | minor | major`) per-plan in YAML frontmatter eliminates cross-branch conflicts.
 - `scripts/ticket.mjs:645-875` (`problems()` and `lintPlan()`) validates plan completeness and V5 hygiene, and `scripts/ticket.mjs:565-635` (`runInvariants()`) enforces `readmeCliSync`, `mirrorDirs`, and `zeroDependencies`.
-- `scripts/ticket.mjs:3288-3369` (`commands.create`) creates Notion Tasks in `collection://1db0b9c6-786f-80b0-bb5c-000b965dee0a`, which now includes the `Target Version` (`text`) property.
+- `scripts/ticket.mjs:3288-3369` (`commands.create`) creates Notion Tasks in `collection://<redacted>`, which now includes the `Target Version` (`text`) property.
 
 ## Open questions
 
@@ -62,7 +62,7 @@ None
 
 ## Out of scope
 
-- Migrating `FluentOverlay`'s existing product docs (`FO-Plan.md`, `FO-PotentialFeatures.md`) into `FluentOverlay/docs/ROADMAP.md` in this PR (that happens in the `FluentOverlay` repository after syncing this workflow).
+- Migrating `example-desktop-app`'s existing product docs (`FO-Plan.md`, `FO-PotentialFeatures.md`) into `example-desktop-app/docs/ROADMAP.md` in this PR (that happens in the `example-desktop-app` repository after syncing this workflow).
 - Automated git tagging or binary installer signing.
 
 ## Notes

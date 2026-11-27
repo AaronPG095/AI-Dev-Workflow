@@ -3,8 +3,17 @@
   "tracker": "local",
   "timeZone": "Europe/Berlin",
   "plansDir": "docs/plans",
-  "protectedBranches": ["main"],
-  "captureSources": ["Claude", "Codex", "Gemini", "ChatGPT", "Notion AI", "Other"],
+  "protectedBranches": [
+    "main"
+  ],
+  "captureSources": [
+    "Claude",
+    "Codex",
+    "Gemini",
+    "ChatGPT",
+    "Notion AI",
+    "Other"
+  ],
   "verify": {
     "fast": "node --check scripts/ticket.mjs",
     "test": "node --test scripts/ticket.test.mjs",
@@ -13,12 +22,22 @@
   "verifyCommand": "node --test scripts/ticket.test.mjs",
   "hygiene": {
     "maxFileSizeKB": 1024,
-    "disallowedPatterns": [".tmp", "test-results", "coverage", ".worktrees"]
+    "disallowedPatterns": [
+      ".tmp",
+      "test-results",
+      "coverage",
+      ".worktrees"
+    ]
   },
   "requireReview": true,
   "allowSelfReview": false,
   "invariants": {
-    "mirrorDirs": [[".agents/skills", ".claude/skills"]],
+    "mirrorDirs": [
+      [
+        ".agents/skills",
+        ".claude/skills"
+      ]
+    ],
     "readmeCliSync": true,
     "zeroDependencies": true,
     "noSecretsPatterns": [
@@ -27,12 +46,24 @@
       "\\bghp_[A-Za-z0-9]{20,}",
       "\\bgithub_pat_[A-Za-z0-9_]{20,}"
     ],
-    "excludePaths": ["scripts/ticket.test.mjs", "scripts/ticket.config.json"]
+    "excludePaths": [
+      "scripts/ticket.test.mjs",
+      "scripts/ticket.config.json"
+    ]
   },
   "appetite": {
-    "S": { "maxLines": 150, "maxFiles": 5 },
-    "M": { "maxLines": 450, "maxFiles": 12 },
-    "L": { "maxLines": 1000, "maxFiles": 25 }
+    "S": {
+      "maxLines": 150,
+      "maxFiles": 5
+    },
+    "M": {
+      "maxLines": 450,
+      "maxFiles": 12
+    },
+    "L": {
+      "maxLines": 1000,
+      "maxFiles": 25
+    }
   },
   "versioning": {
     "enabled": false,
@@ -43,21 +74,7 @@
     "tagPrefix": "v",
     "requireVersionOnPlans": false
   },
-  "knownRepos": [
-    "FluentOverlay",
-    "Fluent-Studio-Website",
-    "FluentTimer",
-    "TokenHUD",
-    "Fluent-Studio-Atlas",
-    "AI-Cortex",
-    "Context-Gatekeeper-MCP",
-    "Durable-Workflow-Engine",
-    "Fluent-Studio-Automations",
-    "my-minimalist-portfolio",
-    "Local-LLM-Router-Proxy",
-    "MCP-Audit",
-    "AI-Dev-Workflow"
-  ],
+  "knownRepos": [],
   "agentic": {
     "maxRetries": 3,
     "verifyTier": "test",
@@ -70,6 +87,8 @@
   },
   "noPlan": {
     "maxChangedLines": 40,
-    "noNewFilesUnder": ["scripts"]
+    "noNewFilesUnder": [
+      "scripts"
+    ]
   }
 }
