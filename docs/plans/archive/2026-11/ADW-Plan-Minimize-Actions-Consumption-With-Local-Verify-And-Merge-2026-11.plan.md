@@ -58,8 +58,8 @@ None
 
 ## Out of scope
 
-- Removing `release.yml` tag-triggered release packaging in `FluentOverlay` or altering public repository workflows (`FluentTimer`, `TokenHUD`, `AI-Dev-Workflow`).
-- Modifying dirty WIP feature worktrees (`FluentOverlay` `fix/header-slider-and-favourites` or `Fluent-Studio-Website` `codex/product-truth-sync`).
+- Removing `release.yml` tag-triggered release packaging in `example-desktop-app` or altering public repository workflows (`FluentTimer`, `TokenHUD`, `AI-Dev-Workflow`).
+- Modifying dirty WIP feature worktrees (`example-desktop-app` `fix/header-slider-and-favourites` or `example-web-app` `codex/product-truth-sync`).
 
 ## Notes
 

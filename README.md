@@ -364,7 +364,7 @@ node scripts/sync.mjs --remote
 ```
 
 ### Local Multi-Repo Batch Sync
-When developing locally with sibling repositories in the same parent folder:
+When developing locally with sibling repositories in the same parent folder, list them under `knownRepos` in a gitignored `scripts/ticket.config.local.json` (checked before `scripts/ticket.config.json`):
 
 ```powershell
 # Check drift across all configured repositories

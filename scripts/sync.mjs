@@ -17,20 +17,16 @@ const here = dirname(fileURLToPath(import.meta.url));
 const workflowRoot = resolve(here, '..');
 const codingRoot = resolve(workflowRoot, '..');
 
-let KNOWN_REPOS = [
-  'FluentOverlay',
-  'Fluent-Studio-Website',
-  'FluentTimer',
-  'TokenHUD',
-  'Fluent-Studio-Atlas',
-  'AI-Cortex',
-];
-try {
-  const cfg = JSON.parse(readFileSync(join(here, 'ticket.config.json'), 'utf8'));
-  if (Array.isArray(cfg.knownRepos)) {
-    KNOWN_REPOS = cfg.knownRepos.filter((r) => r !== 'AI-Dev-Workflow');
-  }
-} catch {}
+let KNOWN_REPOS = [];
+for (const cfgName of ['ticket.config.local.json', 'ticket.config.json']) {
+  try {
+    const cfg = JSON.parse(readFileSync(join(here, cfgName), 'utf8'));
+    if (Array.isArray(cfg.knownRepos) && cfg.knownRepos.length > 0) {
+      KNOWN_REPOS = cfg.knownRepos.filter((r) => r !== 'AI-Dev-Workflow');
+      break;
+    }
+  } catch {}
+}
 
 const MANIFEST = 'scripts/workflow-manifest.json';
 

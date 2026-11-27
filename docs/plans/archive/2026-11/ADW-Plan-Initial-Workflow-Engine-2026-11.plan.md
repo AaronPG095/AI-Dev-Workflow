@@ -23,7 +23,7 @@ Extract and upgrade the shared AI development workflow into a standalone, public
 ## Acceptance criteria
 
 - [x] `AGENTS.md` and `CLAUDE.md` define the 6-step process (plan, plan doc, ticket, implement, single-pass review via `pack`, finish) verified: read back `AGENTS.md` and `CLAUDE.md` (`@AGENTS.md`)
-- [x] `scripts/ticket.mjs` supports both Notion Life OS mode and zero-dependency `local` tracker mode verified: `node --test scripts/ticket.test.mjs` passed all 26 unit and integration tests
+- [x] `scripts/ticket.mjs` supports both Notion personal workspace mode and zero-dependency `local` tracker mode verified: `node --test scripts/ticket.test.mjs` passed all 26 unit and integration tests
 - [x] `scripts/ticket.mjs pack` generates a compact, lockfile-filtered, size-capped review digest in one command (0 LLM tokens) verified: tested via `ticket.test.mjs` and live `node scripts/ticket.mjs pack` execution
 - [x] `scripts/ticket.mjs review` records `reviewedBy` and `reviewVerdict` (`pass|warn|block`) and blocks `check`/`ship`/`ci-check` on `block` verified: tested via `ticket.test.mjs` and live review stamp
 - [x] `scripts/ticket.mjs` auto-resolves the active plan when `<plan>` is omitted and falls back to the main checkout `.env` inside git worktrees verified: tested via `ticket.test.mjs` subtests 23 and 26
@@ -47,7 +47,7 @@ Downstream repositories have varying branch configurations (`main` vs `main, dev
 
 ## Out of scope
 
-Modifying active branches in sibling repositories without their own PRs; managing global user home dotfiles already owned by `codex-setup`.
+Modifying active branches in sibling repositories without their own PRs; managing global user home dotfiles already owned by `private-setup-repo`.
 
 ## Notes
 

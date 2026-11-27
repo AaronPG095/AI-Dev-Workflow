@@ -993,7 +993,7 @@ async function startTicket(plan) {
   });
 }
 
-// Development tickets explicitly start To Do, independently of the general Life OS default.
+// Development tickets explicitly start To Do, independently of the general personal tracker default.
 function ticketKey(plan) {
   if (plan.meta.devTicketKey) return plan.meta.devTicketKey;
   if (!plan.rel.startsWith(`${config.plansDir}/`))
@@ -1637,24 +1637,24 @@ function formatFilteredDiff(
 }
 
 function getKnownRepoDirs() {
-  let knownNames = config.knownRepos;
+  let knownNames = null;
   let parentDir = dirname(repoRoot);
-  if (!knownNames) {
+  for (const [dirBase, cfgName] of [
+    [join(repoRoot, 'scripts'), 'ticket.config.local.json'],
+    [join(repoRoot, 'scripts'), 'ticket.config.json'],
+    [here, 'ticket.config.local.json'],
+    [here, 'ticket.config.json'],
+  ]) {
     try {
-      const globalCfg = JSON.parse(readFileSync(join(here, 'ticket.config.json'), 'utf8'));
-      knownNames = globalCfg.knownRepos;
-      parentDir = dirname(workflowRoot);
+      const cfg = JSON.parse(readFileSync(join(dirBase, cfgName), 'utf8'));
+      if (Array.isArray(cfg.knownRepos) && cfg.knownRepos.length > 0) {
+        knownNames = cfg.knownRepos;
+        if (dirBase === here) parentDir = dirname(workflowRoot);
+        break;
+      }
     } catch {}
   }
-  knownNames = knownNames || [
-    'FluentOverlay',
-    'Fluent-Studio-Website',
-    'FluentTimer',
-    'TokenHUD',
-    'Fluent-Studio-Atlas',
-    'AI-Cortex',
-    'AI-Dev-Workflow',
-  ];
+  knownNames = knownNames || [];
   const candidateDirs = [];
   for (const name of knownNames) {
     const p = join(parentDir, name);

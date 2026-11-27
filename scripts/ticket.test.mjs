@@ -18,7 +18,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync, execFileSync } from 'node:child_process';
 
 const scripts = dirname(fileURLToPath(import.meta.url));
-const url = 'https://www.notion.so/40a0b9c6786f817fab0ff2059ad410e3';
+const url = 'https://www.notion.so/00000000000000000000000000000001';
 
 const defaultNotionConfig = {
   prefix: 'FO',
@@ -196,7 +196,7 @@ if (github) {
 }
 
 const empty = { body: { results: [], has_more: false } };
-const created = { body: { url, id: '40a0b9c6786f817fab0ff2059ad410e3' } };
+const created = { body: { url, id: '00000000000000000000000000000001' } };
 const repository = { url: 'https://github.com/example/repo' };
 const planFilename = 'docs/plans/FO-Plan-Test.plan.md';
 const changedPlan = { filename: planFilename, status: 'added' };
@@ -412,7 +412,7 @@ test('ship refuses to write to a Task with mismatched identity', (t) => {
     { ...valid, parent: { ...valid.parent, data_source_id: defaultNotionConfig.projectPageId } },
     ...Object.entries({
       'Dev Ticket Key': { rich_text: [{ plain_text: 'FO:Other-Plan' }] },
-      'Task Lane': { select: { name: 'Life OS' } },
+      'Task Lane': { select: { name: 'Engineering' } },
       Project: { relation: [] },
       Description: { rich_text: [{ plain_text: `ADW plan: ${planFilename}\n\nPlan: docs/plans/FO-Plan-Other.plan.md` }] },
     }).map(([key, value]) => ({ ...valid, properties: { ...valid.properties, [key]: value } })),
@@ -793,13 +793,13 @@ test('sync.mjs patches AGENTS.md Development process section while preserving su
   if (!existsSync(join(scripts, 'sync.mjs')))
     return t.skip('sync.mjs only present in upstream AI-Dev-Workflow repo');
   const { patchAgentsMd, patchClaudeMd } = await import('./sync.mjs');
-  const original = `# Fluent Studio Website\n\nIntro line.\n\n## Development process (every AI: Claude, Codex, Gemini/Antigravity, Cursor)\n\nOld 5-step text.\n\n<!-- BEGIN:nextjs-agent-rules -->\n## Next.js rules\nKeep this block.\n<!-- END:nextjs-agent-rules -->\n`;
-  const updated = patchAgentsMd(original, 'Fluent-Studio-Website', {
+  const original = `# Example Web App\n\nIntro line.\n\n## Development process (every AI: Claude, Codex, Gemini/Antigravity, Cursor)\n\nOld 5-step text.\n\n<!-- BEGIN:nextjs-agent-rules -->\n## Next.js rules\nKeep this block.\n<!-- END:nextjs-agent-rules -->\n`;
+  const updated = patchAgentsMd(original, 'example-web-app', {
     prefix: 'FS',
     noNewFilesUnder: ['src'],
     maxChangedLines: 40,
   });
-  assert.match(updated, /# Fluent Studio Website/);
+  assert.match(updated, /# Example Web App/);
   assert.match(updated, /Non-trivial changes follow these six steps/);
   assert.match(updated, /FS-Plan-<Topic>-<YYYY-MM>\.plan\.md/);
   assert.match(updated, /node scripts\/ticket\.mjs pack/);
@@ -1193,7 +1193,7 @@ test('ci-check accepts the canonical Notion app page URL only on a trusted host'
   const base = f.git('rev-parse', 'HEAD');
   const plan = readFileSync(f.plan, 'utf8');
   const check = (host) => {
-    writeFileSync(f.plan, plan.replace('status: draft', `status: in-progress\nticket: https://${host}/p/Test-40a0b9c6786f817fab0ff2059ad410e3`));
+    writeFileSync(f.plan, plan.replace('status: draft', `status: in-progress\nticket: https://${host}/p/Test-00000000000000000000000000000001`));
     f.git('add', 'docs/plans');
     f.git('commit', '-m', 'set ticket URL');
     return f.run('ci-check', ['--base', base, '--head', 'HEAD'], [], { omitPlan: true });
@@ -1632,7 +1632,7 @@ test('verify command executes tiered commands and falls back to legacy verifyCom
 test('hygiene command detects unmerged conflicts, disallowed files, oversized files and integrates with check and pack', (t) => {
   const f = fixture(
     t,
-    'ticket: https://www.notion.so/40a0b9c6786f817fab0ff2059ad410e3\n',
+    'ticket: https://www.notion.so/00000000000000000000000000000001\n',
     [],
     {
       hygiene: {
@@ -1847,7 +1847,7 @@ Initial scope.
 test('review enhancements: --prompt, dual-pass metadata, and verdict guardrails', (t) => {
   const f = fixture(
     t,
-    'ticket: https://www.notion.so/40a0b9c6786f817fab0ff2059ad410e3\n',
+    'ticket: https://www.notion.so/00000000000000000000000000000001\n',
     [],
     { verifyCommand: 'npm test' },
   );
@@ -4663,7 +4663,7 @@ test('F1: cached git fixture, verify.fast, archive --merged [--fleet] [--dry-run
     [
       '---',
       'title: Plan - Feature: Shipped Closed',
-      'ticket: https://www.notion.so/40a0b9c6786f817fab0ff2059ad410e3',
+      'ticket: https://www.notion.so/00000000000000000000000000000001',
       'status: shipped',
       'completedAt: 2026-11-15',
       '---',
@@ -5531,3 +5531,16 @@ test('M1: universal adw CLI (ADW_REPO_ROOT/ADW_GLOBAL), doctor universal mode, a
 
 
 
+
+test('getKnownRepoDirs / doctor reads knownRepos from gitignored ticket.config.local.json', (t) => {
+  const f = fixture(t);
+  const siblingDir = join(dirname(f.root), 'local-sibling-repo');
+  mkdirSync(siblingDir, { recursive: true });
+  writeFileSync(
+    join(f.root, 'scripts', 'ticket.config.local.json'),
+    JSON.stringify({ knownRepos: ['local-sibling-repo'] }, null, 2),
+  );
+  const r = f.run('doctor', ['--fleet'], undefined, { omitPlan: true });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /local-sibling-repo/);
+});
