@@ -1,7 +1,7 @@
 ---
 title: Plan - Feature: Model Check on Workflow Startup
 ticket: local://ADW:ADW-Plan-Model-Check-on-Workflow-Startup-2026-11
-status: in-progress
+status: shipped
 priority: 
 state: 
 due: 
@@ -20,6 +20,7 @@ reviewSession: /root/startup_check_reviewer
 reviewModel: gpt-6.2-sol
 baseBranch: main
 reviewFingerprint: b2b6e68aa8b0f9f8e2ae6bf88a877cf05f1d27f942de6a522b31e05623c2ce4f
+pr: https://github.com/AaronPG095/AI-Dev-Workflow/pull/64
 ---
 # Model Check on Workflow Startup
 
