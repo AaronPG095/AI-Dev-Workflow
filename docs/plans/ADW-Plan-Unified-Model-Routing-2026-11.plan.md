@@ -19,7 +19,7 @@ reviewVerdict: pass
 reviewSession: /root/routing_reviewer
 reviewModel: gpt-6.2-sol
 baseBranch: main
-reviewFingerprint: d0352312408e88042807990b6760eed977dd2a826cfe56922e2ffa9fe6188d38
+reviewFingerprint: a2e75f3cf2218e1ed6b688d4e839aa90886787962db6fcec578bf3affb0e1bdd
 ---
 # Unified Model Routing
 
@@ -69,3 +69,5 @@ Sol handles planning and review, Luna handles narrowly scoped execution with Sol
 - 2026-11-28 11:55 UTC, Codex: Live smoke passed. GPT-6 Luna high built and validated the profile configs, GPT-6.2 Sol medium independently reviewed the patch, and a local-only classification used Ollama gemma3:4b. No escalation or Astra was needed.
 - 2026-11-28 11:58 UTC, Codex (review: pass): Independent review passed for route compatibility, actual dispatch guidance, config drift tests and identical skill references. Targeted tests and live smoke passed. [reviewer: /root/routing_reviewer] (model: gpt-6.2-sol)
 - 2026-11-28 11:58 UTC, Codex (handoff): Done: Closed routing acceptance criteria, ran live smoke and obtained independent Sol review; Next: Publish the reviewed branch after checking the full suite result; Open: none; Tree: 12 dirty file(s)
+- 2026-11-28 12:02 UTC, Codex: Fixed the mock README command list and reran T1.5 successfully. The full suite is running on the final test fixture.
+- 2026-11-28 12:02 UTC, Codex (review: pass): Independent review passed for route compatibility, dispatch guidance, mirrored skills and the updated README invariant fixture. Targeted verification and live smoke passed. [reviewer: /root/routing_reviewer] (model: gpt-6.2-sol)
