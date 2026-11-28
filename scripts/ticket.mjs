@@ -3122,6 +3122,7 @@ const commands = {
       model,
       ...(profile?.reasoning?.[role] ? { reasoning: profile.reasoning[role] } : {}),
       ...(executionRole && profile?.complexExecution ? { complexExecution: profile.complexExecution } : {}),
+      ...(profile?.escalation ? { escalation: profile.escalation } : {}),
       ...(profile?.optIn ? { optIn: profile.optIn } : {}),
       ...(profile?.offload ? { offload: profile.offload } : {}),
     }, null, 2));

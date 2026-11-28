@@ -4326,6 +4326,7 @@ test('role-to-model routing: config defaults, step/prime/review --prompt/run --d
     },
     reasoning: { planner: 'medium', builder: 'high', fixer: 'high', reviewer: 'medium' },
     complexExecution: { model: 'gpt-6.2-sol', reasoning: 'medium' },
+    escalation: { model: 'gpt-6.2-sol', reasoning: 'xhigh' },
     optIn: { model: 'gpt-6.2-astra', reasoning: 'low' },
     offload: { privacy: 'local', tasks: ['commit_msg', 'log_trim', 'classify'] },
   };
@@ -4397,13 +4398,18 @@ test('role-to-model routing: config defaults, step/prime/review --prompt/run --d
       model,
       reasoning: codex.reasoning[role],
       ...(['builder', 'fixer'].includes(role) ? { complexExecution: codex.complexExecution } : {}),
+      escalation: codex.escalation,
       optIn: codex.optIn,
       offload: codex.offload,
     });
   }
   const antigravity = f.run('route', ['--client', 'antigravity', '--role', 'planner']);
   assert.equal(antigravity.status, 0, antigravity.stderr);
-  assert.equal(JSON.parse(antigravity.stdout).model, expectedModels.planner);
+  assert.deepEqual(JSON.parse(antigravity.stdout), {
+    client: 'antigravity',
+    role: 'planner',
+    model: expectedModels.planner,
+  });
   const unknown = f.run('route', ['--client', 'unknown', '--role', 'planner']);
   assert.notEqual(unknown.status, 0);
   assert.match(unknown.stderr, /no usable agentic\.modelProfiles entry/);
