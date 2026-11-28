@@ -1985,10 +1985,22 @@ function resolveStepContext(plan, { tier, maxRetries: maxRetriesOpt } = {}) {
 
 const AGENTIC_ROLES = ['planner', 'builder', 'reviewer', 'fixer'];
 
+function resolveModelProfile(cfg = config) {
+  const client = (opts.client || '').trim().toLowerCase();
+  if (!client) return null;
+  const profiles = cfg?.agentic?.modelProfiles;
+  if (profiles && Object.hasOwn(profiles, client) && profiles[client]?.models) {
+    return profiles[client];
+  }
+  if (client === 'antigravity') return null;
+  fail(`no usable agentic.modelProfiles entry for "${client}"`);
+}
+
 function resolveRoleModel(role, cfg = config) {
   const normalized = String(role || '').trim().toLowerCase();
   if (!normalized) return '';
-  const models = cfg?.agentic?.models;
+  const profile = resolveModelProfile(cfg);
+  const models = profile ? profile.models : cfg?.agentic?.models;
   if (!models || typeof models !== 'object' || Array.isArray(models)) return '';
   if (typeof models[normalized] === 'string') return models[normalized].trim();
   for (const [k, v] of Object.entries(models)) {
@@ -2000,7 +2012,8 @@ function resolveRoleModel(role, cfg = config) {
 }
 
 function formatAgenticModelsSummary(cfg = config) {
-  const models = cfg?.agentic?.models;
+  const profile = resolveModelProfile(cfg);
+  const models = profile ? profile.models : cfg?.agentic?.models;
   if (!models || typeof models !== 'object' || Array.isArray(models)) return '';
   const ordered = [];
   const seen = new Set();
@@ -3094,6 +3107,26 @@ function printTable(columns, rows) {
 }
 
 const commands = {
+  async route() {
+    const role = (opts.role || '').trim().toLowerCase();
+    if (!AGENTIC_ROLES.includes(role)) {
+      fail(`route requires --role [${AGENTIC_ROLES.join('|')}]`);
+    }
+    const profile = resolveModelProfile();
+    const model = resolveRoleModel(role);
+    if (!model) fail(`no model configured for role "${role}"`);
+    const executionRole = role === 'builder' || role === 'fixer';
+    console.log(JSON.stringify({
+      client: (opts.client || 'default').trim().toLowerCase(),
+      role,
+      model,
+      ...(profile?.reasoning?.[role] ? { reasoning: profile.reasoning[role] } : {}),
+      ...(executionRole && profile?.complexExecution ? { complexExecution: profile.complexExecution } : {}),
+      ...(profile?.optIn ? { optIn: profile.optIn } : {}),
+      ...(profile?.offload ? { offload: profile.offload } : {}),
+    }, null, 2));
+  },
+
   async new() {
     const rawTopic = opts.files[0] || opts.topic || '';
     if (!rawTopic)

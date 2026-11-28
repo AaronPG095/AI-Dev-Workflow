@@ -21,3 +21,7 @@ Non-trivial changes follow these six steps. Only trivial changes with at most 40
 
 If `ticket.mjs` fails, stop and report. Detailed flags: `dev-workflow` skill & `README.md`.
 Pre-push guardrail: `node scripts/ticket.mjs hook install`. Sync: `node scripts/sync.mjs --remote`.
+
+## Codex model routing
+
+For non-trivial Codex work, resolve each phase with `node scripts/ticket.mjs route --client codex --role <planner|builder|fixer|reviewer>` and delegate the role using the returned model and reasoning. Follow the [agentic workflow skill](.agents/skills/agentic-workflow/SKILL.md) for scope, escalation, local router offloads, and review evidence.

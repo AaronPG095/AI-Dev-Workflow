@@ -42,6 +42,34 @@
       "builder": "gemini-4-hydrogen-medium",
       "fixer": "gemini-4-hydrogen-medium",
       "reviewer": "gemini-4-neon-low"
+    },
+    "modelProfiles": {
+      "codex": {
+        "models": {
+          "planner": "gpt-6.2-sol",
+          "builder": "gpt-6-luna",
+          "fixer": "gpt-6-luna",
+          "reviewer": "gpt-6.2-sol"
+        },
+        "reasoning": {
+          "planner": "medium",
+          "builder": "high",
+          "fixer": "high",
+          "reviewer": "medium"
+        },
+        "complexExecution": {
+          "model": "gpt-6.2-sol",
+          "reasoning": "medium"
+        },
+        "optIn": {
+          "model": "gpt-6.2-astra",
+          "reasoning": "low"
+        },
+        "offload": {
+          "privacy": "local",
+          "tasks": ["commit_msg", "log_trim", "classify"]
+        }
+      }
     }
   },
   "versioning": {
