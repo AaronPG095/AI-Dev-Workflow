@@ -1,7 +1,7 @@
 ---
 title: Plan - Feature: Codex Model Escalation and Updates
 ticket: local://ADW:ADW-Plan-Codex-Model-Escalation-and-Updates-2026-11
-status: in-progress
+status: shipped
 priority: 
 state: 
 due: 
@@ -20,6 +20,7 @@ reviewSession: /root/escalation_reviewer
 reviewModel: gpt-6.2-sol
 baseBranch: main
 reviewFingerprint: 20069cbeb3cf9ebc56c10f034ca658ba2003919d83c091fddfe13ab6f0ed4872
+pr: https://github.com/AaronPG095/AI-Dev-Workflow/pull/63
 ---
 # Codex Model Escalation and Updates
 
