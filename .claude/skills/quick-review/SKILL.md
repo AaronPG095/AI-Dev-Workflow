@@ -17,7 +17,7 @@ node scripts/ticket.mjs pack --compact
 
 *(Pass `--test` to execute the repository's verifyCommand and embed test execution proof directly in the packet. Pass `<plan-path>` only if multiple plans are active on the branch, and `--base <ref>` only if reviewing against a non-default base.)*
 
-Do **not** separately run `git status`, `git diff`, `git log`, or read full files unless a specific hunk in `pack --compact` was truncated and must be inspected to confirm a real bug — when inspecting a truncated symbol or hunk, prefer `context-gatekeeper` `read_symbol` or `fetch_chunk` over full-file reads.
+Start with the packet. If it leaves a specific correctness question unresolved, inspect only the relevant caller, test, symbol, or hunk. Prefer targeted reads with `context-gatekeeper` `read_symbol` or `fetch_chunk` and skip exploratory repository-wide reads.
 
 ## 2. Evaluate Three Axes Only
 

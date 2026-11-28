@@ -2659,8 +2659,9 @@ function buildStepBrief(
       ...(plan.meta.blueprint ? [`Blueprint: ${plan.meta.blueprint}`] : []),
       '',
       '## Review Protocol (Fresh Context Window)',
-      '1. Inspect review packet with embedded test verification:',
-      `   node scripts/ticket.mjs pack --test${verifyTier !== 'test' ? ` --tier ${verifyTier}` : ''}`,
+      '1. Start with the review packet and embedded test verification:',
+      `   node scripts/ticket.mjs pack "${plan.rel}" --test${verifyTier !== 'test' ? ` --tier ${verifyTier}` : ''}`,
+      '2. If the packet leaves a specific correctness concern unresolved, inspect only the relevant caller, test, symbol, or diff hunk read-only. Name the concern and cite the evidence.',
       '',
       '## Acceptance Criteria to Verify',
       criteriaList,
@@ -2684,7 +2685,8 @@ function buildStepBrief(
         : []),
       '',
       '## Verdict Command',
-      `node scripts/ticket.mjs review ${plan.rel} --agent <you> --verdict <pass|warn|block> --summary "<concise findings>"`,
+      'For pass or warn, a reviewer using the same client identity as the implementer must record an independent session or sub-agent with `--reviewer-id`. Reviewers using a different client identity omit it.',
+      `node scripts/ticket.mjs review "${plan.rel}" --agent <you> --reviewer-id <independent-session-id> --verdict <pass|warn|block> --summary "<concise findings>"`,
     );
     return lines.join('\n');
   }
@@ -2719,8 +2721,7 @@ function buildStepBrief(
       '## Fix & Re-Verify Protocol',
       '1. Fix the root cause identified in the blocker findings.',
       `2. Verify: \`${verifyCmd}\` (tier: ${verifyTier}).`,
-      '3. Run checkpoint or re-review:',
-      `   node scripts/ticket.mjs review ${plan.rel} --agent <you> --verdict pass --summary "Resolved review blocker findings"`,
+      '3. Hand the finding addressed, the change made, and verification result and evidence to an independent reviewer for a fresh verdict. Do not stamp the review verdict yourself.',
       ...(plan.meta.blueprint
         ? [`4. Preserve the contracts and invariants defined in \`${plan.meta.blueprint}\`.`]
         : []),
@@ -4554,6 +4555,10 @@ const commands = {
         ...(reviewerModel ? [`Model: ${reviewerModel}`] : []),
         `Verify Command: \`${verifyCmd}\``,
         '',
+        '## Review Protocol',
+        `1. Start with the review packet and embedded test verification: \`node scripts/ticket.mjs pack "${plan.rel}" --test${resolvedVerify?.tier && resolvedVerify.tier !== 'test' ? ` --tier ${resolvedVerify.tier}` : ''}\`.`,
+        '2. If the packet leaves a specific correctness concern unresolved, inspect only the relevant caller, test, symbol, or diff hunk read-only. Name the concern and cite the evidence.',
+        '',
         '## Acceptance Criteria to Verify',
         criteria,
       ];
@@ -4573,7 +4578,8 @@ const commands = {
         '4. Code Quality & Standards: Does the change conform to repository standards with clean hygiene?',
         '',
         '## Verdict Stamp Instructions',
-        `Run: node scripts/ticket.mjs review ${plan.rel} --agent <you> [--reviewer-id <subagent-id>] [--model <model-id>] --verdict <pass|warn|block> --summary "<concise findings>"`,
+        'For pass or warn, a reviewer using the same client identity as the implementer must record an independent session or sub-agent with `--reviewer-id`. Reviewers using a different client identity omit it.',
+        `Run: node scripts/ticket.mjs review "${plan.rel}" --agent <you> --reviewer-id <independent-session-id> [--model <model-id>] --verdict <pass|warn|block> --summary "<concise findings>"`,
         'Or dual-pass: --standards <pass|warn|block> --spec <pass|warn|block>',
       );
 
