@@ -16,3 +16,5 @@ Opt-in modular execution layer on pure Node.js 22+ built into `scripts/ticket.mj
 ## Role-to-Model Routing (`agentic.models`)
 
 Configure per-role models in `scripts/ticket.config.json` (`planner`, `builder`, `fixer`, `reviewer`). `step`, `prime`, `review --prompt`, and `run` (`ADW_MODEL`) surface the configured model; in Antigravity, delegate via `swarm` `add` with `model` set to the role's model and pass `--model <id>` to `review`.
+
+For Codex profiles and local offload, see [Codex dispatch in Level B](references/level-b.md#codex-dispatch).

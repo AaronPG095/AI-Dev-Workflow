@@ -343,10 +343,16 @@ Wave uses Git's registered worktrees. A worker owns its plan after creation, and
 ### Runtime Hooks, Boot Verification & Versioning Config (`scripts/ticket.config.json`)
 - `bootVerifyTier`: Verification tier executed by `prime --verify` and `resume --verify` (defaults to `fast`, falling back to `test` or `full`).
 - `agentic.models`: Optional role-to-model routing map (`planner`, `builder`, `fixer`, `reviewer`; defaults to `gemini-4-neon-medium`, `gemini-4-hydrogen-medium`, `gemini-4-hydrogen-medium`, `gemini-4-neon-low`). Surfaced by `step`, `prime`, `review --prompt`, and `run` (`ADW_MODEL` env var). In Antigravity, delegate each role to a `swarm` worker pinned to its configured `model`; other clients (Claude Code, Codex, Cursor) can customize or omit `agentic.models`.
+- `agentic.modelProfiles`: Optional maps by client name. Each profile has its own `models` map and can supply per-role `reasoning`, a `complexExecution` route for builders and fixers, an `optIn` route, and an `offload` policy. Installations with an existing config can copy the Codex profile from [the example config](ticket.config.example.json).
 - `hooks.postToolVerify`: Set `true` in `ticket.config.json` to run bounded `fast`/`test` verification after edit tools in `scripts/hooks/adw-hook.mjs post-tool`.
 - `hooks.postToolStrict`: Set `true` to exit `2` (blocking) when `post-tool` verification fails instead of warning cleanly.
 - `versioning`: Opt-in release train management (`enabled`, `currentVersion`, `activeTrain`, `roadmapPath` default `docs/ROADMAP.md`, `changelogPath` default `CHANGELOG.md`, `tagPrefix` default `v`, `requireVersionOnPlans`). When `version` is set on a plan, `create` stamps `Target Version` on the Notion Task.
 
+### Model routing by client
+
+Use `node scripts/ticket.mjs route --client codex --role <planner|builder|fixer|reviewer>` to resolve a route as JSON before a plan exists. Use `--client codex` with `step`, `prime`, `review --prompt`, and `run` to use the same profile's model IDs. Omit `--client` for the default model map. Antigravity uses that map unless it has its own profile.
+
+The Codex profile uses Sol for planning and independent review, Luna for narrow changes, and Sol for broad changes or a failed scoped attempt that Luna cannot resolve. Astra requires explicit approval. Codex delegates these roles with its native agents and records the actual model and verification in the plan. Supported mechanical work goes to the existing local router through MCP with local-only privacy. An external `run --cmd` runner receives the primary role model via `ADW_MODEL` and owns its model invocation.
 
 ---
 

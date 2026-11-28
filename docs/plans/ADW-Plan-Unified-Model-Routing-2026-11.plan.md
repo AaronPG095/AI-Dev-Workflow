@@ -1,7 +1,7 @@
 ---
 title: Plan - Feature: Unified Model Routing
 ticket: local://ADW:ADW-Plan-Unified-Model-Routing-2026-11
-status: planned
+status: in-progress
 priority: 
 state: 
 due: 
@@ -11,6 +11,15 @@ impact:
 dependsOn: 
 devTicketKey: ADW:ADW-Plan-Unified-Model-Routing-2026-11
 agent: Codex
+branch: codex/unified-model-routing
+worktree: AI-Dev-Workflow
+startedAt: 2026-11-28
+reviewedBy: Codex
+reviewVerdict: pass
+reviewSession: /root/routing_reviewer
+reviewModel: gpt-6.2-sol
+baseBranch: main
+reviewFingerprint: d0352312408e88042807990b6760eed977dd2a826cfe56922e2ffa9fe6188d38
 ---
 # Unified Model Routing
 
@@ -28,15 +37,15 @@ None
 
 ## Acceptance criteria
 
-- [ ] AC1: The workflow resolves Codex planner, builder, fixer, and reviewer routes, and preserves existing Antigravity model resolution.
-- [ ] AC2: Codex workflow guidance covers scoped and complex execution, verification-based escalation, approval-only Astra, independent review evidence, and local-only offload.
-- [ ] AC3: The CLI routing tests pass and a smoke test exercises local offload, scoped implementation, and independent review.
+- [x] AC1: The workflow resolves Codex planner, builder, fixer, and reviewer routes, and preserves existing Antigravity model resolution. verified(cmd): Codex prime and route resolved OpenAI roles while explicit Antigravity route returned gemini-4-neon-medium
+- [x] AC2: Codex workflow guidance covers scoped and complex execution, verification-based escalation, approval-only Astra, independent review evidence, and local-only offload. verified(inspect): Repo instructions load the mirrored agentic skill for native dispatch, escalation evidence, approval-only Astra, independent review and local privacy
+- [x] AC3: The CLI routing tests pass and a smoke test exercises local offload, scoped implementation, and independent review. verified(test): Routing and skill-budget tests passed. Live smoke exercised local Ollama classification, a scoped Luna build, and independent Sol review.
 
 ## Steps
 
-- [ ] Add a client-specific role profile and route resolution with backward-compatible fallback. (AC1)
-- [ ] Document and wire Codex role dispatch into the repo workflow and mirrored skills. (AC2)
-- [ ] Verify CLI behavior, smoke-test the local router and Codex roles, and collect the independent review. (AC3)
+- [x] Add a client-specific role profile and route resolution with backward-compatible fallback. (AC1) verified(cmd): Codex prime and route resolved OpenAI roles while explicit Antigravity route returned gemini-4-neon-medium
+- [x] Document and wire Codex role dispatch into the repo workflow and mirrored skills. (AC2) verified(inspect): Repo instructions load the mirrored agentic skill for native dispatch, escalation evidence, approval-only Astra, independent review and local privacy
+- [x] Verify CLI behavior, smoke-test the local router and Codex roles, and collect the independent review. (AC3) verified(test): Routing and skill-budget tests passed. Live smoke exercised local Ollama classification, a scoped Luna build, and independent Sol review.
 
 ## Risks
 
@@ -48,8 +57,15 @@ Router-service changes and migration to API-key billing.
 
 ## Notes
 
-Aaron approved the cost-first plan with “All right, sounds good. Agreed.” The approved first PR wires the shared policy into Codex, verifies the existing Antigravity routes, and smoke-tests a local offload, scoped build, and independent review. Sol handles planning and review, Luna handles narrowly scoped execution with Sol escalation, Sol handles broad implementation directly, and Astra requires explicit opt-in.
+Aaron approved the cost-first plan with “All right, sounds good. Agreed.”
+
+> For the first PR, I’d wire the shared policy into Codex, verify that Antigravity still resolves its existing roles, and smoke-test a local offload, a scoped build, and an independent review.
+
+Sol handles planning and review, Luna handles narrowly scoped execution with Sol escalation, Sol handles broad implementation directly, and Astra requires explicit opt-in.
 
 ## Progress log
 
 <!-- One line per session/review, added with ticket.mjs log or ticket.mjs review -->
+- 2026-11-28 11:55 UTC, Codex: Live smoke passed. GPT-6 Luna high built and validated the profile configs, GPT-6.2 Sol medium independently reviewed the patch, and a local-only classification used Ollama gemma3:4b. No escalation or Astra was needed.
+- 2026-11-28 11:58 UTC, Codex (review: pass): Independent review passed for route compatibility, actual dispatch guidance, config drift tests and identical skill references. Targeted tests and live smoke passed. [reviewer: /root/routing_reviewer] (model: gpt-6.2-sol)
+- 2026-11-28 11:58 UTC, Codex (handoff): Done: Closed routing acceptance criteria, ran live smoke and obtained independent Sol review; Next: Publish the reviewed branch after checking the full suite result; Open: none; Tree: 12 dirty file(s)

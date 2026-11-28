@@ -4317,14 +4317,30 @@ test('role-to-model routing: config defaults, step/prime/review --prompt/run --d
     fixer: 'gemini-4-hydrogen-medium',
     reviewer: 'gemini-4-neon-low',
   };
+  const codex = {
+    models: {
+      planner: 'gpt-6.2-sol',
+      builder: 'gpt-6-luna',
+      fixer: 'gpt-6-luna',
+      reviewer: 'gpt-6.2-sol',
+    },
+    reasoning: { planner: 'medium', builder: 'high', fixer: 'high', reviewer: 'medium' },
+    complexExecution: { model: 'gpt-6.2-sol', reasoning: 'medium' },
+    optIn: { model: 'gpt-6.2-astra', reasoning: 'low' },
+    offload: { privacy: 'local', tasks: ['commit_msg', 'log_trim', 'classify'] },
+  };
   for (const relCfg of ['scripts/ticket.config.json', 'ticket.config.example.json']) {
     const fullCfg = join(repoRoot, relCfg);
     if (!existsSync(fullCfg)) continue;
     const cfg = JSON.parse(readFileSync(fullCfg, 'utf8'));
     assert.deepEqual(cfg.agentic?.models, expectedModels, `${relCfg} agentic.models`);
+    if (relCfg === 'ticket.config.example.json' || cfg.prefix === 'ADW') {
+      assert.deepEqual(cfg.agentic?.modelProfiles?.codex, codex, `${relCfg} Codex profile`);
+    }
   }
   const manifest = JSON.parse(readFileSync(join(scripts, 'workflow-manifest.json'), 'utf8'));
   assert.deepEqual(manifest.starterConfig?.agentic?.models, expectedModels, 'starterConfig agentic.models');
+  assert.deepEqual(manifest.starterConfig?.agentic?.modelProfiles?.codex, codex);
 
   // 1. Configured agentic.models surfaces across step, step --json, prime, review --prompt, run --dry-run
   const f = fixture(
@@ -4334,7 +4350,7 @@ test('role-to-model routing: config defaults, step/prime/review --prompt/run --d
     {
       tracker: 'local',
       verify: { test: 'node -e "process.exit(0)"' },
-      agentic: { maxRetries: 2, verifyTier: 'test', models: expectedModels },
+      agentic: { maxRetries: 2, verifyTier: 'test', models: expectedModels, modelProfiles: { codex } },
     },
   );
   writeFileSync(
@@ -4372,6 +4388,26 @@ test('role-to-model routing: config defaults, step/prime/review --prompt/run --d
   f.git('add', '.');
   f.git('commit', '-m', 'init');
 
+  for (const [role, model] of Object.entries(codex.models)) {
+    const res = f.run('route', ['--client', 'Codex', '--role', role]);
+    assert.equal(res.status, 0, res.stderr);
+    assert.deepEqual(JSON.parse(res.stdout), {
+      client: 'codex',
+      role,
+      model,
+      reasoning: codex.reasoning[role],
+      ...(['builder', 'fixer'].includes(role) ? { complexExecution: codex.complexExecution } : {}),
+      optIn: codex.optIn,
+      offload: codex.offload,
+    });
+  }
+  const antigravity = f.run('route', ['--client', 'antigravity', '--role', 'planner']);
+  assert.equal(antigravity.status, 0, antigravity.stderr);
+  assert.equal(JSON.parse(antigravity.stdout).model, expectedModels.planner);
+  const unknown = f.run('route', ['--client', 'unknown', '--role', 'planner']);
+  assert.notEqual(unknown.status, 0);
+  assert.match(unknown.stderr, /no usable agentic\.modelProfiles entry/);
+
   for (const [role, model] of Object.entries(expectedModels)) {
     const res = f.run('step', ['--role', role]);
     assert.equal(res.status, 0, res.stderr);
@@ -4401,6 +4437,12 @@ test('role-to-model routing: config defaults, step/prime/review --prompt/run --d
   assert.equal(dryRunRes.status, 0, dryRunRes.stderr);
   assert.match(dryRunRes.stdout, /Models:\s+planner=gemini-4-neon-medium/);
   assert.match(dryRunRes.stdout, /Model:\s+gemini-4-hydrogen-medium/);
+  const codexStep = f.run('step', ['--client', 'codex', '--role', 'builder', '--json']);
+  assert.equal(codexStep.status, 0, codexStep.stderr);
+  assert.equal(JSON.parse(codexStep.stdout).model, codex.models.builder);
+  const codexReview = f.run('review', ['--client', 'codex', '--prompt']);
+  assert.equal(codexReview.status, 0, codexReview.stderr);
+  assert.ok(codexReview.stdout.includes(`Model: ${codex.models.reviewer}`));
 
   // 2. ADW_MODEL propagation in run for builder and reviewer
   const envLogDir = mkdtempSync(join(tmpdir(), 'adw-env-'));
