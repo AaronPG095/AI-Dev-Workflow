@@ -39,7 +39,7 @@ import {
 import { dirname, join, resolve, relative, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync, execSync, spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import {
   section,
@@ -232,6 +232,7 @@ const BOOLEAN_FLAGS = new Set([
   '--all-steps',
   '--quiet',
   '--compact',
+  '--complete',
   '--archive',
 ]);
 for (let i = 0; i < rest.length; i++) {
@@ -1984,6 +1985,33 @@ function resolveStepContext(plan, { tier, maxRetries: maxRetriesOpt } = {}) {
 }
 
 const AGENTIC_ROLES = ['planner', 'builder', 'reviewer', 'fixer'];
+const MODEL_CHECK_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000;
+
+function modelCheckStatePath() {
+  const commonDir = git(['rev-parse', '--path-format=absolute', '--git-common-dir'], { allowFail: true });
+  const identity = createHash('sha256').update(commonDir || repoRoot).digest('hex');
+  return join(tmpdir(), `adw-model-check-${identity}`);
+}
+
+function codexModelCheckDueHint() {
+  if (opts.client?.trim().toLowerCase() !== 'codex' || !config.agentic?.modelProfiles?.codex) {
+    return '';
+  }
+
+  let lastCompleted = 'never';
+  try {
+    const saved = readFileSync(modelCheckStatePath(), 'utf8').trim();
+    const completed = new Date(saved);
+    const age = Date.now() - completed.getTime();
+    if (saved === completed.toISOString() && age >= 0) {
+      if (age < MODEL_CHECK_INTERVAL_MS) return '';
+      lastCompleted = saved;
+    }
+  } catch {
+    // An unavailable cache leaves the check due.
+  }
+  return `Model check due (last completed: ${lastCompleted}).`;
+}
 
 function resolveModelProfile(cfg = config) {
   const client = (opts.client || '').trim().toLowerCase();
@@ -3107,6 +3135,21 @@ function printTable(columns, rows) {
 }
 
 const commands = {
+  async 'model-check'() {
+    if (!opts.complete) fail('usage: node scripts/ticket.mjs model-check --complete');
+    const target = modelCheckStatePath();
+    const staged = `${target}.${randomUUID()}.tmp`;
+    try {
+      writeFileSync(staged, `${new Date().toISOString()}\n`, { flag: 'wx' });
+      renameSync(staged, target);
+      console.log('Recorded completed model check.');
+    } catch (error) {
+      console.warn(`Could not save the model check date (${error.code || 'unknown error'}).`);
+    } finally {
+      try { rmSync(staged, { force: true }); } catch {}
+    }
+  },
+
   async route() {
     const role = (opts.role || '').trim().toLowerCase();
     if (!AGENTIC_ROLES.includes(role)) {
@@ -3466,6 +3509,7 @@ const commands = {
       : '';
 
     const baselineLine = runBootBaselineCheck();
+    const modelCheckLine = codexModelCheckDueHint();
     const lines = [
       `# Session Context: ${plan.meta.title || plan.rel}`,
       `Plan: ${plan.rel} | Status: ${localPlanStatus(plan) || 'unknown'} | Ticket: ${plan.meta.ticket || 'none'}${appetiteLabel}${versionLabel}`,
@@ -3489,6 +3533,7 @@ const commands = {
         const modelsLine = formatAgenticModelsSummary();
         return modelsLine ? [`Models: ${modelsLine}`] : [];
       })(),
+      ...(modelCheckLine ? [modelCheckLine] : []),
       '',
       `## Open Acceptance Criteria (${openCriteria.length} remaining)`,
       ...(openCriteria.length
@@ -4379,6 +4424,8 @@ const commands = {
           .join('\n')}`,
       );
     }
+    const modelCheckLine = codexModelCheckDueHint();
+    if (modelCheckLine) console.log(modelCheckLine);
     console.log(`Last Handoff: ${lastHandoff}`);
     console.log(`Next Action:  ${nextStep}`);
     console.log(`Criteria:     ${openCriteria.length} remaining open`);

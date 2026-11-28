@@ -13,6 +13,7 @@ import {
   symlinkSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { createHash } from 'node:crypto';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync, execFileSync } from 'node:child_process';
@@ -3221,7 +3222,7 @@ test('T1.5: runInvariants enforces mirrorDirs, readmeCliSync, zeroDependencies, 
       'log', 'handoff', 'resume', 'pack', 'review', 'check', 'lint', 'ship', 'pr', 'merge', 'done',
       'overview', 'hook', 'adr', 'exec', 'wt', 'recall', 'archive', 'doctor', 'verify',
       'hygiene', 'switch', 'split', 'fleet', 'wave', 'lesson', 'stats', 'release', 'blueprint',
-      'ready', 'map', 'route',
+      'ready', 'map', 'route', 'model-check',
     ].join(' '),
   );
   writeFileSync(join(f.root, 'package.json'), JSON.stringify({ name: 'test', dependencies: {} }));
@@ -3551,6 +3552,56 @@ test('T2.7: lesson capture, ship --retro, recall --lessons, review --prompt, and
   assert.equal(stepReviewer.status, 0, stepReviewer.stderr);
   assert.match(stepReviewer.stdout, /## Recent & Relevant Lessons/);
   assert.match(stepReviewer.stdout, /Cache timeout tests need fake timers/);
+});
+
+test('Codex model check is due at startup and shares the completion date across worktrees', (t) => {
+  const f = fixture(t, '', [], {
+    tracker: 'local',
+    agentic: { modelProfiles: { codex: { models: { planner: 'test-model' } } } },
+  });
+  f.git('init', '-b', 'main');
+  f.git('add', '.');
+  f.git('commit', '-m', 'init');
+
+  const commonDir = f.git('rev-parse', '--path-format=absolute', '--git-common-dir').trim();
+  const identity = createHash('sha256').update(commonDir).digest('hex');
+  const cachePath = join(tmpdir(), `adw-model-check-${identity}`);
+  const worktree = mkdtempSync(join(tmpdir(), 'ticket-model-check-wt-'));
+  t.after(() => rmSync(cachePath, { force: true }));
+  t.after(() => rmSync(worktree, { recursive: true, force: true }));
+
+  const codex = ['--client', 'codex'];
+  for (const command of ['prime', 'resume']) {
+    const due = f.run(command, codex);
+    assert.equal(due.status, 0, due.stderr);
+    assert.match(due.stdout, /Model check due \(last completed: never\)/);
+    assert.deepEqual(due.calls, []);
+    assert.doesNotMatch(f.run(command).stdout, /Model check due/);
+    assert.doesNotMatch(f.run(command, ['--client', 'antigravity']).stdout, /Model check due/);
+  }
+  assert.equal(existsSync(cachePath), false);
+
+  f.git('worktree', 'add', '--detach', worktree);
+  const completed = f.run('model-check', ['--complete'], [], { cwd: worktree, omitPlan: true });
+  assert.equal(completed.status, 0, completed.stderr);
+  assert.match(completed.stdout, /Recorded completed model check/);
+  assert.deepEqual(completed.calls, []);
+  assert.doesNotMatch(f.run('prime', codex).stdout, /Model check due/);
+  assert.doesNotMatch(f.run('resume', codex, [], { cwd: worktree }).stdout, /Model check due/);
+  assert.equal(f.git('status', '--porcelain').trim(), '');
+
+  for (const invalid of ['bad-date', new Date(Date.now() + 60_000).toISOString()]) {
+    writeFileSync(cachePath, invalid);
+    assert.match(f.run('prime', codex).stdout, /Model check due \(last completed: never\)/);
+  }
+  const stale = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  writeFileSync(cachePath, stale);
+  assert.ok(f.run('resume', codex).stdout.includes(`Model check due (last completed: ${stale})`));
+
+  const repeated = f.run('model-check', ['--complete'], [], { omitPlan: true });
+  assert.equal(repeated.status, 0, repeated.stderr);
+  assert.match(repeated.stdout, /Recorded completed model check/);
+  assert.doesNotMatch(f.run('resume', codex).stdout, /Model check due/);
 });
 
 test('T2.4: prime --verify and resume --verify report baseline PASS/FAIL without aborting', (t) => {

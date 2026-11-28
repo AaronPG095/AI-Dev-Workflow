@@ -24,4 +24,6 @@ Pre-push guardrail: `node scripts/ticket.mjs hook install`. Sync: `node scripts/
 
 ## Codex model routing
 
+On cold starts and resumes, pass `--client codex` to `prime` or `resume` and follow any due model-check hint via the [Codex model-check instructions](.agents/skills/agentic-workflow/references/level-b.md#codex-model-check).
+
 For non-trivial Codex work, resolve each phase with `node scripts/ticket.mjs route --client codex --role <planner|builder|fixer|reviewer>` and delegate the role using the returned model and reasoning. Follow the [agentic workflow skill](.agents/skills/agentic-workflow/SKILL.md) for scope, escalation, local router offloads, and review evidence.
