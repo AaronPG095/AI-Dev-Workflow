@@ -1,16 +1,19 @@
 ---
 title: Plan - Bug: Independent Re-review Handoff
 ticket: local://ADW:ADW-Plan-Independent-Re-review-Handoff-2026-11
-status: planned
-priority: 
-state: 
-due: 
+status: in-progress
 appetite: S
-version: 
-impact: 
-dependsOn: 
 devTicketKey: ADW:ADW-Plan-Independent-Re-review-Handoff-2026-11
 agent: Codex
+branch: codex/independent-rereview-handoff
+worktree: AI-Dev-Workflow
+startedAt: 2026-11-28
+reviewedBy: Codex
+reviewVerdict: pass
+reviewSession: /root/reviewer
+reviewModel: gpt-6.2-sol
+baseBranch: main
+reviewFingerprint: b55d0185b758d752eef30261c2b26a418972a040b09f74b8396c3776767df4cd
 ---
 # Independent Re-review Handoff
 
@@ -28,15 +31,15 @@ None.
 
 ## Acceptance criteria
 
-- [ ] AC1: The fixer brief directs the fixer to verify the repair and hand findings and evidence to an independent reviewer for a fresh verdict.
-- [ ] AC2: Both reviewer entry points and both quick-review skills start from the review packet and allow focused inspection when an unresolved correctness question warrants it. The CLI examples explain when to record an independent reviewer ID.
-- [ ] AC3: Regression assertions cover the generated instructions. The skill copies match, and the ticket CLI suite passes with existing independence and review freshness checks.
+- [x] AC1: The fixer brief directs the fixer to verify the repair and hand findings and evidence to an independent reviewer for a fresh verdict. verified(cmd): Generated the fixer brief and confirmed it requires verification and independent re-review without a self-stamp command.
+- [x] AC2: Both reviewer entry points and both quick-review skills start from the review packet and allow focused inspection when an unresolved correctness question warrants it. The CLI examples explain when to record an independent reviewer ID. verified(inspect): Inspected both packet-first reviewer prompts and confirmed the quick-review skill copies have identical targeted-inspection guidance.
+- [x] AC3: Regression assertions cover the generated instructions. The skill copies match, and the ticket CLI suite passes with existing independence and review freshness checks. verified(test): node --test scripts/ticket.test.mjs passed 104 of 104. The skill mirrors match and a Windows smoke test executed the generated command for a plan path containing spaces.
 
 ## Steps
 
-- [ ] Align the fixer handoff with the independent review workflow. (AC1)
-- [ ] Update the reviewer prompts and mirrored skills. (AC2)
-- [ ] Extend the role and review prompt regression assertions and run verification. (AC3)
+- [x] Align the fixer handoff with the independent review workflow. (AC1) verified(cmd): Generated the fixer brief and confirmed it requires verification and independent re-review without a self-stamp command.
+- [x] Update the reviewer prompts and mirrored skills. (AC2) verified(inspect): Inspected both packet-first reviewer prompts and confirmed the quick-review skill copies have identical targeted-inspection guidance.
+- [x] Extend the role and review prompt regression assertions and run verification. (AC3) verified(test): node --test scripts/ticket.test.mjs passed 104 of 104. The skill mirrors match and a Windows smoke test executed the generated command for a plan path containing spaces.
 
 ## Risks
 
@@ -59,3 +62,5 @@ Aaron approved the proposed scope with “Approved.”
 ## Progress log
 
 <!-- One line per session/review, added with `ticket.mjs log` or `ticket.mjs review` -->
+- 2026-11-28 12:40 UTC, Codex (review: pass): Independent re-review confirmed quoted plan paths, the fixer evidence handoff, bounded reviewer inspection, and the preserved review gate. Full CLI suite passed 104 of 104. [reviewer: /root/reviewer] (model: gpt-6.2-sol)
+- 2026-11-28 12:40 UTC, Codex (handoff): Done: Fixed the independent re-review handoff, passed 104 CLI tests, and recorded independent Sol review.; Next: Publish the linked PR and confirm GitHub checks.; Open: none; Tree: 1 dirty file(s)
