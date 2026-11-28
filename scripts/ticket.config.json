@@ -102,6 +102,10 @@
           "model": "gpt-6.2-sol",
           "reasoning": "medium"
         },
+        "escalation": {
+          "model": "gpt-6.2-sol",
+          "reasoning": "xhigh"
+        },
         "optIn": {
           "model": "gpt-6.2-astra",
           "reasoning": "low"
