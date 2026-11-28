@@ -1,7 +1,7 @@
 ---
 title: Plan - Feature: Unified Model Routing
 ticket: local://ADW:ADW-Plan-Unified-Model-Routing-2026-11
-status: in-progress
+status: shipped
 priority: 
 state: 
 due: 
@@ -20,6 +20,7 @@ reviewSession: /root/routing_reviewer
 reviewModel: gpt-6.2-sol
 baseBranch: main
 reviewFingerprint: a2e75f3cf2218e1ed6b688d4e839aa90886787962db6fcec578bf3affb0e1bdd
+pr: https://github.com/AaronPG095/AI-Dev-Workflow/pull/62
 ---
 # Unified Model Routing
 
