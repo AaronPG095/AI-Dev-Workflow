@@ -2057,7 +2057,7 @@ test('step command supports text output, --json, and role briefs', (t) => {
   );
   assert.equal(rReviewer.status, 0, rReviewer.stderr);
   assert.match(rReviewer.stdout, /# Adversarial Review Brief:/);
-  assert.match(rReviewer.stdout, /ticket\.mjs pack --test/);
+  assert.match(rReviewer.stdout, /ticket\.mjs pack "docs\/plans\/FO-Plan-Test\.plan\.md" --test/);
 
   // 5. Fixer brief
   const rFixer = f.run(
@@ -3547,11 +3547,27 @@ test('T2.7: lesson capture, ship --retro, recall --lessons, review --prompt, and
   assert.equal(promptRes.status, 0, promptRes.stderr);
   assert.match(promptRes.stdout, /## Recent & Relevant Lessons/);
   assert.match(promptRes.stdout, /Cache timeout tests need fake timers/);
+  assert.match(promptRes.stdout, /Start with the review packet/);
+  assert.match(promptRes.stdout, /specific correctness concern unresolved.*relevant caller, test, symbol, or diff hunk read-only/i);
+  assert.match(promptRes.stdout, /## Verdict Stamp Instructions\nFor pass or warn, a reviewer using the same client identity.*--reviewer-id/);
+  assert.match(promptRes.stdout, /review "docs\/plans\/FO-Plan-Test\.plan\.md".*--reviewer-id <independent-session-id>.*--verdict <pass\|warn\|block>/);
+  assert.match(promptRes.stdout, /pack "docs\/plans\/FO-Plan-Test\.plan\.md" --test/);
 
   const stepReviewer = f.run('step', ['--role', 'reviewer']);
   assert.equal(stepReviewer.status, 0, stepReviewer.stderr);
   assert.match(stepReviewer.stdout, /## Recent & Relevant Lessons/);
   assert.match(stepReviewer.stdout, /Cache timeout tests need fake timers/);
+  assert.match(stepReviewer.stdout, /Start with the review packet/);
+  assert.match(stepReviewer.stdout, /specific correctness concern unresolved.*relevant caller, test, symbol, or diff hunk read-only/i);
+  assert.match(stepReviewer.stdout, /## Verdict Command\nFor pass or warn, a reviewer using the same client identity.*--reviewer-id/);
+  assert.match(stepReviewer.stdout, /review "docs\/plans\/FO-Plan-Test\.plan\.md".*--reviewer-id <independent-session-id>.*--verdict <pass\|warn\|block>/);
+  assert.match(stepReviewer.stdout, /pack "docs\/plans\/FO-Plan-Test\.plan\.md" --test/);
+
+  const stepFixer = f.run('step', ['--role', 'fixer']);
+  assert.equal(stepFixer.status, 0, stepFixer.stderr);
+  assert.match(stepFixer.stdout, /finding addressed, the change made, and verification result and evidence.*independent reviewer for a fresh verdict/i);
+  assert.match(stepFixer.stdout, /Do not stamp the review verdict yourself/);
+  assert.doesNotMatch(stepFixer.stdout, /review .*--verdict pass/);
 });
 
 test('Codex model check is due at startup and shares the completion date across worktrees', (t) => {
