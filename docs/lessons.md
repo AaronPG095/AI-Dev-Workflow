@@ -6,3 +6,4 @@
 - 2026-11-23 | tests, sync, downstream | Every test in scripts/ticket.test.mjs must remain hermetic in downstream repos where AI-Dev-Workflow-only files (such as ticket.config.example.json) may not exist.
 - 2026-11-23 | review, ci, shipping | Always bind PR shipping, review fingerprints, and Notion closeout to the exact committed HEAD and base branch so plan-link commits never invalidate reviews or close the wrong ticket.
 - 2026-11-24 | bug-fix · docs/plans/ADW-Plan-Hermetic-Fast-Verify-Test-Hooks-And-Seeded-Lessons-2026-11.plan.md | Make F1 verify.fast test assertion hermetic for downstream repos, track .claude/settings.json runtime hooks in git, and merge the 3 seeded workflow lessons onto main.
+- 2026-11-28 | bug-fix · docs/plans/ADW-Plan-Independent-Re-review-Handoff-2026-11.plan.md | Align the fixer and reviewer instructions with the independent review gate.

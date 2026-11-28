@@ -1,7 +1,7 @@
 ---
 title: Plan - Bug: Independent Re-review Handoff
 ticket: local://ADW:ADW-Plan-Independent-Re-review-Handoff-2026-11
-status: in-progress
+status: shipped
 appetite: S
 devTicketKey: ADW:ADW-Plan-Independent-Re-review-Handoff-2026-11
 agent: Codex
@@ -14,6 +14,7 @@ reviewSession: /root/reviewer
 reviewModel: gpt-6.2-sol
 baseBranch: main
 reviewFingerprint: b55d0185b758d752eef30261c2b26a418972a040b09f74b8396c3776767df4cd
+pr: https://github.com/AaronPG095/AI-Dev-Workflow/pull/65
 ---
 # Independent Re-review Handoff
 
